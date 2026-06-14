@@ -1,0 +1,50 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.25"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # fmt.Fprintln / Fprintf to stderr / stdout cannot meaningfully
+      # fail in our use case (the parent process already steered its
+      # stderr / stdout). Suppressing these turns the CLI source into a
+      # `_, _ =` graveyard for no actual safety benefit.
+      exclude-functions:
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*os.File).Sync
+        - (*encoding/json.Encoder).Encode
+    revive:
+      rules:
+        # plugins/db/api is the canonical bough plugin-api surface; the
+        # name is documented in cmd/bough-plugin-mysql/main.go's example
+        # template, so renaming to "pluginapi" would only shift the
+        # ergonomics for plugin authors who copy that template.
+        - name: var-naming
+          arguments:
+            - []
+            - []
+            - - skip-package-name-checks: true
+  exclusions:
+    rules:
+      - path: plugins/db/api/proto/
+        # Generated stubs from `make proto`. Lint coverage on these
+        # would just produce churn every time db.proto regenerates.
+        linters:
+          - revive
+          - staticcheck
+          - errcheck

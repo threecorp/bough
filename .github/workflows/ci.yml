@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Go test + lint + nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          diagnostic-endpoint: ''
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: nix flake check
+        run: nix flake check --no-build --show-trace
+
+      - name: go vet + test
+        run: nix develop .#ci -c go test ./... -race
+
+      - name: golangci-lint
+        run: nix develop .#ci -c golangci-lint run ./...
+
+      - name: build smoke
+        run: nix develop .#ci -c make build
+
+      - name: actionlint
+        run: nix develop .#ci -c actionlint

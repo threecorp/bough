@@ -1,0 +1,100 @@
+# GoReleaser config for bough.
+# Builds the host + the MySQL plugin together so every release archive
+# is self-contained: an operator who downloads
+# `bough_v0.1.0_darwin_arm64.tar.gz` already has the matching
+# `bough-plugin-mysql` on PATH without a second install step.
+#
+# Docs: https://goreleaser.com/customization/
+
+version: 2
+
+project_name: bough
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: bough
+    main: ./cmd/bough
+    binary: bough
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+      - -X main.version={{.Version}}
+    env:
+      - CGO_ENABLED=0
+
+  - id: bough-plugin-mysql
+    main: ./cmd/bough-plugin-mysql
+    binary: bough-plugin-mysql
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: default
+    ids:
+      - bough
+      - bough-plugin-mysql
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^chore:'
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: ikeikeikeike
+    name: bough
+  draft: false
+  prerelease: auto
+  name_template: 'v{{.Version}}'
