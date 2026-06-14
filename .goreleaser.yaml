@@ -85,6 +85,23 @@ builds:
     env:
       - CGO_ENABLED=0
 
+  - id: bough-plugin-elasticsearch
+    main: ./cmd/bough-plugin-elasticsearch
+    binary: bough-plugin-elasticsearch
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+    env:
+      - CGO_ENABLED=0
+
 archives:
   - id: default
     ids:
@@ -92,6 +109,7 @@ archives:
       - bough-plugin-mysql
       - bough-plugin-postgres
       - bough-plugin-redis
+      - bough-plugin-elasticsearch
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
