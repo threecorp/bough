@@ -1,0 +1,100 @@
+// db.proto is the contract between the bough host and any
+// `bough-plugin-<kind>` binary that provisions a per-worktree database.
+// Plugins implement DBProvider over Hashicorp go-plugin's gRPC transport.
+//
+// Versioning: bumping ProtocolVersion in plugins/db/api/handshake.go is
+// what gates a backwards-incompatible change here. Add new fields with
+// new tag numbers, do not renumber existing ones.
+
+syntax = "proto3";
+
+package bough.db.v1;
+
+option go_package = "github.com/ikeikeikeike/bough/plugins/db/api/proto;pb";
+
+import "google/protobuf/empty.proto";
+
+// DBProvider is the lifecycle of one per-worktree database instance.
+service DBProvider {
+  // Up starts the database listening on `port`, with its data directory
+  // anchored at `datadir`. The host passes `worktree_root` so the plugin
+  // can resolve a `nix run` invocation against the embedded flake without
+  // needing global state.
+  rpc Up(UpRequest) returns (UpResponse);
+
+  // Down asks the plugin to gracefully stop the instance and clean up
+  // any supervisor processes it spawned.
+  rpc Down(DownRequest) returns (DownResponse);
+
+  // ReadyCheck polls for `timeout_sec` seconds until the instance accepts
+  // connections on `port`, returning ready=true on success.
+  rpc ReadyCheck(ReadyCheckRequest) returns (ReadyCheckResponse);
+
+  // Cleanup removes the on-disk data directory after Down has confirmed
+  // the instance is no longer running.
+  rpc Cleanup(CleanupRequest) returns (CleanupResponse);
+
+  // PortRangeDefault returns the [low, high] port range the plugin
+  // recommends, used when the YAML does not override `port_range`.
+  rpc PortRangeDefault(google.protobuf.Empty) returns (PortRangeResponse);
+
+  // EnvVars returns the set of environment variables consumers (the host
+  // and any sibling repo) should see in their rendered .env.local for
+  // this database. The keys typically include host / port / socket /
+  // initial database names.
+  rpc EnvVars(EnvVarsRequest) returns (EnvVarsResponse);
+}
+
+message UpRequest {
+  int32 port = 1;
+  string datadir = 2;
+  string worktree_root = 3;
+  map<string, string> extras = 4;
+  repeated string initial_databases = 5;
+  string socket_dir = 6;
+}
+
+// String error instead of gRPC status so plugins authored in non-Go
+// languages can serialise a simple message without learning gRPC error
+// codes. Empty string == success.
+message UpResponse { string error = 1; }
+
+message DownRequest {
+  int32 port = 1;
+  string worktree_root = 2;
+  int32 graceful_timeout_sec = 3;
+}
+
+message DownResponse { string error = 1; }
+
+message ReadyCheckRequest {
+  int32 port = 1;
+  int32 timeout_sec = 2;
+}
+
+message ReadyCheckResponse {
+  bool ready = 1;
+  string error = 2;
+}
+
+message CleanupRequest {
+  string datadir = 1;
+  int32 port = 2;
+}
+
+message CleanupResponse { string error = 1; }
+
+message PortRangeResponse {
+  int32 low = 1;
+  int32 high = 2;
+}
+
+message EnvVarsRequest {
+  int32 port = 1;
+  repeated string initial_databases = 2;
+  string socket_dir = 3;
+}
+
+message EnvVarsResponse {
+  map<string, string> vars = 1;
+}
