@@ -15,38 +15,44 @@
 //
 // Stable-operation choices:
 //
-//   - Idempotent Up: remove any container with the same name before
+//   * Idempotent Up: remove any container with the same name before
 //     create (mysqld crashes leave a stopped container; v0.1 used to
 //     fail-fast on conflict).
-//   - IfNotPresent pull: ImageInspect short-circuits the pull when the
+//   * IfNotPresent pull: ImageInspect short-circuits the pull when the
 //     image is already in the local cache, so warm cold-starts skip the
 //     network round-trip.
-//   - Graceful Down: 30 s stop timeout matches the InnoDB recovery
+//   * Graceful Down: 30 s stop timeout matches the InnoDB recovery
 //     budget per the MySQL 8.4 server docs.
-//   - 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
+//   * 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
 //     mysqld is dev-only and exposing it would let a sibling worktree
 //     hit the same port from outside.
+//
+// Generic Docker plumbing (client construction, image pull, container
+// lookup/remove/reuse, host port probe, com.bough.* label schema) lives
+// in pkg/dockerutil; only the mysql-specific concerns (mysqladmin ping,
+// MYSQL_* env scheme, port set) stay here.
 package mysql
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/db/api"
 
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
+
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
 
 const (
+	dockerEngine         = "mysql"
 	dockerDefaultImage   = "mysql:8.4"
 	dockerInternalPort   = "3306/tcp"
 	dockerInternalMysqlx = "33060/tcp"
@@ -85,119 +91,16 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return false
 	}
-	defer func() { _ = cli.Close() }()
-	id, err := lookupByName(ctx, cli, dockerContainerName(port))
+	defer cli.Close()
+	id, err := dockerutil.LookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
 	}
 	return id != ""
-}
-
-func dockerLabels(imageRef string, port int) map[string]string {
-	return map[string]string{
-		"com.bough.managed":   "true",
-		"com.bough.engine":    "mysql",
-		"com.bough.image":     imageRef,
-		"com.bough.host-port": fmt.Sprintf("%d", port),
-	}
-}
-
-// newDockerClient connects to whichever Docker-compatible daemon the
-// caller's DOCKER_HOST points at (Docker Desktop / OrbStack / Colima /
-// rootless podman). API negotiation lets the SDK match the daemon's
-// version without us pinning here.
-func newDockerClient() (*client.Client, error) {
-	cli, err := client.NewClientWithOpts(
-		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("docker client: %w", err)
-	}
-	return cli, nil
-}
-
-// pullIfMissing implements the if_not_present pull policy. The Docker
-// API's ImagePull is a stream we must drain before the layer download
-// is reflected on the daemon.
-func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
-	if _, err := cli.ImageInspect(ctx, ref); err == nil {
-		return nil
-	}
-	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rc.Close() }()
-	if _, err := io.Copy(io.Discard, rc); err != nil {
-		return fmt.Errorf("drain pull stream: %w", err)
-	}
-	return nil
-}
-
-// removeIfExists is the idempotency helper for dockerUp — if a previous
-// run left a stopped (or running) container with the same name we tear
-// it down so ContainerCreate does not collide.
-
-// upOrReuse implements the --resume idempotency contract for Up.
-// Returns skip=true if a container with `name` is already running, so
-// the caller can early-return without recreating. If the container
-// exists but is stopped (a previous Up partially failed), the stale
-// container is removed and skip=false is returned so the caller
-// proceeds with a fresh create + start.
-//
-// Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
-// worktree already exists" but at the container layer.
-func upOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
-	id, err := lookupByName(ctx, cli, name)
-	if err != nil {
-		return false, err
-	}
-	if id == "" {
-		return false, nil
-	}
-	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
-		return true, nil
-	}
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-// isPortFree probes whether the host's loopback port is currently free
-// by attempting a short-lived `net.Listen`. A taken port short-circuits
-// dockerUp before the daemon's generic "port is already allocated"
-// error, so the operator sees an actionable message instead of having
-// to grep `docker ps` for the conflict.
-func isPortFree(port int) bool {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	_ = l.Close()
-	return true
-}
-
-func lookupByName(ctx context.Context, cli *client.Client, name string) (string, error) {
-	args := filters.NewArgs()
-	args.Add("name", "^/"+name+"$")
-	list, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
-	if err != nil {
-		return "", err
-	}
-	for _, c := range list {
-		for _, n := range c.Names {
-			if strings.TrimPrefix(n, "/") == name {
-				return c.ID, nil
-			}
-		}
-	}
-	return "", nil
 }
 
 func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
@@ -208,18 +111,18 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return errors.New("mysql docker: datadir is required")
 	}
 
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
 
 	// Idempotency: claude --resume re-fires WorktreeCreate, so an
 	// already-running container is a successful no-op.
-	skip, err := upOrReuse(ctx, cli, name)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
 	if err != nil {
 		return fmt.Errorf("mysql docker: reuse check %s: %w", name, err)
 	}
@@ -230,11 +133,11 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	// Pre-flight: actionable error instead of the daemon's generic
 	// "port is already allocated" when the host port is taken (e.g.
 	// by a probe-mysql on the same port from a separate dev session).
-	if !isPortFree(req.Port) {
+	if !dockerutil.IsPortFree(req.Port) {
 		return fmt.Errorf("mysql docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
 	}
 
-	if err := pullIfMissing(ctx, cli, imageRef); err != nil {
+	if err := dockerutil.PullIfMissing(ctx, cli, imageRef); err != nil {
 		return fmt.Errorf("mysql docker: pull %s: %w", imageRef, err)
 	}
 
@@ -270,7 +173,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerLabels(imageRef, req.Port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, req.Port),
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
@@ -312,11 +215,11 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -344,7 +247,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 // container — uses the internal socket, no host network round-trip.
 // Returns nil iff mysqld replies `mysqld is alive` (mysqladmin exits 0).
 func mysqlAdminPing(ctx context.Context, cli *client.Client, name string) error {
-	id, err := lookupByName(ctx, cli, name)
+	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err
 	}
@@ -378,13 +281,13 @@ func mysqlAdminPing(ctx context.Context, cli *client.Client, name string) error 
 }
 
 func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 	name := dockerContainerName(req.Port)
-	id, err := lookupByName(ctx, cli, name)
+	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err
 	}
@@ -406,3 +309,9 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 // dockerCleanup mirrors the nix path's Cleanup — the bind-mounted
 // datadir is host-managed regardless of which backend wrote into it,
 // and Down already removed the container itself.
+func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
+	if datadir == "" {
+		return errors.New("mysql docker: Cleanup: datadir is required")
+	}
+	return os.RemoveAll(datadir)
+}

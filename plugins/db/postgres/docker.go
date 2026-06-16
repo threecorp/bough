@@ -17,35 +17,40 @@
 //
 // Engine-specific choices:
 //
-//   - Pre-init script + pg_isready over docker exec is preferred over
+//   * Pre-init script + pg_isready over docker exec is preferred over
 //     scraping container logs because the wait strategy is then driver-
 //     agnostic and works against any postgres-compatible engine
 //     (CockroachDB, YugabyteDB) the user might swap the image for via
 //     `extras["docker.image"]`.
-//   - Stop timeout is 15s — postgres "smart shutdown" (SIGTERM) waits
+//   * Stop timeout is 15s — postgres "smart shutdown" (SIGTERM) waits
 //     for client disconnect, but bough's per-worktree dev environments
 //     never have lingering clients, so 15s is generous.
+//
+// Generic Docker plumbing lives in pkg/dockerutil; the postgres-specific
+// concerns (pg_isready exec, POSTGRES_* env scheme, fsync=off dev flag)
+// stay here.
 package postgres
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/db/api"
 
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
+
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
 
 const (
+	dockerEngine         = "postgres"
 	dockerDefaultImage   = "postgres:16-alpine"
 	dockerInternalPort   = "5432/tcp"
 	dockerDataDir        = "/var/lib/postgresql/data"
@@ -69,97 +74,16 @@ func dockerContainerName(port int) string {
 	return fmt.Sprintf("bough-postgres-%d", port)
 }
 
-func dockerLabels(imageRef string, port int) map[string]string {
-	return map[string]string{
-		"com.bough.managed":   "true",
-		"com.bough.engine":    "postgres",
-		"com.bough.image":     imageRef,
-		"com.bough.host-port": fmt.Sprintf("%d", port),
-	}
-}
-
-func newDockerClient() (*client.Client, error) {
-	cli, err := client.NewClientWithOpts(
-		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("docker client: %w", err)
-	}
-	return cli, nil
-}
-
-func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
-	if _, err := cli.ImageInspect(ctx, ref); err == nil {
-		return nil
-	}
-	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rc.Close() }()
-	if _, err := io.Copy(io.Discard, rc); err != nil {
-		return fmt.Errorf("drain pull stream: %w", err)
-	}
-	return nil
-}
-
-// upOrReuse / isPortFree: see mysql plugin for the contract; duplicated
-// here so each plugin binary is self-contained (v0.2-alpha keeps per-
-// plugin helpers; v0.2.1 will extract a shared pkg/dockerutil package).
-func upOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
-	id, err := lookupByName(ctx, cli, name)
-	if err != nil {
-		return false, err
-	}
-	if id == "" {
-		return false, nil
-	}
-	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
-		return true, nil
-	}
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-func isPortFree(port int) bool {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	_ = l.Close()
-	return true
-}
-
-func lookupByName(ctx context.Context, cli *client.Client, name string) (string, error) {
-	args := filters.NewArgs()
-	args.Add("name", "^/"+name+"$")
-	list, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
-	if err != nil {
-		return "", err
-	}
-	for _, c := range list {
-		for _, n := range c.Names {
-			if strings.TrimPrefix(n, "/") == name {
-				return c.ID, nil
-			}
-		}
-	}
-	return "", nil
-}
-
 func usingDockerBackend(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return false
 	}
-	defer func() { _ = cli.Close() }()
-	id, err := lookupByName(ctx, cli, dockerContainerName(port))
+	defer cli.Close()
+	id, err := dockerutil.LookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
 	}
@@ -181,16 +105,16 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return errors.New("postgres docker: datadir is required")
 	}
 
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
 
-	skip, err := upOrReuse(ctx, cli, name)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
 	if err != nil {
 		return fmt.Errorf("postgres docker: reuse check %s: %w", name, err)
 	}
@@ -198,11 +122,11 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return nil
 	}
 
-	if !isPortFree(req.Port) {
+	if !dockerutil.IsPortFree(req.Port) {
 		return fmt.Errorf("postgres docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
 	}
 
-	if err := pullIfMissing(ctx, cli, imageRef); err != nil {
+	if err := dockerutil.PullIfMissing(ctx, cli, imageRef); err != nil {
 		return fmt.Errorf("postgres docker: pull %s: %w", imageRef, err)
 	}
 
@@ -234,7 +158,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerLabels(imageRef, req.Port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, req.Port),
 		ExposedPorts: exposed,
 		// Dev-mode: fsync=off so cold-start initdb finishes faster.
 		// Per-worktree dev environments are throwaway; if a worktree
@@ -271,11 +195,11 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -303,7 +227,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 // 0 = accepting, 1 = rejecting (still starting), 2 = no response,
 // 3 = no attempt.
 func pgIsReady(ctx context.Context, cli *client.Client, name string) error {
-	id, err := lookupByName(ctx, cli, name)
+	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err
 	}
@@ -339,13 +263,13 @@ func pgIsReady(ctx context.Context, cli *client.Client, name string) error {
 }
 
 func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
-	cli, err := newDockerClient()
+	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = cli.Close() }()
+	defer cli.Close()
 	name := dockerContainerName(req.Port)
-	id, err := lookupByName(ctx, cli, name)
+	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err
 	}
@@ -358,4 +282,11 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+}
+
+func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
+	if datadir == "" {
+		return errors.New("postgres docker: Cleanup: datadir is required")
+	}
+	return os.RemoveAll(datadir)
 }
