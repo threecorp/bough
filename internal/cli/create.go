@@ -122,9 +122,24 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		dbs = append(dbs, dbInstance{cfg: dbCfg, port: port, kill: kill})
 		logf(stderr, "[bough] %s: plugin discovered, starting on port %d", dbCfg.Kind, port)
 		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", dbCfg.Kind))
+		// Inject the backend selector into the plugin's Extras map so
+		// the plugin can dispatch between nix / docker / future
+		// backends without a proto change. dbCfg.Extras may be nil, so
+		// allocate a fresh map either way and copy the user-supplied
+		// keys in verbatim.
+		extras := make(map[string]string, len(dbCfg.Extras)+2)
+		for k, v := range dbCfg.Extras {
+			extras[k] = v
+		}
+		if dbCfg.Backend != "" {
+			extras["backend"] = dbCfg.Backend
+		}
+		if dbCfg.Version != "" {
+			extras["version"] = dbCfg.Version
+		}
 		if err := prov.Up(ctx, api.UpReq{
 			Port: port, Datadir: dataDir, WorktreeRoot: dbProviderWorktree,
-			SocketDir: dbCfg.SocketDir, InitialDatabases: dbCfg.InitialDatabases, Extras: dbCfg.Extras,
+			SocketDir: dbCfg.SocketDir, InitialDatabases: dbCfg.InitialDatabases, Extras: extras,
 		}); err != nil {
 			return fmt.Errorf("%s Up: %w", dbCfg.Kind, err)
 		}

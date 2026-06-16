@@ -78,7 +78,13 @@ const (
 // and launches `nix run --impure '.#mysql' -- up --tui=false` as a
 // detached subprocess. The subprocess survives until Down (or an lsof
 // kill) terminates it.
+//
+// When `req.Extras["backend"] == "docker"` the Docker-backed code path
+// (docker.go) is used instead, bypassing the nix flake entirely.
 func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
+	if req.Extras["backend"] == "docker" {
+		return p.dockerUp(ctx, req)
+	}
 	if req.WorktreeRoot == "" {
 		return errors.New("mysql: Up: WorktreeRoot is required")
 	}
@@ -130,9 +136,17 @@ func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
 // ReadyCheck polls for mysql connectivity on `port` for up to
 // `timeoutSec` seconds. Returns ready=true on the first successful
 // `SELECT 1`, otherwise (false, error) at deadline.
+//
+// Backend detection: if a container named `bough-mysql-<port>` exists,
+// the Docker path is taken; otherwise we fall through to the nix-flake
+// path. ReadyCheckReq has no `backend` field today so this is the
+// cheapest way to stay backward-compatible while honouring Up's choice.
 func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if port <= 0 {
 		return false, fmt.Errorf("mysql: ReadyCheck: invalid port %d", port)
+	}
+	if usingDockerBackend(ctx, port) {
+		return p.dockerReadyCheck(ctx, port, timeoutSec)
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = 600
@@ -158,7 +172,13 @@ func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, 
 // Finally it kills stray process-compose supervisors whose cwd lives
 // under the worktree (those supervisors respawn mysqld immediately
 // after a SIGKILL otherwise).
+//
+// Backend detection mirrors ReadyCheck: if a docker container named
+// `bough-mysql-<port>` exists, dockerDown is invoked instead.
 func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
+	if usingDockerBackend(ctx, req.Port) {
+		return p.dockerDown(ctx, req)
+	}
 	if req.WorktreeRoot == "" {
 		return errors.New("mysql: Down: WorktreeRoot is required")
 	}

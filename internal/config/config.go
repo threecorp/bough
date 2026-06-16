@@ -68,11 +68,17 @@ type Repository struct {
 // the monorepo wants to coexist with another orchestrated environment whose
 // ranges would otherwise overlap.
 type Database struct {
-	Kind             string            `yaml:"kind" validate:"required"`
-	Version          string            `yaml:"version" validate:"required"`
-	PortRange        [2]int            `yaml:"port_range" validate:"required"`
-	SocketDir        string            `yaml:"socket_dir"`
-	InitialDatabases []string          `yaml:"initial_databases"`
+	Kind             string   `yaml:"kind" validate:"required"`
+	Version          string   `yaml:"version" validate:"required"`
+	PortRange        [2]int   `yaml:"port_range" validate:"required"`
+	SocketDir        string   `yaml:"socket_dir"`
+	InitialDatabases []string `yaml:"initial_databases"`
+	// Backend selects the lifecycle implementation inside the plugin.
+	// Allowed values: "nix" (default, current bough v0.1.x) or "docker"
+	// (v0.2+, bind-mounts datadir into the engine's official Docker
+	// image). Empty = plugin default. v0.3 will add an "auto" mode that
+	// picks based on host runtime detection.
+	Backend string `yaml:"backend" validate:"omitempty,oneof=nix docker"`
 	// ReadyTimeoutSec caps how long the host waits for the plugin's
 	// ReadyCheck loop to report ready. Zero means use the plugin's own
 	// default (600s — generous enough for a nix cold path that resolves
