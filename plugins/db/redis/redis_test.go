@@ -80,6 +80,18 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 			t.Errorf("flake.nix missing expected fragment: %q", c)
 		}
 	}
+
+	lockPath := filepath.Join(dst, "flake.lock")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("flake.lock not extracted: %v", err)
+	}
+	lockRaw, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read flake.lock: %v", err)
+	}
+	if !strings.Contains(string(lockRaw), `"nixpkgs"`) {
+		t.Errorf("flake.lock missing nixpkgs input node")
+	}
 }
 
 func TestProvider_Cleanup(t *testing.T) {
