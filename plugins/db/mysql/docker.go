@@ -154,6 +154,46 @@ func removeIfExists(ctx context.Context, cli *client.Client, name string) error 
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
 }
 
+// upOrReuse implements the --resume idempotency contract for Up.
+// Returns skip=true if a container with `name` is already running, so
+// the caller can early-return without recreating. If the container
+// exists but is stopped (a previous Up partially failed), the stale
+// container is removed and skip=false is returned so the caller
+// proceeds with a fresh create + start.
+//
+// Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
+// worktree already exists" but at the container layer.
+func upOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
+	id, err := lookupByName(ctx, cli, name)
+	if err != nil {
+		return false, err
+	}
+	if id == "" {
+		return false, nil
+	}
+	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
+		return true, nil
+	}
+	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// isPortFree probes whether the host's loopback port is currently free
+// by attempting a short-lived `net.Listen`. A taken port short-circuits
+// dockerUp before the daemon's generic "port is already allocated"
+// error, so the operator sees an actionable message instead of having
+// to grep `docker ps` for the conflict.
+func isPortFree(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
 func lookupByName(ctx context.Context, cli *client.Client, name string) (string, error) {
 	args := filters.NewArgs()
 	args.Add("name", "^/"+name+"$")
@@ -188,11 +228,25 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
 
+	// Idempotency: claude --resume re-fires WorktreeCreate, so an
+	// already-running container is a successful no-op.
+	skip, err := upOrReuse(ctx, cli, name)
+	if err != nil {
+		return fmt.Errorf("mysql docker: reuse check %s: %w", name, err)
+	}
+	if skip {
+		return nil
+	}
+
+	// Pre-flight: actionable error instead of the daemon's generic
+	// "port is already allocated" when the host port is taken (e.g.
+	// by a probe-mysql on the same port from a separate dev session).
+	if !isPortFree(req.Port) {
+		return fmt.Errorf("mysql docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
+	}
+
 	if err := pullIfMissing(ctx, cli, imageRef); err != nil {
 		return fmt.Errorf("mysql docker: pull %s: %w", imageRef, err)
-	}
-	if err := removeIfExists(ctx, cli, name); err != nil {
-		return fmt.Errorf("mysql docker: remove stale %s: %w", name, err)
 	}
 
 	initDB := "bough"
@@ -241,6 +295,18 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return fmt.Errorf("mysql docker: create: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		// Garbage-collect the just-created stopped container so a
+		// retry is not blocked by a stale name; otherwise the next
+		// Up would have to remove it first and the operator sees a
+		// confusing "name already in use" downstream.
+		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: false})
+		// macOS Docker Desktop's vpnkit makes the host port look free
+		// to `net.Listen`, so we cannot pre-check it reliably; instead
+		// detect the daemon's "port is already allocated" error here
+		// and rewrap with an actionable hint.
+		if strings.Contains(err.Error(), "port is already allocated") {
+			return fmt.Errorf("mysql docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", req.Port, req.Port, err)
+		}
 		return fmt.Errorf("mysql docker: start %s: %w", resp.ID, err)
 	}
 	return nil

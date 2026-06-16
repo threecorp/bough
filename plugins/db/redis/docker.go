@@ -114,6 +114,33 @@ func removeIfExists(ctx context.Context, cli *client.Client, name string) error 
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
 }
 
+// upOrReuse / isPortFree: see mysql plugin for the contract.
+func upOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
+	id, err := lookupByName(ctx, cli, name)
+	if err != nil {
+		return false, err
+	}
+	if id == "" {
+		return false, nil
+	}
+	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
+		return true, nil
+	}
+	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func isPortFree(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
 func lookupByName(ctx context.Context, cli *client.Client, name string) (string, error) {
 	args := filters.NewArgs()
 	args.Add("name", "^/"+name+"$")
@@ -164,11 +191,20 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
 
+	skip, err := upOrReuse(ctx, cli, name)
+	if err != nil {
+		return fmt.Errorf("redis docker: reuse check %s: %w", name, err)
+	}
+	if skip {
+		return nil
+	}
+
+	if !isPortFree(req.Port) {
+		return fmt.Errorf("redis docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
+	}
+
 	if err := pullIfMissing(ctx, cli, imageRef); err != nil {
 		return fmt.Errorf("redis docker: pull %s: %w", imageRef, err)
-	}
-	if err := removeIfExists(ctx, cli, name); err != nil {
-		return fmt.Errorf("redis docker: remove stale %s: %w", name, err)
 	}
 
 	hostPort := fmt.Sprintf("%d", req.Port)
@@ -213,6 +249,10 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return fmt.Errorf("redis docker: create: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: false})
+		if strings.Contains(err.Error(), "port is already allocated") {
+			return fmt.Errorf("redis docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", req.Port, req.Port, err)
+		}
 		return fmt.Errorf("redis docker: start %s: %w", resp.ID, err)
 	}
 	return nil

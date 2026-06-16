@@ -72,11 +72,29 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 // to the existing branch. Returns `created=true` for the first path
 // and false for the attach path so the caller can log accordingly.
 //
-// Per `git worktree add` rules, `dst` must not exist as a directory.
-// The bough host invokes this from a clean state — `mkdir -p <root>`
-// happens earlier in worktree-create but `<root>/<repo>` is created
-// by git itself.
+// Idempotency: if `dst` is already a registered worktree, the call
+// returns `(false, nil)` immediately. This makes the hook safe to
+// re-invoke — Claude Code re-fires WorktreeCreate every time the user
+// runs `claude --worktree F-X --resume <session>`, so a "second call
+// is a no-op" contract is required (cf. threecorp's
+// scripts/worktree-create.sh:46-50 "skip if worktree already exists").
+//
+// If the dir exists but is NOT in `git worktree list` (= a stale
+// orphan from an interrupted prior run), Prune is invoked first so
+// the subsequent `worktree add` is not blocked by leftover git admin
+// state.
 func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base string) (created bool, err error) {
+	if wts, listErr := r.List(ctx, repoPath); listErr == nil {
+		for _, wt := range wts {
+			if wt.Path == dst {
+				return false, nil
+			}
+		}
+	}
+	// Best-effort prune so a stale worktree entry pointing at an
+	// already-removed dst does not block the add below.
+	_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "prune").Run()
+
 	newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, base).Run()
 	if newErr == nil {
 		return true, nil
