@@ -116,7 +116,7 @@ databases:
     port_range: [42000, 44999]
     socket_dir: "/tmp"
     initial_databases: ["demo"]
-    # backend: nix        # optional; v0.2+ auto-detects when omitted
+    # backend: nix        # optional; auto-detects nix-with-flakes / docker when omitted
     # ready_timeout_sec: 600  # v0.1.1+; default 600s for nix cold paths
 
 ports:
@@ -214,8 +214,8 @@ bough/
 |-----------|---------------------------------------------------------------------------------------------|
 | v0.1.0-α  | Nix `services-flake` backend, 4 DB plugins (mysql / postgres / redis / elasticsearch)        |
 | v0.1.1    | Bundled `flake.lock` per plugin (cold start 5-10 min → 30-60 s), `packages.default` for `nix run` / `nix profile install`, per-engine `ready_timeout_sec` config, honest README |
-| v0.2.0    | Docker backend, hybrid `backend:` selector with auto-detect (Nix present → Nix, else Docker), `backend_options` for per-engine image / pull policy overrides |
-| v0.3+     | Embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
+| v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted |
+| v0.3+     | `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 

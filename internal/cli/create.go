@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ikeikeikeike/bough/internal/allocator"
+	"github.com/ikeikeikeike/bough/internal/backend"
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/envwriter"
 	"github.com/ikeikeikeike/bough/internal/gitwt"
@@ -113,6 +114,25 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 	if provider != nil {
 		dbProviderWorktree = filepath.Join(worktreeRoot, provider.Name)
 	}
+	// Auto-detect once per `bough create` — at most one nix/docker
+	// probe per invocation regardless of how many databases are
+	// declared. The result is reused across every dbCfg whose Backend
+	// is empty; explicit YAML values bypass it entirely. We fail the
+	// whole create up-front rather than letting the plugin Up explode
+	// with a confusing nix/docker error mid-way through.
+	var detected string
+	for _, dbCfg := range cfg.Databases {
+		if dbCfg.Backend != "" {
+			continue
+		}
+		d, err := backend.Detect(ctx)
+		if err != nil {
+			return err
+		}
+		detected = d
+		logf(stderr, "[bough] backend: auto-detected %s", detected)
+		break
+	}
 	for _, dbCfg := range cfg.Databases {
 		port := dbPorts[dbCfg.Kind]
 		prov, kill, err := pluginhost.Discover(dbCfg.Kind)
@@ -126,13 +146,18 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		// the plugin can dispatch between nix / docker / future
 		// backends without a proto change. dbCfg.Extras may be nil, so
 		// allocate a fresh map either way and copy the user-supplied
-		// keys in verbatim.
+		// keys in verbatim. An empty Backend falls back to the
+		// auto-detection result resolved once above; an explicit
+		// "nix"/"docker" value short-circuits detection.
 		extras := make(map[string]string, len(dbCfg.Extras)+2)
 		for k, v := range dbCfg.Extras {
 			extras[k] = v
 		}
-		if dbCfg.Backend != "" {
+		switch {
+		case dbCfg.Backend != "":
 			extras["backend"] = dbCfg.Backend
+		case detected != "":
+			extras["backend"] = detected
 		}
 		if dbCfg.Version != "" {
 			extras["version"] = dbCfg.Version
