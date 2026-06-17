@@ -56,8 +56,13 @@ jobs:
           diagnostic-endpoint: ''
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Pre-pull container image
+      - name: Pre-pull container images
         run: |
+          # alpine is the chown helper image the conformance suite spins
+          # up to recover from container-uid-owned datadir files (see
+          # conformance/datadir.go); pull it alongside the engine image
+          # so the test's cleanup path is not what stalls the runner.
+          docker pull alpine:3.20
           case "${{ matrix.plugin }}" in
             mysql)         docker pull mysql:8.4 ;;
             postgres)      docker pull postgres:17 ;;

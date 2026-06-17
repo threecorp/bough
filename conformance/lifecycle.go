@@ -73,7 +73,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 		t.Fatalf("PortRangeDefault re-fetch: %v", err)
 	}
 	port := low
-	datadir := t.TempDir()
+	datadir := newDatadir(t)
 	upReq := api.UpReq{
 		Port:             port,
 		Datadir:          datadir,
