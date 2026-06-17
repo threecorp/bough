@@ -18,18 +18,18 @@
 //
 // Engine-specific choices:
 //
-//   * Default image is `docker.elastic.co/elasticsearch/elasticsearch:
+//   - Default image is `docker.elastic.co/elasticsearch/elasticsearch:
 //     7.17.29` — the last 7-line LTS patch with first-class linux/arm64
 //     support. Override via `extras["docker.image"]`.
-//   * `ES_JAVA_OPTS=-Xms1g -Xmx1g` deliberately undersized for laptops
+//   - `ES_JAVA_OPTS=-Xms1g -Xmx1g` deliberately undersized for laptops
 //     running 5-15 parallel worktrees. Override via
 //     `extras["es.heap"]="2g"` if a single-worktree workflow can afford
 //     more.
-//   * HTTP readiness against `/` (not `_cluster/health?wait_for_status=
+//   - HTTP readiness against `/` (not `_cluster/health?wait_for_status=
 //     yellow`) because the root endpoint returns 200 once the cluster
 //     is yellow-or-better — single-node ES is always yellow because
 //     there is no replica to assign — and the request is cheaper.
-//   * Stop timeout is 60s — ES translog flush + Lucene commit can run
+//   - Stop timeout is 60s — ES translog flush + Lucene commit can run
 //     long on a populated index.
 package elasticsearch
 
@@ -112,22 +112,11 @@ func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if _, err := io.Copy(io.Discard, rc); err != nil {
 		return fmt.Errorf("drain pull stream: %w", err)
 	}
 	return nil
-}
-
-func removeIfExists(ctx context.Context, cli *client.Client, name string) error {
-	id, err := lookupByName(ctx, cli, name)
-	if err != nil {
-		return err
-	}
-	if id == "" {
-		return nil
-	}
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
 }
 
 // upOrReuse / isPortFree: see mysql plugin for the contract.
@@ -182,7 +171,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	id, err := lookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
@@ -202,7 +191,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
@@ -350,7 +339,7 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(req.Port)
 	id, err := lookupByName(ctx, cli, name)
 	if err != nil {
@@ -365,11 +354,4 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
-}
-
-func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
-	if datadir == "" {
-		return errors.New("elasticsearch docker: Cleanup: datadir is required")
-	}
-	return os.RemoveAll(datadir)
 }

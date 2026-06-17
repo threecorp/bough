@@ -15,15 +15,15 @@
 //
 // Stable-operation choices:
 //
-//   * Idempotent Up: remove any container with the same name before
+//   - Idempotent Up: remove any container with the same name before
 //     create (mysqld crashes leave a stopped container; v0.1 used to
 //     fail-fast on conflict).
-//   * IfNotPresent pull: ImageInspect short-circuits the pull when the
+//   - IfNotPresent pull: ImageInspect short-circuits the pull when the
 //     image is already in the local cache, so warm cold-starts skip the
 //     network round-trip.
-//   * Graceful Down: 30 s stop timeout matches the InnoDB recovery
+//   - Graceful Down: 30 s stop timeout matches the InnoDB recovery
 //     budget per the MySQL 8.4 server docs.
-//   * 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
+//   - 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
 //     mysqld is dev-only and exposing it would let a sibling worktree
 //     hit the same port from outside.
 package mysql
@@ -34,17 +34,16 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/db/api"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 const (
@@ -90,7 +89,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	id, err := lookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
@@ -133,7 +132,7 @@ func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if _, err := io.Copy(io.Discard, rc); err != nil {
 		return fmt.Errorf("drain pull stream: %w", err)
 	}
@@ -143,16 +142,6 @@ func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
 // removeIfExists is the idempotency helper for dockerUp — if a previous
 // run left a stopped (or running) container with the same name we tear
 // it down so ContainerCreate does not collide.
-func removeIfExists(ctx context.Context, cli *client.Client, name string) error {
-	id, err := lookupByName(ctx, cli, name)
-	if err != nil {
-		return err
-	}
-	if id == "" {
-		return nil
-	}
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
-}
 
 // upOrReuse implements the --resume idempotency contract for Up.
 // Returns skip=true if a container with `name` is already running, so
@@ -223,7 +212,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
@@ -285,8 +274,8 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
-		Binds:        []string{req.Datadir + ":" + dockerDataDir},
-		PortBindings: portBindings,
+		Binds:         []string{req.Datadir + ":" + dockerDataDir},
+		PortBindings:  portBindings,
 		RestartPolicy: container.RestartPolicy{Name: "no"},
 	}
 
@@ -327,7 +316,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	if err != nil {
 		return false, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -393,7 +382,7 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(req.Port)
 	id, err := lookupByName(ctx, cli, name)
 	if err != nil {
@@ -417,9 +406,3 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 // dockerCleanup mirrors the nix path's Cleanup — the bind-mounted
 // datadir is host-managed regardless of which backend wrote into it,
 // and Down already removed the container itself.
-func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
-	if datadir == "" {
-		return errors.New("mysql docker: Cleanup: datadir is required")
-	}
-	return os.RemoveAll(datadir)
-}

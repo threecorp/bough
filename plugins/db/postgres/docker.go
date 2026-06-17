@@ -17,12 +17,12 @@
 //
 // Engine-specific choices:
 //
-//   * Pre-init script + pg_isready over docker exec is preferred over
+//   - Pre-init script + pg_isready over docker exec is preferred over
 //     scraping container logs because the wait strategy is then driver-
 //     agnostic and works against any postgres-compatible engine
 //     (CockroachDB, YugabyteDB) the user might swap the image for via
 //     `extras["docker.image"]`.
-//   * Stop timeout is 15s — postgres "smart shutdown" (SIGTERM) waits
+//   - Stop timeout is 15s — postgres "smart shutdown" (SIGTERM) waits
 //     for client disconnect, but bough's per-worktree dev environments
 //     never have lingering clients, so 15s is generous.
 package postgres
@@ -33,7 +33,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -98,22 +97,11 @@ func pullIfMissing(ctx context.Context, cli *client.Client, ref string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if _, err := io.Copy(io.Discard, rc); err != nil {
 		return fmt.Errorf("drain pull stream: %w", err)
 	}
 	return nil
-}
-
-func removeIfExists(ctx context.Context, cli *client.Client, name string) error {
-	id, err := lookupByName(ctx, cli, name)
-	if err != nil {
-		return err
-	}
-	if id == "" {
-		return nil
-	}
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
 }
 
 // upOrReuse / isPortFree: see mysql plugin for the contract; duplicated
@@ -170,7 +158,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	id, err := lookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
@@ -197,7 +185,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
@@ -287,7 +275,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	if err != nil {
 		return false, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -355,7 +343,7 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(req.Port)
 	id, err := lookupByName(ctx, cli, name)
 	if err != nil {
@@ -370,11 +358,4 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
-}
-
-func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
-	if datadir == "" {
-		return errors.New("postgres docker: Cleanup: datadir is required")
-	}
-	return os.RemoveAll(datadir)
 }
