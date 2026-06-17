@@ -102,6 +102,15 @@ func buildDockerEnv(heap, hostPort string) []string {
 		"xpack.security.enabled=false",
 		"cluster.routing.allocation.disk.threshold_enabled=false",
 		"ES_JAVA_OPTS=-Xms" + heap + " -Xmx" + heap,
+		// Bind on every container interface so docker's port-publish
+		// (= -p 127.0.0.1:<hostPort>:9200) actually forwards from the
+		// host. Without this ES dev-mode defaults to network.host=
+		// _local_ (= container loopback only) and the host-side dial
+		// hangs even though the container is up and healthy. Caught
+		// by CI on linux runners (Docker Desktop on macOS papers over
+		// this with its proxy layer, which is why v0.2.6 verified
+		// locally but the conformance matrix surfaced it).
+		"network.host=0.0.0.0",
 		"network.publish_host=127.0.0.1",
 		"http.publish_port=" + hostPort,
 	}

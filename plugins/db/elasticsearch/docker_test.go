@@ -22,6 +22,7 @@ func TestBuildDockerEnv_PublishHostAndPort(t *testing.T) {
 	got := buildDockerEnv("1g", "56205")
 
 	mustHave := []string{
+		"network.host=0.0.0.0",
 		"network.publish_host=127.0.0.1",
 		"http.publish_port=56205",
 	}
