@@ -3,7 +3,6 @@ package conformance
 import (
 	"context"
 	"strconv"
-	"strings"
 	"testing"
 
 	api "github.com/ikeikeikeike/bough/plugins/db/api"
@@ -103,16 +102,20 @@ func runLifecycle(t *testing.T, cfg Config) {
 			if err != nil {
 				t.Fatalf("EnvVars (iter %d): %v", iter, err)
 			}
-			if len(env) == 0 {
-				t.Fatalf("EnvVars (iter %d): empty map", iter)
-			}
-			for k, v := range env {
-				if strings.TrimSpace(v) == "" {
-					t.Errorf("EnvVars (iter %d): %s is empty — host would render `KEY=` into .env.local", iter, k)
+			AssertNonEmpty(t, env)
+			AssertReachable(t, env)
+			AssertShellSafe(t, env, cfg.AllowShellMetachars)
+			if cfg.NativeProbe != nil {
+				addrs := extractDialableAddrs(env)
+				if len(addrs) == 0 {
+					t.Errorf("NativeProbe configured but EnvVars did not advertise a dialable host:port")
+				}
+				for _, addr := range addrs {
+					if err := cfg.NativeProbe(ctx, addr); err != nil {
+						t.Errorf("NativeProbe against %s: %v", addr, err)
+					}
 				}
 			}
-			// AssertReachable + AssertShellSafe land in Λ-6.2 and
-			// extend this t.Run with the actual v0.2.5/v0.2.6 guards.
 		})
 		if t.Failed() {
 			return
@@ -142,6 +145,12 @@ func runLifecycle(t *testing.T, cfg Config) {
 			t.Fatalf("Cleanup (2nd call): contract requires idempotency, got: %v", err)
 		}
 	})
+
+	// Faults run in their own freshly-spawned plugin processes so a
+	// panic in one cannot poison the next; each fault is gated by a
+	// Skip* knob plugin authors can flip when the fault is not
+	// simulable for their backend.
+	runFaults(t, cfg)
 }
 
 // mergeExtras lifts cfg.Extras and stamps in `docker.image` from

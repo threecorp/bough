@@ -1,6 +1,8 @@
 package conformance_test
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,18 +36,122 @@ func buildMockPlugin(t *testing.T) string {
 
 // TestRun_MockPlugin_GreenPath is the floor: every contract phase
 // (PortRangeDefault → Up → ReadyCheck → EnvVars → Down → Cleanup,
-// twice, then a final idempotent Cleanup) must succeed against the
-// healthy mock plugin without a single t.Fail.
+// twice, then a final idempotent Cleanup, then faults) must succeed
+// against the healthy mock plugin without a single t.Fail.
 //
 // If this test breaks, the conformance suite is broken — not the
 // plugin under examination. Run it first whenever the suite changes.
+//
+// SkipImagePullFailure is on because the mock provider does not use
+// container images; it would never error on an unresolvable ref.
 func TestRun_MockPlugin_GreenPath(t *testing.T) {
 	bin := buildMockPlugin(t)
 	conformance.Run(t, conformance.Config{
-		PluginBinary:    bin,
-		Image:           "mock:latest", // unused by mock; kept for signature parity
-		IdempotentCount: 2,
+		PluginBinary:         bin,
+		Image:                "mock:latest", // unused by mock; kept for signature parity
+		IdempotentCount:      2,
+		SkipImagePullFailure: true,
 	})
+}
+
+// recordingReporter implements conformance.Reporter and captures
+// every Errorf call. The suite's regression-guard tests use it to
+// drive AssertReachable / AssertShellSafe with poisoned env input
+// and verify the helper raised an error — without contaminating the
+// parent test's pass/fail state (which is what would happen if we
+// drove the failure path through a sub-*testing.T).
+type recordingReporter struct {
+	errs []string
+}
+
+func (r *recordingReporter) Helper() {}
+func (r *recordingReporter) Errorf(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+}
+func (r *recordingReporter) Logf(string, ...any) {}
+
+// TestAssertReachable_DetectsBridgeIP is the v0.2.6 regression
+// guard. A plugin that advertises the docker bridge IP 172.17.0.4
+// MUST be caught by AssertReachable; if this test passes with zero
+// errors recorded, the v0.2.6 guard has regressed.
+func TestAssertReachable_DetectsBridgeIP(t *testing.T) {
+	rep := &recordingReporter{}
+	env := map[string]string{
+		"BOUGH_MOCK_HOST": "172.17.0.4",
+		"BOUGH_MOCK_PORT": "51000",
+	}
+	conformance.AssertReachable(rep, env)
+	if len(rep.errs) == 0 {
+		t.Errorf("AssertReachable did not flag a 172.17.0.4 advertise; v0.2.6 guard regressed")
+	}
+}
+
+// TestAssertReachable_HappyPath asserts the helper is silent when
+// the advertised address IS reachable — otherwise the guard would
+// also fail every healthy plugin (= a useless invariant). We bind a
+// scratch listener on a random localhost port, advertise that pair
+// in env, and confirm no error is recorded.
+func TestAssertReachable_HappyPath(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("scratch listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split addr: %v", err)
+	}
+	rep := &recordingReporter{}
+	conformance.AssertReachable(rep, map[string]string{
+		"BOUGH_MOCK_HOST": "127.0.0.1",
+		"BOUGH_MOCK_PORT": port,
+	})
+	if len(rep.errs) != 0 {
+		t.Errorf("AssertReachable flagged a reachable address: %v", rep.errs)
+	}
+}
+
+// TestAssertShellSafe_DetectsMetachar is the v0.2.5 regression
+// guard. A DSN containing `(`, `&`, and `$(...)` MUST be caught.
+func TestAssertShellSafe_DetectsMetachar(t *testing.T) {
+	rep := &recordingReporter{}
+	env := map[string]string{
+		"BOUGH_MOCK_DSN": "root:p$(whoami)@tcp(127.0.0.1:3306)/db?parseTime=true&loc=UTC",
+	}
+	conformance.AssertShellSafe(rep, env, false)
+	if len(rep.errs) == 0 {
+		t.Errorf("AssertShellSafe did not flag shell metachars; v0.2.5 guard regressed")
+	}
+}
+
+// TestAssertShellSafe_AllowFlagSkips asserts the escape hatch: a
+// plugin that legitimately needs metachars (the mysql go-sql-driver
+// DSN is the canonical case) can pass allow=true and the helper
+// goes quiet. Without this opt-out, the v0.2.5 guard would block
+// every mysql consumer.
+func TestAssertShellSafe_AllowFlagSkips(t *testing.T) {
+	rep := &recordingReporter{}
+	env := map[string]string{
+		"BOUGH_MYSQL_DSN": "root:@tcp(127.0.0.1:3306)/db?parseTime=true&loc=UTC",
+	}
+	conformance.AssertShellSafe(rep, env, true)
+	if len(rep.errs) != 0 {
+		t.Errorf("AssertShellSafe should be silent when allow=true; got %v", rep.errs)
+	}
+}
+
+// TestAssertNonEmpty_DetectsEmptyValue guards against a plugin
+// returning `KEY=` (empty value). The host's .env.local would
+// silently overwrite any inherited env value.
+func TestAssertNonEmpty_DetectsEmptyValue(t *testing.T) {
+	rep := &recordingReporter{}
+	conformance.AssertNonEmpty(rep, map[string]string{
+		"BOUGH_MOCK_HOST": "127.0.0.1",
+		"BOUGH_MOCK_PORT": "",
+	})
+	if len(rep.errs) == 0 {
+		t.Errorf("AssertNonEmpty did not flag the empty value")
+	}
 }
 
 // TestRun_EmptyPluginBinary_Skips guards the Λ-6.1 ergonomics: if
