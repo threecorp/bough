@@ -215,7 +215,8 @@ bough/
 | v0.1.0-α  | Nix `services-flake` backend, 4 DB plugins (mysql / postgres / redis / elasticsearch)        |
 | v0.1.1    | Bundled `flake.lock` per plugin (cold start 5-10 min → 30-60 s), `packages.default` for `nix run` / `nix profile install`, per-engine `ready_timeout_sec` config, honest README |
 | v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted |
-| v0.3+     | `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
+| v0.3.0    | Plugin conformance suite + CI matrix on real Docker — plugin authors verify their contract end-to-end with one test func, four bough-internal plugins are gated on `ubuntu-24.04` + `ubuntu-24.04-arm` × `mysql` / `postgres` / `redis` / `elasticsearch` |
+| v0.4+     | `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 
@@ -234,10 +235,43 @@ Both are MIT, both target laptops, both can coexist.
 
 [coasts]: https://github.com/coast-guard/coasts
 
+## Plugin conformance
+
+Every PR's CI runs the [`bough/conformance`](./conformance) suite
+against a real Docker container, one (runner × plugin) cell at a
+time. Plugin authors (internal or third-party) verify their contract
+with one test function:
+
+```go
+//go:build conformance
+func TestMyPluginConformance(t *testing.T) {
+    conformance.Run(t, conformance.Config{
+        PluginBinary: os.Getenv("BOUGH_CONFORMANCE_PLUGIN_BIN"),
+        Image:        "myengine:1.0",
+    })
+}
+```
+
+Locally:
+
+```bash
+make build
+make conformance-local PLUGIN=mysql       # one plugin
+make conformance-all                       # all four
+```
+
+See [`docs/PLUGIN_AUTHOR_GUIDE.md`](./docs/PLUGIN_AUTHOR_GUIDE.md)
+for the walkthrough, [`plugins/db/api/CONTRACT.md`](./plugins/db/api/CONTRACT.md)
+for the prose contract every assertion traces back to, and
+[`examples/plugin-template/`](./examples/plugin-template) for a
+copy-this skeleton with TODO markers.
+
 ## Contributing
 
 Bug reports and pull requests welcome — please run `make test`,
-`make lint`, and `make build` locally before opening a PR.
+`make lint`, and `make build` locally before opening a PR. For
+plugin work also run `make conformance-local PLUGIN=<kind>` (needs
+Docker).
 
 ## License
 
