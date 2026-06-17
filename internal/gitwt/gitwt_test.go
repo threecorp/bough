@@ -99,6 +99,29 @@ func TestRunner_AddOrAttach_createsNewBranch(t *testing.T) {
 	}
 }
 
+// TestRunner_AddOrAttach_fetchUsesOriginBase exercises the Fetch=true
+// path that bough's create command flips on so a stale local checkout
+// does not silently seed the worktree from N-commit-old refs. The
+// origin remote is `src` itself (set by initBareRepo), so the fetch
+// step succeeds and `worktree add` uses `origin/main` as the base.
+func TestRunner_AddOrAttach_fetchUsesOriginBase(t *testing.T) {
+	src := initBareRepo(t)
+	dst := filepath.Join(t.TempDir(), "wt")
+	r := NewRunner()
+	r.Fetch = true
+	created, err := r.AddOrAttach(context.Background(), src, dst, "F-Fetch", "main")
+	if err != nil {
+		t.Fatalf("AddOrAttach with Fetch=true: %v", err)
+	}
+	if !created {
+		t.Errorf("expected created=true on fresh branch")
+	}
+	sha, err := r.HeadSHA(context.Background(), dst)
+	if err != nil || sha == "" {
+		t.Errorf("HeadSHA after fetched create: sha=%q err=%v", sha, err)
+	}
+}
+
 func TestRunner_AddOrAttach_attachExistingBranch(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()

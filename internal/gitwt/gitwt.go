@@ -29,8 +29,17 @@ type Worktree struct {
 
 // Runner exposes the wrapped git operations. The cmd field is injectable
 // so tests can swap in a fake; production callers use NewRunner().
+//
+// Fetch controls whether AddOrAttach runs `git fetch origin <base>`
+// before `git worktree add`, and whether it uses `origin/<base>`
+// instead of the local `<base>` ref as the new branch's starting
+// point. Defaults to false (= existing behaviour, used by tests
+// against bare local repos that have no origin). bough's `create`
+// command sets it to true so a stale local checkout never silently
+// branches the worktree off an N-commit-old base.
 type Runner struct {
-	cmd func(ctx context.Context, name string, args ...string) *exec.Cmd
+	cmd   func(ctx context.Context, name string, args ...string) *exec.Cmd
+	Fetch bool
 }
 
 // NewRunner returns a Runner that shells out to the system `git` via
@@ -39,6 +48,18 @@ type Runner struct {
 // is stable and `branch -D` works on already-deleted worktrees).
 func NewRunner() *Runner {
 	return &Runner{cmd: exec.CommandContext}
+}
+
+// HeadSHA returns the abbreviated commit hash currently checked out in
+// `worktreePath`. Used by the host's stderr observability so the
+// operator can see exactly which base SHA each sub-repo worktree was
+// materialised from.
+func (r *Runner) HeadSHA(ctx context.Context, worktreePath string) (string, error) {
+	out, err := r.cmd(ctx, "git", "-C", worktreePath, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // DetectBase resolves the default branch from origin/HEAD
@@ -95,7 +116,20 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 	// already-removed dst does not block the add below.
 	_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "prune").Run()
 
-	newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, base).Run()
+	// When Fetch is enabled, refresh origin/<base> before deciding
+	// the starting point so a local checkout that has not been
+	// pulled in days does not silently branch from a stale ref. If
+	// fetch fails (no network, no origin remote, base not on origin)
+	// we degrade to the local <base> so an operator working offline
+	// still gets a worktree.
+	effectiveBase := base
+	if r.Fetch {
+		if fetchErr := r.cmd(ctx, "git", "-C", repoPath, "fetch", "--quiet", "origin", base).Run(); fetchErr == nil {
+			effectiveBase = "origin/" + base
+		}
+	}
+
+	newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, effectiveBase).Run()
 	if newErr == nil {
 		return true, nil
 	}

@@ -24,6 +24,7 @@ func newCreateCmd() *cobra.Command {
 		name      string
 		cwd       string
 		stdinJSON bool
+		noFetch   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -43,12 +44,13 @@ func newCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name)
+			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (mutually exclusive with --stdin-json)")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "monorepo root (defaults to current working dir; overridden by --stdin-json)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
+	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")
 	return cmd
 }
 
@@ -69,7 +71,7 @@ type dbInstance struct {
 // converges across two-or-three `bough create` retries), but registry /
 // plugin failures abort because they leave the operator in an
 // inconsistent state.
-func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int, error) }, cfg *config.Config, monorepoRoot, name string) error {
+func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int, error) }, cfg *config.Config, monorepoRoot, name string, noFetch bool) error {
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
 	worktreeRoot := filepath.Join(monorepoRoot, ".worktrees", name)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
@@ -187,6 +189,7 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 	// materialisation is more useful than aborting on the first error
 	// — the operator can `bough remove` and retry.
 	runner := gitwt.NewRunner()
+	runner.Fetch = !noFetch
 	for _, repo := range cfg.Repositories {
 		repoSrc := filepath.Join(monorepoRoot, repo.Name)
 		repoDst := filepath.Join(worktreeRoot, repo.Name)
@@ -196,10 +199,19 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 			logf(stderr, "[bough] %s: worktree add FAILED: %v", repo.Name, err)
 			continue
 		}
+		// Resolve the SHA the new worktree actually landed on so the
+		// operator can confirm against `git ls-remote origin <base>`
+		// when a CI failure on the worktree pins the blame on stale
+		// state versus a new bug.
+		sha, _ := runner.HeadSHA(ctx, repoDst)
+		baseLabel := base
+		if runner.Fetch {
+			baseLabel = "origin/" + base
+		}
 		if created {
-			logf(stderr, "[bough] %s: created (%s from %s)", repo.Name, name, base)
+			logf(stderr, "[bough] %s: created (%s from %s @ %s)", repo.Name, name, baseLabel, sha)
 		} else {
-			logf(stderr, "[bough] %s: attached (%s)", repo.Name, name)
+			logf(stderr, "[bough] %s: attached (%s @ %s)", repo.Name, name, sha)
 		}
 		if repo.Direnv {
 			envrc := filepath.Join(repoDst, ".envrc")
