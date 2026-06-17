@@ -56,6 +56,17 @@ jobs:
           diagnostic-endpoint: ''
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
+      - name: Raise vm.max_map_count (elasticsearch only)
+        if: ${{ matrix.plugin == 'elasticsearch' }}
+        # Elasticsearch refuses to leave the bootstrap-check phase
+        # when vm.max_map_count < 262144, which is the GHA runner
+        # default of 65530. Without this nudge the container starts,
+        # logs `max virtual memory areas vm.max_map_count [65530] is
+        # too low`, and never accepts TCP — ReadyCheck then burns the
+        # entire ReadyTimeout window. Docker Desktop on macOS hides
+        # this because the daemon VM already sets a higher value.
+        run: sudo sysctl -w vm.max_map_count=262144
+
       - name: Pre-pull container images
         run: |
           # alpine is the chown helper image the conformance suite spins
