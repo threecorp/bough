@@ -15,15 +15,15 @@
 //
 // Stable-operation choices:
 //
-//   * Idempotent Up: remove any container with the same name before
+//   - Idempotent Up: remove any container with the same name before
 //     create (mysqld crashes leave a stopped container; v0.1 used to
 //     fail-fast on conflict).
-//   * IfNotPresent pull: ImageInspect short-circuits the pull when the
+//   - IfNotPresent pull: ImageInspect short-circuits the pull when the
 //     image is already in the local cache, so warm cold-starts skip the
 //     network round-trip.
-//   * Graceful Down: 30 s stop timeout matches the InnoDB recovery
+//   - Graceful Down: 30 s stop timeout matches the InnoDB recovery
 //     budget per the MySQL 8.4 server docs.
-//   * 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
+//   - 127.0.0.1 binding only: never publish to 0.0.0.0; the per-worktree
 //     mysqld is dev-only and exposing it would let a sibling worktree
 //     hit the same port from outside.
 //
@@ -38,7 +38,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -95,7 +94,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	id, err := dockerutil.LookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
@@ -115,7 +114,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
@@ -219,7 +218,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	if err != nil {
 		return false, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -285,7 +284,7 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(req.Port)
 	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
@@ -309,9 +308,3 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 // dockerCleanup mirrors the nix path's Cleanup — the bind-mounted
 // datadir is host-managed regardless of which backend wrote into it,
 // and Down already removed the container itself.
-func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
-	if datadir == "" {
-		return errors.New("mysql docker: Cleanup: datadir is required")
-	}
-	return os.RemoveAll(datadir)
-}

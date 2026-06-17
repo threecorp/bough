@@ -16,12 +16,12 @@
 //
 // Engine-specific choices:
 //
-//   * Default image is `redis:7-alpine` (≈5 MB) — Docker Hub recommends
+//   - Default image is `redis:7-alpine` (≈5 MB) — Docker Hub recommends
 //     alpine for footprint reasons and the bough use-case does not
 //     need glibc-only Redis modules.
-//   * `--appendonly yes` flips AOF on so a SIGKILL on the container
+//   - `--appendonly yes` flips AOF on so a SIGKILL on the container
 //     loses ≤1 s of writes instead of the full save-window (60s).
-//   * `--bind 0.0.0.0` is intentional — the redis-server defaults to
+//   - `--bind 0.0.0.0` is intentional — the redis-server defaults to
 //     bind 127.0.0.1 which is the container's loopback, unreachable
 //     from the host. We rely on Docker's `-p 127.0.0.1:<host>:6379`
 //     publish to keep external access shut.
@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -80,7 +79,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	id, err := dockerutil.LookupByName(ctx, cli, dockerContainerName(port))
 	if err != nil {
 		return false
@@ -100,7 +99,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
 	name := dockerContainerName(req.Port)
@@ -185,7 +184,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	if err != nil {
 		return false, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(port)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -250,7 +249,7 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	name := dockerContainerName(req.Port)
 	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
@@ -265,11 +264,4 @@ func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
-}
-
-func (p *Provider) dockerCleanup(_ context.Context, datadir string, _ int) error {
-	if datadir == "" {
-		return errors.New("redis docker: Cleanup: datadir is required")
-	}
-	return os.RemoveAll(datadir)
 }
