@@ -38,3 +38,43 @@ jobs:
 
       - name: actionlint
         run: nix develop .#ci -c actionlint
+
+  conformance:
+    name: Plugin conformance (real Docker)
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        plugin: [mysql, postgres, redis, elasticsearch]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          diagnostic-endpoint: ''
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Pre-pull container image
+        run: |
+          case "${{ matrix.plugin }}" in
+            mysql)         docker pull mysql:8.4 ;;
+            postgres)      docker pull postgres:17 ;;
+            redis)         docker pull redis:7 ;;
+            elasticsearch) docker pull docker.elastic.co/elasticsearch/elasticsearch:7.17.29 ;;
+          esac
+
+      - name: Build plugin binary
+        run: |
+          mkdir -p bin
+          nix develop .#ci -c go build \
+            -o bin/bough-plugin-${{ matrix.plugin }} \
+            ./cmd/bough-plugin-${{ matrix.plugin }}
+
+      - name: Run conformance suite
+        env:
+          BOUGH_CONFORMANCE_PLUGIN_BIN: ${{ github.workspace }}/bin/bough-plugin-${{ matrix.plugin }}
+        run: |
+          nix develop .#ci -c go test -tags=conformance -race -timeout=15m -v \
+            ./plugins/db/${{ matrix.plugin }}/...
