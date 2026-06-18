@@ -78,14 +78,21 @@ func runLifecycle(t *testing.T, cfg Config) {
 	if err != nil {
 		t.Fatalf("PortRangeDefault re-fetch: %v", err)
 	}
-	mainRange, ok := ranges["main"]
-	if !ok {
-		t.Fatalf("PortRangeDefault did not declare role 'main' (got roles %v); multi-port lifecycle support lands in Λ-7.4", keysOfPortRanges(ranges))
+	if _, ok := ranges[cfg.MainPortRole]; !ok {
+		t.Fatalf("PortRangeDefault did not declare the configured main role %q (got roles %v); "+
+			"set Config.MainPortRole to one of the declared roles",
+			cfg.MainPortRole, keysOfPortRanges(ranges))
 	}
-	port := mainRange.Low
+
+	// Build one PortSpec per declared role, allocating each role's
+	// Low end. Multi-port engines (rabbitmq amqp+management, etc.)
+	// thus get every role bound; single-port engines see exactly one
+	// PortSpec with Role="main", matching the v0.3 shape.
+	ports, portInts, mainPort := allocateRoles(ranges, cfg.MainPortRole)
+
 	datadir := newDatadir(t)
 	upReq := &engineapi.UpReq{
-		Ports:            []engineapi.PortSpec{{Role: "main", Port: port}},
+		Ports:            ports,
 		Datadir:          datadir,
 		WorktreeRoot:     t.TempDir(),
 		SocketDir:        t.TempDir(),
@@ -114,12 +121,13 @@ func runLifecycle(t *testing.T, cfg Config) {
 			// ReadyCheck before it can even start polling.
 			ctx, cancel := context.WithTimeout(t.Context(), cfg.ReadyTimeout)
 			defer cancel()
-			ready, err := prov.ReadyCheck(ctx, []int{port}, int(cfg.ReadyTimeout.Seconds()))
+			ready, err := prov.ReadyCheck(ctx, portInts, int(cfg.ReadyTimeout.Seconds()))
 			if err != nil {
 				t.Fatalf("ReadyCheck (iter %d): %v", iter, err)
 			}
 			if !ready {
-				t.Fatalf("ReadyCheck (iter %d): plugin returned not-ready within %s", iter, cfg.ReadyTimeout)
+				t.Fatalf("ReadyCheck (iter %d): plugin returned not-ready within %s (main port %d)",
+					iter, cfg.ReadyTimeout, mainPort)
 			}
 		})
 		if t.Failed() {
@@ -162,7 +170,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 			ctx, cancel := context.WithTimeout(t.Context(), quickPhaseTimeout)
 			defer cancel()
 			if err := prov.Down(ctx, &engineapi.DownReq{
-				Ports:              []int{port},
+				Ports:              portInts,
 				WorktreeRoot:       upReq.WorktreeRoot,
 				GracefulTimeoutSec: 15,
 			}); err != nil {
@@ -177,7 +185,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 	t.Run("Cleanup", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), quickPhaseTimeout)
 		defer cancel()
-		if err := prov.Cleanup(ctx, datadir, []int{port}); err != nil {
+		if err := prov.Cleanup(ctx, datadir, portInts); err != nil {
 			if isPermissionDeniedFromContainerUID(err) {
 				t.Skipf("Cleanup hit permission-denied — typical when the container "+
 					"writes as a non-host uid (e.g. mysql/redis run as their own user "+
@@ -191,7 +199,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 	t.Run("Cleanup_idempotent", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), quickPhaseTimeout)
 		defer cancel()
-		if err := prov.Cleanup(ctx, datadir, []int{port}); err != nil {
+		if err := prov.Cleanup(ctx, datadir, portInts); err != nil {
 			if isPermissionDeniedFromContainerUID(err) {
 				t.Skipf("Cleanup (2nd call) hit permission-denied — see above. Raw: %v", err)
 				return
@@ -250,6 +258,38 @@ func keysOfPortRanges(m map[string]engineapi.PortRange) []string {
 	// the deterministic make+append above (Go's map iteration order is
 	// randomised but the Fatalf path runs at most once per test).
 	return out
+}
+
+// allocateRoles converts a PortRangeDefault map into the three
+// shapes the lifecycle test needs downstream:
+//
+//   - `ports []PortSpec`  → passed to Up / EnvVars verbatim, one
+//     entry per declared role.
+//   - `portInts []int`    → flattened to []int for ReadyCheck / Down
+//     / Cleanup (which take the same set without role labels).
+//   - `mainPort int`      → the port allocated for `mainRole`, used
+//     for diagnostic error messages only.
+//
+// The role-port assignment is the Low end of each role's range. The
+// host's production allocator does deterministic crc32(name|role)
+// hashing, but the conformance suite is a single per-process test —
+// taking Low keeps the test reproducible without dragging the
+// allocator into the picture.
+//
+// `mainRole` is assumed to exist in ranges; the caller guards that
+// invariant before this is reached.
+func allocateRoles(ranges map[string]engineapi.PortRange, mainRole string) ([]engineapi.PortSpec, []int, int) {
+	ports := make([]engineapi.PortSpec, 0, len(ranges))
+	portInts := make([]int, 0, len(ranges))
+	mainPort := 0
+	for role, pr := range ranges {
+		ports = append(ports, engineapi.PortSpec{Role: role, Port: pr.Low})
+		portInts = append(portInts, pr.Low)
+		if role == mainRole {
+			mainPort = pr.Low
+		}
+	}
+	return ports, portInts, mainPort
 }
 
 // isPermissionDeniedFromContainerUID recognises the

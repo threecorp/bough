@@ -105,22 +105,56 @@ func AssertNonEmpty(t Reporter, env map[string]string) {
 // extractDialableAddrs walks env and pulls out every "this is a
 // dialable host:port" it can recognise. Order in the returned slice
 // is unspecified; the suite asserts every entry independently.
+//
+// Pairing handles three shapes:
+//
+//   - Single-port engines: `BOUGH_<KIND>_HOST` + `BOUGH_<KIND>_PORT`
+//     (mysql / postgres / redis / elasticsearch).
+//   - Multi-port engines: a single `BOUGH_<KIND>_HOST` shared across
+//     every `BOUGH_<KIND>_<ROLE>_PORT` (rabbitmq amqp+management,
+//     kafka broker+controller, nats client+monitor+cluster).
+//   - URL keys: any `*_URL` value that parses as a URL with an
+//     explicit port, so plugins emitting a per-role
+//     `BOUGH_<KIND>_<ROLE>_URL` get dialed without a host lookup.
+//
+// If a `*_PORT` key has no matching `*_HOST` family (not even an
+// ancestor prefix), it is skipped — there is no sensible address to
+// guess and forcing the convention would lock out opaque-DSN plugins.
 func extractDialableAddrs(env map[string]string) []string {
 	var out []string
+
+	// hostFor returns the most-specific `*_HOST` value whose key is an
+	// ancestor of stem (`stem` = a `*_PORT` key with `_PORT` stripped).
+	// Walk back one `_<segment>` at a time so a key like
+	// `BOUGH_RABBITMQ_AMQP_PORT` matches the shared `BOUGH_RABBITMQ_HOST`
+	// without manual role enumeration.
+	hostFor := func(stem string) (string, bool) {
+		for cur := stem; cur != ""; {
+			if host, ok := env[cur+"_HOST"]; ok {
+				return host, true
+			}
+			i := strings.LastIndexByte(cur, '_')
+			if i < 0 {
+				return "", false
+			}
+			cur = cur[:i]
+		}
+		return "", false
+	}
+
 	for k, v := range env {
-		if !strings.HasSuffix(k, "_HOST") {
+		if !strings.HasSuffix(k, "_PORT") || v == "" {
 			continue
 		}
-		prefix := strings.TrimSuffix(k, "_HOST")
-		port, ok := env[prefix+"_PORT"]
-		if !ok || port == "" {
+		stem := strings.TrimSuffix(k, "_PORT")
+		host, ok := hostFor(stem)
+		if !ok {
 			continue
 		}
-		host := v
 		if host == "" {
 			host = "127.0.0.1"
 		}
-		out = append(out, net.JoinHostPort(host, port))
+		out = append(out, net.JoinHostPort(host, v))
 	}
 	for k, v := range env {
 		if !strings.HasSuffix(k, "_URL") {

@@ -26,6 +26,25 @@
 // v0.2.6 (container bridge-IP advertised via EnvVars) regressions
 // before they shipped.
 //
+// # Multi-port engines
+//
+// The lifecycle iterates over every role PortRangeDefault declares
+// and allocates one port per role from each range's Low end. Single-
+// port engines (mysql / postgres / redis / elasticsearch) see one
+// PortSpec with Role="main"; multi-port engines (rabbitmq AMQP +
+// Management, kafka broker + controller, NATS client + monitor +
+// cluster) see one entry per role. Set Config.MainPortRole to the
+// role the fault injections should target; lifecycle exercises every
+// role regardless.
+//
+// # Reporter
+//
+// AssertReachable / AssertShellSafe / AssertNonEmpty accept a
+// Reporter interface (a *testing.T subset) so the suite's own self-
+// tests can drive the helpers with a recording double — useful when
+// asserting "AssertReachable flags the v0.2.6 bridge-IP" without
+// contaminating the parent test's pass/fail state.
+//
 // Design references:
 //
 //   - kubernetes-csi/csi-test pkg/sanity — the "one func, full
@@ -103,6 +122,18 @@ type Config struct {
 	// the suite dispatches a default probe via kind→probe lookup; an
 	// unknown plugin kind without a probe is a Skip, not a Fail.
 	NativeProbe func(ctx context.Context, hostPort string) error
+
+	// MainPortRole is the role the suite treats as the engine's
+	// primary listen point. Single-port plugins (mysql / postgres /
+	// redis / elasticsearch) use the default "main"; multi-port
+	// plugins (rabbitmq amqp+management, kafka broker+controller,
+	// nats client+monitor+cluster) override this with whichever role
+	// the fault suite should target (port-conflict / datadir-perm)
+	// and which role the lifecycle test should pin for diagnostic
+	// output. The lifecycle test still iterates over every role
+	// returned by PortRangeDefault — MainPortRole only affects the
+	// single-port-shaped corners (faults + error messages).
+	MainPortRole string
 }
 
 // Run executes the conformance suite against the plugin binary
@@ -135,6 +166,9 @@ func applyDefaults(cfg Config) Config {
 	}
 	if cfg.IdempotentCount <= 0 {
 		cfg.IdempotentCount = 2
+	}
+	if cfg.MainPortRole == "" {
+		cfg.MainPortRole = "main"
 	}
 	return cfg
 }

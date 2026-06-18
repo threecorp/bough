@@ -56,18 +56,18 @@ injections (port conflict, datadir permission, image pull failure).
 
 | Phase | Asserts |
 |---|---|
-| `PortRangeDefault` | returns `(low, high)` with `0 < low < high` |
+| `PortRangeDefault` | returns at least one role; every range has `0 < Low < High` |
 | `Up` | non-nil error on port conflict / image pull failure (skip with `SkipPortConflict` / `SkipImagePullFailure`) |
 | `Up` × N | second call on already-up state is up-or-reuse, not recreate |
 | `ReadyCheck` | returns true within `ReadyTimeout` |
 | `EnvVars` | every value non-empty (`AssertNonEmpty`) |
-| `EnvVars` | every `*_HOST` + `*_PORT` pair and every `*_URL` is dialable from the host (`AssertReachable`) — v0.2.6 guard |
+| `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` is dialable from the host (`AssertReachable`) — v0.2.6 guard |
 | `EnvVars` | no value contains shell metachars unless `AllowShellMetachars=true` (`AssertShellSafe`) — v0.2.5 guard |
 | `EnvVars` | `Config.NativeProbe(ctx, hostPort)` returns nil for every dialable address — v0.2.6 guard, protocol-level |
 | `Down` | returns nil within `GracefulTimeoutSec` |
 | `Cleanup` × 2 | idempotent — second call must not error |
 
-See [`plugins/db/api/CONTRACT.md`](../plugins/db/api/CONTRACT.md) for
+See [`plugins/engine/api/CONTRACT.md`](../plugins/engine/api/CONTRACT.md) for
 the prose contract every invariant traces back to.
 
 ## Configuring the Run
@@ -90,7 +90,13 @@ the prose contract every invariant traces back to.
   protocol-level reachability. Use `conformance.RedisPing` /
   `conformance.ElasticsearchGetRoot` if they fit; write a stdlib-only
   handshake-byte check otherwise (see
-  `plugins/db/mysql/conformance_test.go` for an example).
+  `plugins/engine/mysql/conformance_test.go` for an example).
+- **`MainPortRole`** — defaults to `"main"`. Override when your
+  plugin's primary role is named differently (e.g. `"amqp"` for
+  rabbitmq, `"broker"` for kafka). The suite uses it to target the
+  fault tests at a single role and to label diagnostic output;
+  lifecycle still iterates over every role `PortRangeDefault`
+  declares.
 - **`SkipPortConflict` / `SkipDatadirPermission` / `SkipImagePullFailure`**
   — opt-out individual fault cases. The bough docker plugins all set
   `SkipDatadirPermission` because they only bind-mount the datadir; the
@@ -151,6 +157,82 @@ jobs:
 - That your plugin builds. The suite skips with a clear message if
   `BOUGH_CONFORMANCE_PLUGIN_BIN` is unset or points at a missing
   file. Run `go build` in CI before invoking the suite.
+
+## Multi-port engines (rabbitmq / kafka / nats / ...)
+
+Some engines listen on more than one TCP socket. RabbitMQ exposes AMQP
+on 5672 and a management UI on 15672. Kafka exposes broker + KRaft
+controller. NATS exposes client + monitor + cluster. Bough models this
+with one `Role` per listen point; the host allocates a deterministic
+port per role and the plugin binds them all in a single `Up`.
+
+A multi-port `Provider` differs from a single-port one only in:
+
+1. **`PortRangeDefault`** returns one entry per role. The roles are
+   plugin-defined identifiers — choose names that mean something in
+   the engine's own documentation:
+
+   ```go
+   func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange, error) {
+       return map[string]api.PortRange{
+           "amqp":       {Low: 60000, High: 60499},
+           "management": {Low: 60500, High: 60999},
+       }, nil
+   }
+   ```
+
+2. **`Up` iterates `req.Ports`** and binds the right container port
+   to each `ps.Port`. The role label tells you which:
+
+   ```go
+   for _, ps := range req.Ports {
+       switch ps.Role {
+       case "amqp":
+           portBindings[nat.Port("5672/tcp")] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: fmt.Sprint(ps.Port)}}
+       case "management":
+           portBindings[nat.Port("15672/tcp")] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: fmt.Sprint(ps.Port)}}
+       }
+   }
+   ```
+
+3. **`EnvVars` emits a single `_HOST`** shared by every role and a
+   per-role `_<ROLE>_PORT` (and optionally `_<ROLE>_URL`):
+
+   ```go
+   func (p *Provider) EnvVars(_ context.Context, req *api.EnvVarsReq) (map[string]string, error) {
+       out := map[string]string{"BOUGH_RABBITMQ_HOST": "127.0.0.1"}
+       for _, ps := range req.Ports {
+           role := strings.ToUpper(ps.Role)
+           out["BOUGH_RABBITMQ_"+role+"_PORT"] = strconv.Itoa(ps.Port)
+           out["BOUGH_RABBITMQ_"+role+"_URL"]  = fmt.Sprintf("amqp://127.0.0.1:%d", ps.Port)
+       }
+       return out, nil
+   }
+   ```
+
+   `AssertReachable` finds `BOUGH_RABBITMQ_HOST` by walking back from
+   each `_PORT` key until it hits a matching `_HOST` prefix, so the
+   naming convention above lets every per-role port get dialed
+   without a separate per-role `_HOST` duplicate.
+
+4. **Set `Config.MainPortRole`** on your conformance run to the role
+   the fault tests should target (the role port-conflict bind onto,
+   the role `datadir-permission` and `image-pull-failure` reference
+   in their error messages):
+
+   ```go
+   conformance.Run(t, conformance.Config{
+       PluginBinary: bin,
+       Image:        "rabbitmq:3-management",
+       MainPortRole: "amqp",
+       ReadyTimeout: 60 * time.Second,
+   })
+   ```
+
+The conformance suite's mock plugin runs in `BOUGH_MOCK_FAIL_MODE=multi-port`
+mode for `TestRun_MockPlugin_MultiPort_GreenPath` to exercise this
+end-to-end without a real container — see `conformance/mock_plugin/main.go`
+for a minimal reference Provider.
 
 ## Mirror the bough-internal pattern
 

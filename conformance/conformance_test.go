@@ -54,6 +54,39 @@ func TestRun_MockPlugin_GreenPath(t *testing.T) {
 	})
 }
 
+// TestRun_MockPlugin_MultiPort_GreenPath is the multi-port floor.
+// The mock plugin's `multi-port` mode advertises two roles
+// (amqp + management) from PortRangeDefault, binds both ports in Up,
+// and emits the role-suffixed EnvVars convention
+// (BOUGH_MOCK_HOST + BOUGH_MOCK_AMQP_PORT + BOUGH_MOCK_MANAGEMENT_PORT
+// + per-role _URL). The conformance suite must:
+//
+//   - allocate ports for every declared role,
+//   - drive Up / ReadyCheck / Down / Cleanup against both port set,
+//   - AssertReachable both addrs (via the longest-prefix host lookup),
+//   - run faults against MainPortRole (= "amqp" here).
+//
+// If this test breaks, the multi-port wiring has regressed and any
+// future rabbitmq / kafka / nats plugin would inherit the same
+// regression — run it whenever lifecycle.go or invariants.go
+// changes.
+func TestRun_MockPlugin_MultiPort_GreenPath(t *testing.T) {
+	// The mock subprocess reads BOUGH_MOCK_FAIL_MODE at Provider
+	// construction — before the first RPC — so set it via t.Setenv
+	// (process-wide for the duration of this test, restored on
+	// cleanup) and rely on os/exec env inheritance to carry it
+	// through to the spawned plugin binary.
+	t.Setenv("BOUGH_MOCK_FAIL_MODE", "multi-port")
+	bin := buildMockPlugin(t)
+	conformance.Run(t, conformance.Config{
+		PluginBinary:         bin,
+		Image:                "mock:latest",
+		IdempotentCount:      2,
+		SkipImagePullFailure: true,
+		MainPortRole:         "amqp",
+	})
+}
+
 // recordingReporter implements conformance.Reporter and captures
 // every Errorf call. The suite's regression-guard tests use it to
 // drive AssertReachable / AssertShellSafe with poisoned env input

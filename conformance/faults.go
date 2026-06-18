@@ -64,7 +64,7 @@ func runFaultPortConflict(t *testing.T, cfg Config) {
 	defer cancel()
 	datadir := t.TempDir()
 	upErr := prov.Up(ctx, &engineapi.UpReq{
-		Ports:        []engineapi.PortSpec{{Role: "main", Port: port}},
+		Ports:        []engineapi.PortSpec{{Role: cfg.MainPortRole, Port: port}},
 		Datadir:      datadir,
 		WorktreeRoot: t.TempDir(),
 		SocketDir:    t.TempDir(),
@@ -105,7 +105,7 @@ func runFaultDatadirPermission(t *testing.T, cfg Config) {
 	ctx, cancel := context.WithTimeout(t.Context(), cfg.UpTimeout)
 	defer cancel()
 	upErr := prov.Up(ctx, &engineapi.UpReq{
-		Ports:        []engineapi.PortSpec{{Role: "main", Port: port}},
+		Ports:        []engineapi.PortSpec{{Role: cfg.MainPortRole, Port: port}},
 		Datadir:      datadir,
 		WorktreeRoot: t.TempDir(),
 		SocketDir:    t.TempDir(),
@@ -139,7 +139,7 @@ func runFaultImagePullFailure(t *testing.T, cfg Config) {
 	ctx, cancel := context.WithTimeout(t.Context(), cfg.UpTimeout)
 	defer cancel()
 	upErr := prov.Up(ctx, &engineapi.UpReq{
-		Ports:        []engineapi.PortSpec{{Role: "main", Port: port}},
+		Ports:        []engineapi.PortSpec{{Role: cfg.MainPortRole, Port: port}},
 		Datadir:      datadir,
 		WorktreeRoot: t.TempDir(),
 		SocketDir:    t.TempDir(),
@@ -159,8 +159,14 @@ func runFaultImagePullFailure(t *testing.T, cfg Config) {
 
 // spawnFreshAndPickPort starts a brand-new plugin subprocess (each
 // fault gets its own process so a panic in one cannot poison the
-// next) and returns the role "main" range's low end as the port to
-// drive Up with. Caller MUST defer the returned cleanup func.
+// next) and returns the configured main role's range Low as the port
+// to drive Up with. Caller MUST defer the returned cleanup func.
+//
+// Faults always target a single role (port-conflict can only collide
+// on one port at a time, datadir-perm has nothing to do with port
+// count, image-pull is plugin-image-scoped) — so for multi-port
+// plugins we still bind just the main role for these tests, which is
+// what Config.MainPortRole identifies.
 func spawnFreshAndPickPort(t *testing.T, cfg Config) (engineapi.EngineProvider, func(), int) {
 	t.Helper()
 	prov, kill, err := pluginhost.DiscoverFromBinary(cfg.PluginBinary)
@@ -174,10 +180,11 @@ func spawnFreshAndPickPort(t *testing.T, cfg Config) (engineapi.EngineProvider, 
 		kill()
 		t.Fatalf("PortRangeDefault: %v", err)
 	}
-	mainRange, ok := ranges["main"]
+	mainRange, ok := ranges[cfg.MainPortRole]
 	if !ok {
 		kill()
-		t.Fatalf("PortRangeDefault did not declare role 'main'; multi-port engine: pass conformance.Config.MainPortRole")
+		t.Fatalf("PortRangeDefault did not declare the configured main role %q; "+
+			"set conformance.Config.MainPortRole to one of the plugin's declared roles", cfg.MainPortRole)
 	}
 	return prov, kill, mainRange.Low
 }
