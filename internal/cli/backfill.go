@@ -14,14 +14,15 @@ import (
 func newBackfillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backfill",
-		Short: "Register pre-existing .worktrees/* into .worktree-ports.json without re-launching anything",
+		Short: "Register pre-existing .worktrees/* into .bough-ports.json without re-launching anything",
 		Long: `backfill walks .worktrees/* looking for directories that resemble bough
-worktrees and registers them in .worktree-ports.json so subsequent
-allocations don't accidentally re-use the same port. The mysqld is not
-restarted — pre-existing .env.local files keep their port assignments.
+worktrees and registers them in .bough-ports.json (or .worktree-ports.json
+on the v0.3 fallback path) so subsequent allocations don't accidentally
+re-use the same port. The engine is not restarted — pre-existing
+.env.local files keep their port assignments.
 
 Use this after upgrading to bough from a hand-rolled hook, or after a
-registry corruption recovered from ~/.claude/backups/. Subsequent
+registry corruption recovered from ~/.bough/backups/. Subsequent
 ` + "`bough create <name>`" + ` calls remain deterministic against the freshly-
 written registry.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {

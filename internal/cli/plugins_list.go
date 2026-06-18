@@ -15,7 +15,7 @@ import (
 func newPluginsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugins",
-		Short: "List DB plugins discoverable on PATH",
+		Short: "List engine plugins discoverable on PATH",
 	}
 	cmd.AddCommand(newPluginsListCmd())
 	return cmd

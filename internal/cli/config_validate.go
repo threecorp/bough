@@ -10,7 +10,7 @@ import (
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Operations against the .worktree-isolation.yaml schema",
+		Short: "Operations against the .bough.yaml schema",
 	}
 	cmd.AddCommand(newConfigValidateCmd())
 	return cmd
@@ -19,7 +19,7 @@ func newConfigCmd() *cobra.Command {
 func newConfigValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate [path]",
-		Short: "Validate a .worktree-isolation.yaml file (default: <cwd>/.worktree-isolation.yaml)",
+		Short: "Validate a .bough.yaml file (default: <cwd>/.bough.yaml; v0.3 .worktree-isolation.yaml accepted on fallback)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var path string

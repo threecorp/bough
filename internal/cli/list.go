@@ -15,7 +15,7 @@ import (
 func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List the worktrees registered in .worktree-ports.json",
+		Short: "List the worktrees registered in .bough-ports.json (or .worktree-ports.json on v0.3 fallback)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			monorepoRoot, cfg, err := loadConfigAndRoot(cmd, "")
 			if err != nil {
