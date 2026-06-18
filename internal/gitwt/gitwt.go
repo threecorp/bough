@@ -67,7 +67,7 @@ func (r *Runner) HeadSHA(ctx context.Context, worktreePath string) (string, erro
 // upstream's configured HEAD). When the symbolic ref is absent (a fresh
 // clone with no `git remote set-head` ever run), `fallback` is returned
 // without raising — the caller can default to "develop" or "master" via
-// the .worktree-isolation.yaml branch_strategy field.
+// the `.bough.yaml` branch_strategy field.
 func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (string, error) {
 	out, err := r.cmd(ctx, "git", "-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD").Output()
 	if err != nil {

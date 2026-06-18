@@ -228,16 +228,21 @@ bough/
 | v0.1.1    | Bundled `flake.lock` per plugin (cold start 5-10 min → 30-60 s), `packages.default` for `nix run` / `nix profile install`, per-engine `ready_timeout_sec` config, honest README |
 | v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted |
 | v0.3.0    | Plugin conformance suite + CI matrix on real Docker — plugin authors verify their contract end-to-end with one test func, four bough-internal plugins are gated on `ubuntu-24.04` + `ubuntu-24.04-arm` × `mysql` / `postgres` / `redis` / `elasticsearch` |
-| v0.4+     | `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
+| v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning, removed in v0.5.0 |
+| v0.5+     | Removal of v0.3 fallbacks. Reference rabbitmq / kafka / NATS / minio plugins. `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 
 ## Status
 
-Alpha (v0.1.x). All four DB plugins implemented; the Nix backend is
-battle-tested in a real Go + Rails + Remix multi-sub-repo monorepo
-(MySQL 8.4 LTS + Redis 7 + Elasticsearch 7), the Postgres plugin is
-integration-test-only as of v0.1.x. Docker backend lands in v0.2.
+v0.4.0 (current). The four bundled engine plugins
+(`bough-plugin-{mysql,postgres,redis,elasticsearch}`) are battle-tested
+in a real Go + Rails + Remix multi-sub-repo monorepo (MySQL 8.4 LTS +
+Redis 7 + Elasticsearch 7) on the Docker backend; the Nix backend
+remains supported via auto-detect and is the default when nix-with-
+flakes is on `PATH`. The Postgres plugin is integration-test-only.
+Multi-port engines (rabbitmq / kafka / NATS) are first-class in the
+contract from v0.4.0 onward — reference plugins land in v0.5+.
 
 ## Plugin conformance
 

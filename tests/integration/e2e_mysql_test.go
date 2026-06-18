@@ -34,9 +34,9 @@ import (
 )
 
 // monorepoFixture is the minimal layout the integration test exercises
-// — one repo with a `db-provider` role + one peer repo that owns a
-// .env.local template. The fixture lives entirely in t.TempDir() so a
-// run never leaks state into the operator's real source tree.
+// — one repo with an `engine-provider` role + one peer repo that owns
+// a .env.local template. The fixture lives entirely in t.TempDir() so
+// a run never leaks state into the operator's real source tree.
 type monorepoFixture struct {
 	root       string
 	hostBinDir string
@@ -71,31 +71,37 @@ func newFixture(t *testing.T) *monorepoFixture {
 	}
 	gitInit(t, srcRepo)
 
-	// Write .worktree-isolation.yaml against this minimal layout.
-	yaml := `schema_version: 1
+	// Write .bough.yaml against this minimal layout. v0.3 fallback for
+	// .worktree-isolation.yaml is covered separately by the unit-test
+	// migrateLegacy() suite; here we exercise the v0.4 canonical shape
+	// end-to-end so a future schema bump cannot regress the wiring
+	// silently.
+	yaml := `schema_version: 2
 monorepo_root: "."
 repositories:
   - name: demo-db
     branch_strategy: develop
     direnv: false
-    role: db-provider
+    role: engine-provider
     env_local:
       BOUGH_DEMO_PORT: "{{ .Mysql.Port }}"
-databases:
+engines:
   - kind: mysql
     version: "8.4"
-    port_range: [42000, 42999]
+    port_ranges:
+      main: [42000, 42999]
     socket_dir: "/tmp"
-    initial_databases: ["bough"]
+    initial_resources:
+      - { type: database, name: bough }
 registry:
-  path: ".worktree-ports.json"
+  path: ".bough-ports.json"
   backup_dir: "/tmp/bough-test-backups"
 teardown:
   remove_branch: true
   remove_datadir: true
   graceful_timeout_sec: 10
 `
-	if err := os.WriteFile(filepath.Join(root, ".worktree-isolation.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatalf("write yaml: %v", err)
 	}
 	return &monorepoFixture{root: root, hostBinDir: hostBinDir}
@@ -131,14 +137,14 @@ func TestE2E_CreateMysqlReadyAndRemove(t *testing.T) {
 
 	// Registry should have the F-E2E-Mysql entry with a mysql port.
 	store := registry.NewStore(
-		filepath.Join(fx.root, ".worktree-ports.json"),
+		filepath.Join(fx.root, ".bough-ports.json"),
 		"/tmp/bough-test-backups",
 	)
 	reg, err := store.Load()
 	if err != nil {
 		t.Fatalf("load registry: %v", err)
 	}
-	port, ok := registry.Get(reg, wtName, "mysql")
+	port, ok := registry.Get(reg, wtName, "mysql.main")
 	if !ok || port < 42000 || port > 42999 {
 		t.Fatalf("registry missing mysql entry or out of range: port=%d ok=%v", port, ok)
 	}
@@ -175,7 +181,7 @@ func TestE2E_CreateMysqlReadyAndRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-load registry: %v", err)
 	}
-	if _, ok := registry.Get(reg, wtName, "mysql"); ok {
+	if _, ok := registry.Get(reg, wtName, "mysql.main"); ok {
 		t.Errorf("registry still has entry for %s after remove", wtName)
 	}
 }

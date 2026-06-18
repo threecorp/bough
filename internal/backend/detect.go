@@ -1,7 +1,6 @@
-// Package backend implements host-side auto-detection of which DB
+// Package backend implements host-side auto-detection of which engine
 // plugin backend ("nix" vs "docker") should be used when the operator
-// has not pinned `databases[].backend` explicitly in
-// `.worktree-isolation.yaml`.
+// has not pinned `engines[].backend` explicitly in `.bough.yaml`.
 //
 // The contract with the plugin layer is unchanged: bough still ships
 // the chosen backend as `extras["backend"]` over the gRPC Up
@@ -51,7 +50,7 @@ func Detect(ctx context.Context) (string, error) {
 	if dockerErr := hasDocker(ctx); dockerErr == nil {
 		return "docker", nil
 	} else {
-		return "", fmt.Errorf("%w: neither nix (with flakes) nor docker daemon is reachable; install one or set databases[].backend explicitly in .worktree-isolation.yaml (docker probe: %v)", ErrNoBackend, dockerErr)
+		return "", fmt.Errorf("%w: neither nix (with flakes) nor docker daemon is reachable; install one or set engines[].backend explicitly in .bough.yaml (docker probe: %v)", ErrNoBackend, dockerErr)
 	}
 }
 
