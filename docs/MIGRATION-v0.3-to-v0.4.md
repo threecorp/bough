@@ -16,7 +16,7 @@ This guide covers:
 ## TL;DR
 
 If your `.worktree-isolation.yaml` already works against bough v0.3.x,
-**v0.4.0 will keep working without edits**. The host loader detects the
+**v0.4.0 keeps working without edits**. The host loader detects the
 old file and reads it with a deprecation warning. Rename to the new
 shape at your convenience before v0.5.0 ships.
 

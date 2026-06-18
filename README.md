@@ -27,26 +27,36 @@ requires editing the host binary.
 ## Prerequisites
 
 bough binaries themselves are static Go executables (darwin / linux,
-arm64 / amd64) — `bough` never installs Nix or Docker for you. What
-the user needs depends on which backend each plugin uses:
+arm64 / amd64) — `bough` never installs Nix or Docker for you. The
+host auto-detects which backend each plugin uses with a v0.1.x-compat
+preference for `nix` (so monorepos that adopted bough when nix was
+the only option do not silently flip to docker on upgrade):
 
-| Backend                  | User must provide                                                |
-|--------------------------|------------------------------------------------------------------|
-| `nix` (current default)  | Nix with flakes enabled + network access to flakehub.com / github.com on first invocation |
-| `docker` (planned v0.2)  | A Docker-compatible daemon (Docker Desktop / OrbStack / Colima / podman with the docker socket) |
+  1. nix-with-flakes on `PATH` → `nix`
+  2. else docker daemon reachable → `docker`
+  3. else: actionable error pointing at the `engines[].backend` YAML knob
+
+In practice that means **nix users** (= those who already installed
+Nix before adopting bough) get `nix`; **everyone else (the typical
+install)** gets `docker`. An explicit `backend: nix | docker` per
+engine in `.bough.yaml` always overrides auto-detect.
+
+| Backend  | When auto-detect picks it                            | User must provide |
+|----------|------------------------------------------------------|-------------------|
+| `docker` | nix-with-flakes not on PATH, docker daemon reachable (= typical install) | A Docker-compatible daemon (Docker Desktop / OrbStack / Colima / podman with the docker socket) |
+| `nix`    | nix-with-flakes on PATH                              | Nix with flakes enabled + network access to flakehub.com / github.com on first invocation |
 
 Cold-start cost (first `bough create` invocation on a fresh machine):
 
-| Backend                                              | Cold start          | Warm start  |
-|------------------------------------------------------|---------------------|-------------|
-| `nix` (v0.1.0, no bundled `flake.lock`)              | 5-10 min ⚠         | 10-60 s     |
-| `nix` (v0.1.1+, bundled `flake.lock`)                | 30-60 s             | 5-10 s      |
-| `docker` (v0.2+, after image pull)                   | image pull dominant | 1-5 s       |
+| Backend                                                | Cold start          | Warm start  |
+|--------------------------------------------------------|---------------------|-------------|
+| `nix` (v0.1.0, no bundled `flake.lock`; historical)    | 5-10 min ⚠         | 10-60 s     |
+| `nix` (v0.1.1+, bundled `flake.lock`)                  | 30-60 s             | 5-10 s      |
+| `docker` (v0.2+, after image pull)                     | image pull dominant | 1-5 s       |
 
-The v0.1.0-alpha 5-10 min cold start is the reason v0.1.1 ships a
-bundled `flake.lock` per plugin (no more flakehub.com round-trip on
-every fresh worktree), and v0.2 adds the Docker backend so users who
-prefer Docker over Nix can avoid Nix entirely.
+v0.1.1 added the bundled `flake.lock` per plugin (no more flakehub.com
+round-trip on every fresh worktree); v0.2 added the Docker backend so
+users who prefer Docker over Nix can avoid Nix entirely.
 
 ## Install
 
@@ -54,8 +64,8 @@ bough ships as 5 binaries (`bough` + 4 `bough-plugin-*`). Pick one:
 
 ```bash
 # 1. GitHub Release tarball (recommended; no Go / Nix toolchain needed)
-#    Available for darwin/linux × arm64/amd64.
-#    Replace the URL with your platform tarball from the latest release.
+#    Available for darwin/linux × arm64/amd64. The URL resolves the
+#    latest tagged release automatically.
 curl -fsSL https://github.com/ikeikeikeike/bough/releases/latest/download/bough_$(uname -s | tr A-Z a-z)_$(uname -m).tar.gz \
   | tar xz -C ~/.local/bin/  bough bough-plugin-mysql bough-plugin-postgres bough-plugin-redis bough-plugin-elasticsearch
 
@@ -66,7 +76,7 @@ go install github.com/ikeikeikeike/bough/cmd/bough-plugin-postgres@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-redis@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-elasticsearch@latest
 
-# 3. Nix flake (v0.1.1+; requires Nix with flakes enabled)
+# 3. Nix flake (requires Nix with flakes enabled)
 nix run    github:ikeikeikeike/bough -- create --stdin-json
 nix profile install github:ikeikeikeike/bough
 
@@ -74,11 +84,6 @@ nix profile install github:ikeikeikeike/bough
 # brew tap     ikeikeikeike/tap
 # brew install bough
 ```
-
-The `nix run` / `nix profile install` paths land working in v0.1.1 once
-`flake.nix` exports `packages.default`; **v0.1.0-alpha shipped without
-`packages.default`**, so those two paths are no-ops on the alpha tag —
-use the tarball or `go install` if you are on v0.1.0-alpha.
 
 ## Quick start
 
@@ -162,9 +167,10 @@ hooks in `.claude/settings.json`:
 
 After that, `claude --worktree F-FeatureName` deterministically:
 
-1. Allocates a port triplet (db / api / gateway / …) for the branch
+1. Allocates a port set (one per declared engine role + per
+   `ports:` kind) for the branch
 2. Materialises every declared sub-repo via `git worktree add`
-3. Spawns the configured database engine via the matching
+3. Spawns each configured engine via the matching
    `bough-plugin-<kind>` gRPC plugin
 4. Polls for readiness and renders each `.env.local` template
 5. Runs any per-repo `post_create` hooks (migrations, seed-force, etc.)
