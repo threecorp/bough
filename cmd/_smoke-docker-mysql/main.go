@@ -12,8 +12,8 @@ import (
 	"os"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
-	mysqlplugin "github.com/ikeikeikeike/bough/plugins/db/mysql"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
+	mysqlplugin "github.com/ikeikeikeike/bough/plugins/engine/mysql"
 )
 
 func main() {
@@ -28,10 +28,10 @@ func main() {
 	p := mysqlplugin.New()
 	ctx := context.Background()
 
-	req := api.UpReq{
-		Port:             port,
+	req := &api.UpReq{
+		Ports:            []api.PortSpec{{Role: "main", Port: port}},
 		Datadir:          datadir,
-		InitialDatabases: []string{"demo"},
+		InitialResources: []api.ResourceSpec{{Type: "database", Name: "demo"}},
 		Extras: map[string]string{
 			"backend": "docker",
 		},
@@ -46,12 +46,12 @@ func main() {
 
 	t1 := time.Now()
 	log.Printf("=== ReadyCheck (timeout 180s) ===")
-	ready, err := p.ReadyCheck(ctx, port, 180)
+	ready, err := p.ReadyCheck(ctx, []int{port}, 180)
 	if err != nil || !ready {
 		log.Printf("ReadyCheck FAILED after %s: ready=%v err=%v", time.Since(t1), ready, err)
 		log.Println("attempting Down + Cleanup before exit...")
-		_ = p.Down(ctx, api.DownReq{Port: port, GracefulTimeoutSec: 30})
-		_ = p.Cleanup(ctx, datadir, port)
+		_ = p.Down(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 30})
+		_ = p.Cleanup(ctx, datadir, []int{port})
 		os.Exit(1)
 	}
 	log.Printf("ReadyCheck: %s", time.Since(t1))
@@ -61,14 +61,14 @@ func main() {
 
 	t2 := time.Now()
 	log.Printf("=== Down ===")
-	if err := p.Down(ctx, api.DownReq{Port: port, GracefulTimeoutSec: 30}); err != nil {
+	if err := p.Down(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 30}); err != nil {
 		log.Fatalf("Down: %v", err)
 	}
 	log.Printf("Down: %s", time.Since(t2))
 
 	t3 := time.Now()
 	log.Printf("=== Cleanup ===")
-	if err := p.Cleanup(ctx, datadir, port); err != nil {
+	if err := p.Cleanup(ctx, datadir, []int{port}); err != nil {
 		log.Fatalf("Cleanup: %v", err)
 	}
 	log.Printf("Cleanup: %s", time.Since(t3))

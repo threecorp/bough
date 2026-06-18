@@ -3,7 +3,7 @@
 // The conformance test exercises the bough postgres plugin end-to-end
 // against a real postgres container. Build tag `conformance` keeps
 // docker out of the plain `go test ./...` path; CI invokes
-// `go test -tags=conformance ./plugins/db/postgres/...` after a build
+// `go test -tags=conformance ./plugins/engine/postgres/...` after a build
 // of `bin/bough-plugin-postgres`.
 package postgres_test
 

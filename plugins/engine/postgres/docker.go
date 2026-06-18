@@ -39,7 +39,7 @@ import (
 	"strings"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 
@@ -57,7 +57,7 @@ const (
 	dockerReadyPollMS    = 500
 )
 
-func pickDockerImage(req api.UpReq) string {
+func pickDockerImage(req *api.UpReq) string {
 	if v := req.Extras["docker.image"]; v != "" {
 		return v
 	}
@@ -89,16 +89,17 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return id != ""
 }
 
-func pickInitDB(req api.UpReq) string {
-	if len(req.InitialDatabases) > 0 {
-		return req.InitialDatabases[0]
+func pickInitDB(req *api.UpReq) string {
+	if name := api.PickFirstResourceName(req.InitialResources, "database"); name != "" {
+		return name
 	}
 	return "bough"
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
-	if req.Port <= 0 {
-		return fmt.Errorf("postgres docker: invalid port %d", req.Port)
+func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+	port := api.PickMainPort(req.Ports)
+	if port <= 0 {
+		return fmt.Errorf("postgres docker: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	if req.Datadir == "" {
 		return errors.New("postgres docker: datadir is required")
@@ -111,7 +112,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
 	if err != nil {
@@ -121,8 +122,8 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return nil
 	}
 
-	if !dockerutil.IsPortFree(req.Port) {
-		return fmt.Errorf("postgres docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
+	if !dockerutil.IsPortFree(port) {
+		return fmt.Errorf("postgres docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", port)
 	}
 
 	if err := dockerutil.PullIfMissing(ctx, cli, imageRef); err != nil {
@@ -144,7 +145,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		"POSTGRES_DB=" + initDB,
 	}
 
-	hostPort := fmt.Sprintf("%d", req.Port)
+	hostPort := fmt.Sprintf("%d", port)
 	portBindings := nat.PortMap{
 		nat.Port(dockerInternalPort): []nat.PortBinding{
 			{HostIP: "127.0.0.1", HostPort: hostPort},
@@ -157,7 +158,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, req.Port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
 		ExposedPorts: exposed,
 		// Dev-mode: fsync=off so cold-start initdb finishes faster.
 		// Per-worktree dev environments are throwaway; if a worktree
@@ -177,7 +178,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: false})
 		if strings.Contains(err.Error(), "port is already allocated") {
-			return fmt.Errorf("postgres docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", req.Port, req.Port, err)
+			return fmt.Errorf("postgres docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", port, port, err)
 		}
 		return fmt.Errorf("postgres docker: start %s: %w", resp.ID, err)
 	}
@@ -261,13 +262,14 @@ func pgIsReady(ctx context.Context, cli *client.Client, name string) error {
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
+func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err

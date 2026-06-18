@@ -46,7 +46,7 @@ fmt:  ## gofumpt + gci.
 
 
 .PHONY: build
-build:  ## Build host + all DB plugins under dist/.
+build:  ## Build host + all engine plugins under dist/.
 	mkdir -p dist
 	go build -o dist/bough ./cmd/bough
 	go build -o dist/bough-plugin-mysql ./cmd/bough-plugin-mysql
@@ -64,7 +64,7 @@ PLUGIN ?= mysql
 .PHONY: conformance-local
 conformance-local: build  ## Run the conformance suite locally against PLUGIN=<kind>.
 	BOUGH_CONFORMANCE_PLUGIN_BIN=$(CURDIR)/dist/bough-plugin-$(PLUGIN) \
-		go test -tags=conformance -race -timeout=15m -v ./plugins/db/$(PLUGIN)/...
+		go test -tags=conformance -race -timeout=15m -v ./plugins/engine/$(PLUGIN)/...
 
 
 .PHONY: conformance-all
@@ -73,7 +73,7 @@ conformance-all: build  ## Run conformance against all four bough-internal plugi
 		echo "=== conformance: $$kind ==="; \
 		BOUGH_CONFORMANCE_PLUGIN_BIN=$(CURDIR)/dist/bough-plugin-$$kind \
 			go test -tags=conformance -race -timeout=15m -v \
-				./plugins/db/$$kind/... || exit 1; \
+				./plugins/engine/$$kind/... || exit 1; \
 	done
 
 

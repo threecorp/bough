@@ -1,7 +1,7 @@
 //go:build darwin || linux
 
-// Package mysql implements the bough DBProvider for MySQL 8.4 LTS via
-// services-flake. The plugin binary spawned from
+// Package mysql implements the bough EngineProvider for MySQL 8.4 LTS
+// via services-flake. The plugin binary spawned from
 // cmd/bough-plugin-mysql/main.go wraps this Provider as a Hashicorp
 // go-plugin gRPC server.
 //
@@ -38,13 +38,13 @@ import (
 	"syscall"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 //go:embed nix
 var nixAssets embed.FS
 
-// Provider implements api.DBProvider for MySQL 8.4 LTS via
+// Provider implements api.EngineProvider for MySQL 8.4 LTS via
 // services-flake. Construct via New() so any future tunables (alternate
 // PortRange, custom flake ref, etc.) can be threaded as struct fields
 // without breaking the constructor surface.
@@ -81,15 +81,16 @@ const (
 //
 // When `req.Extras["backend"] == "docker"` the Docker-backed code path
 // (docker.go) is used instead, bypassing the nix flake entirely.
-func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
+func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Extras["backend"] == "docker" {
 		return p.dockerUp(ctx, req)
 	}
 	if req.WorktreeRoot == "" {
 		return errors.New("mysql: Up: WorktreeRoot is required")
 	}
-	if req.Port <= 0 {
-		return fmt.Errorf("mysql: Up: invalid port %d", req.Port)
+	port := api.PickMainPort(req.Ports)
+	if port <= 0 {
+		return fmt.Errorf("mysql: Up: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
 	if err := deployFlake(flakeDir); err != nil {
@@ -113,7 +114,7 @@ func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
 		flakeRef+"#mysql", "--", "up", "--tui=false")
 	cmd.Dir = req.WorktreeRoot
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("BOUGH_MYSQL_PORT=%d", req.Port),
+		fmt.Sprintf("BOUGH_MYSQL_PORT=%d", port),
 		fmt.Sprintf("BOUGH_MYSQL_SOCKET_DIR=%s", socketDirOrDefault(req.SocketDir)),
 		fmt.Sprintf("BOUGH_MYSQL_DATADIR=%s", req.Datadir),
 	)
@@ -133,17 +134,19 @@ func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
 	return nil
 }
 
-// ReadyCheck polls for mysql connectivity on `port` for up to
+// ReadyCheck polls for mysql connectivity on the main port for up to
 // `timeoutSec` seconds. Returns ready=true on the first successful
 // `SELECT 1`, otherwise (false, error) at deadline.
 //
-// Backend detection: if a container named `bough-mysql-<port>` exists,
-// the Docker path is taken; otherwise we fall through to the nix-flake
-// path. ReadyCheckReq has no `backend` field today so this is the
-// cheapest way to stay backward-compatible while honouring Up's choice.
-func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+// The single-port mysql plugin reads ports[0] (the host orders entries
+// to match the PortRangeDefault keys; "main" is always first). Backend
+// detection: if a container named `bough-mysql-<port>` exists, the
+// Docker path is taken; otherwise we fall through to the nix-flake
+// path.
+func (p *Provider) ReadyCheck(ctx context.Context, ports []int, timeoutSec int) (bool, error) {
+	port := firstListenPort(ports)
 	if port <= 0 {
-		return false, fmt.Errorf("mysql: ReadyCheck: invalid port %d", port)
+		return false, fmt.Errorf("mysql: ReadyCheck: invalid ports %v", ports)
 	}
 	if usingDockerBackend(ctx, port) {
 		return p.dockerReadyCheck(ctx, port, timeoutSec)
@@ -168,15 +171,16 @@ func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, 
 }
 
 // Down attempts a graceful `nix run … -- down`, then unconditionally
-// reaps any PID still listening on `Port` via lsof + SIGTERM/SIGKILL.
-// Finally it kills stray process-compose supervisors whose cwd lives
-// under the worktree (those supervisors respawn mysqld immediately
-// after a SIGKILL otherwise).
+// reaps any PID still listening on the main port via lsof + SIGTERM/
+// SIGKILL. Finally it kills stray process-compose supervisors whose
+// cwd lives under the worktree (those supervisors respawn mysqld
+// immediately after a SIGKILL otherwise).
 //
 // Backend detection mirrors ReadyCheck: if a docker container named
 // `bough-mysql-<port>` exists, dockerDown is invoked instead.
-func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
-	if usingDockerBackend(ctx, req.Port) {
+func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
+	port := firstListenPort(req.Ports)
+	if usingDockerBackend(ctx, port) {
 		return p.dockerDown(ctx, req)
 	}
 	if req.WorktreeRoot == "" {
@@ -192,19 +196,19 @@ func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
 		cmd := exec.CommandContext(gctx, "nix", "run", "--impure",
 			p.flakeRef(flakeDir)+"#mysql", "--", "down")
 		cmd.Dir = req.WorktreeRoot
-		cmd.Env = append(os.Environ(), fmt.Sprintf("BOUGH_MYSQL_PORT=%d", req.Port))
+		cmd.Env = append(os.Environ(), fmt.Sprintf("BOUGH_MYSQL_PORT=%d", port))
 		// Graceful frequently fails because services-flake's
 		// --tui=false runs process-compose without its HTTP API.
 		// That's fine: the lsof fallback below handles it.
 		_ = cmd.Run()
 		cancel()
 	}
-	if pid := lsofListener(req.Port); pid > 0 {
+	if pid := lsofListener(port); pid > 0 {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 		time.Sleep(time.Second)
 		// Re-check before SIGKILL to avoid sending it to an unrelated
 		// PID that may have grabbed the port in the interim.
-		if again := lsofListener(req.Port); again == pid {
+		if again := lsofListener(port); again == pid {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
@@ -215,17 +219,18 @@ func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
 // Cleanup removes the mysqld datadir. Down must have already converged
 // on "nothing listening on Port"; calling Cleanup with mysqld still
 // alive would delete the datadir under an open mysqld and crash it.
-func (p *Provider) Cleanup(_ context.Context, datadir string, _ int) error {
+func (p *Provider) Cleanup(_ context.Context, datadir string, _ []int) error {
 	if datadir == "" {
 		return errors.New("mysql: Cleanup: datadir is required")
 	}
 	return os.RemoveAll(datadir)
 }
 
-// PortRangeDefault returns the plugin's recommended port range. Used
-// by the host's `bough plugins list` and as the YAML default when
-// `databases[].port_range` is empty.
-func (p *Provider) PortRangeDefault(_ context.Context) (int, int, error) {
+// PortRangeDefault returns the plugin's recommended port range under
+// role "main" (the only role this single-port engine uses). Used by
+// the host's `bough plugins list` and as the YAML default when
+// `engines[].port_ranges` is empty.
+func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange, error) {
 	low := p.PortLow
 	high := p.PortHigh
 	if low == 0 {
@@ -234,19 +239,30 @@ func (p *Provider) PortRangeDefault(_ context.Context) (int, int, error) {
 	if high == 0 {
 		high = defaultPortHigh
 	}
-	return low, high, nil
+	return map[string]api.PortRange{"main": {Low: low, High: high}}, nil
 }
 
 // EnvVars exposes the per-worktree connection coordinates to the host
 // so the host can render BOUGH_MYSQL_* into every .env.local that
 // declares them in its YAML template.
-func (p *Provider) EnvVars(_ context.Context, req api.EnvVarsReq) (map[string]string, error) {
+func (p *Provider) EnvVars(_ context.Context, req *api.EnvVarsReq) (map[string]string, error) {
+	port := api.PickMainPort(req.Ports)
 	dir := socketDirOrDefault(req.SocketDir)
 	return map[string]string{
 		"BOUGH_MYSQL_HOST":   "127.0.0.1",
-		"BOUGH_MYSQL_PORT":   strconv.Itoa(req.Port),
-		"BOUGH_MYSQL_SOCKET": filepath.Join(dir, fmt.Sprintf("%s-%d.sock", socketPrefix, req.Port)),
+		"BOUGH_MYSQL_PORT":   strconv.Itoa(port),
+		"BOUGH_MYSQL_SOCKET": filepath.Join(dir, fmt.Sprintf("%s-%d.sock", socketPrefix, port)),
 	}, nil
+}
+
+// firstListenPort returns ports[0] (the host orders entries so the
+// main role is first for single-port engines), or 0 when ports is
+// empty. Kept as a tiny helper so the call sites read uniformly.
+func firstListenPort(ports []int) int {
+	if len(ports) > 0 {
+		return ports[0]
+	}
+	return 0
 }
 
 func (p *Provider) flakeRef(extracted string) string {

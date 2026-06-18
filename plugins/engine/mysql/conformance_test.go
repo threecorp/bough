@@ -7,7 +7,7 @@
 //
 // Build tag `conformance` so plain `go test ./...` does not pull in
 // docker daemon requirements. CI invokes `go test -tags=conformance
-// ./plugins/db/mysql/...` after building the plugin binary.
+// ./plugins/engine/mysql/...` after building the plugin binary.
 package mysql_test
 
 import (

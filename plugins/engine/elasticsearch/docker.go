@@ -46,7 +46,7 @@ import (
 	"strings"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 
@@ -65,7 +65,7 @@ const (
 	dockerReadyPollMS    = 1000
 )
 
-func pickDockerImage(req api.UpReq) string {
+func pickDockerImage(req *api.UpReq) string {
 	if v := req.Extras["docker.image"]; v != "" {
 		return v
 	}
@@ -75,7 +75,7 @@ func pickDockerImage(req api.UpReq) string {
 	return dockerDefaultImage
 }
 
-func pickHeap(req api.UpReq) string {
+func pickHeap(req *api.UpReq) string {
 	if v := req.Extras["es.heap"]; v != "" {
 		return v
 	}
@@ -136,9 +136,10 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return id != ""
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
-	if req.Port <= 0 {
-		return fmt.Errorf("elasticsearch docker: invalid port %d", req.Port)
+func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+	port := api.PickMainPort(req.Ports)
+	if port <= 0 {
+		return fmt.Errorf("elasticsearch docker: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	if req.Datadir == "" {
 		return errors.New("elasticsearch docker: datadir is required")
@@ -151,7 +152,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
 	if err != nil {
@@ -161,8 +162,8 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		return nil
 	}
 
-	if !dockerutil.IsPortFree(req.Port) {
-		return fmt.Errorf("elasticsearch docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
+	if !dockerutil.IsPortFree(port) {
+		return fmt.Errorf("elasticsearch docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", port)
 	}
 
 	if err := dockerutil.PullIfMissing(ctx, cli, imageRef); err != nil {
@@ -199,7 +200,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	}
 
 	heap := pickHeap(req)
-	hostPort := fmt.Sprintf("%d", req.Port)
+	hostPort := fmt.Sprintf("%d", port)
 	env := buildDockerEnv(heap, hostPort)
 	portBindings := nat.PortMap{
 		nat.Port(dockerInternalHTTP): []nat.PortBinding{
@@ -217,7 +218,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, req.Port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
@@ -241,7 +242,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: false})
 		if strings.Contains(err.Error(), "port is already allocated") {
-			return fmt.Errorf("elasticsearch docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", req.Port, req.Port, err)
+			return fmt.Errorf("elasticsearch docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", port, port, err)
 		}
 		return fmt.Errorf("elasticsearch docker: start %s: %w", resp.ID, err)
 	}
@@ -298,13 +299,14 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	return false, fmt.Errorf("elasticsearch docker: not ready on port %d within %ds", port, timeoutSec)
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
+func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err

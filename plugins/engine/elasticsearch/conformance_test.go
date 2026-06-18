@@ -3,7 +3,7 @@
 // The conformance test exercises the bough elasticsearch plugin
 // end-to-end against a real ES container. Build tag `conformance`
 // keeps docker out of the plain `go test ./...` path; CI invokes
-// `go test -tags=conformance ./plugins/db/elasticsearch/...` after a
+// `go test -tags=conformance ./plugins/engine/elasticsearch/...` after a
 // build of `bin/bough-plugin-elasticsearch`.
 //
 // The v0.2.6 regression that motivated the suite belongs to this

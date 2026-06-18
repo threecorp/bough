@@ -41,7 +41,7 @@ import (
 	"strings"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 
@@ -62,7 +62,7 @@ const (
 
 // pickDockerImage honours `extras["docker.image"]` and falls back to the
 // version-derived tag (`mysql:<version>`), then to dockerDefaultImage.
-func pickDockerImage(req api.UpReq) string {
+func pickDockerImage(req *api.UpReq) string {
 	if v := req.Extras["docker.image"]; v != "" {
 		return v
 	}
@@ -102,9 +102,10 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return id != ""
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
-	if req.Port <= 0 {
-		return fmt.Errorf("mysql docker: invalid port %d", req.Port)
+func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+	port := api.PickMainPort(req.Ports)
+	if port <= 0 {
+		return fmt.Errorf("mysql docker: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	if req.Datadir == "" {
 		return errors.New("mysql docker: datadir is required")
@@ -117,7 +118,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 
 	imageRef := pickDockerImage(req)
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 
 	// Idempotency: claude --resume re-fires WorktreeCreate, so an
 	// already-running container is a successful no-op.
@@ -132,23 +133,23 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	// Pre-flight: actionable error instead of the daemon's generic
 	// "port is already allocated" when the host port is taken (e.g.
 	// by a probe-mysql on the same port from a separate dev session).
-	if !dockerutil.IsPortFree(req.Port) {
-		return fmt.Errorf("mysql docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", req.Port)
+	if !dockerutil.IsPortFree(port) {
+		return fmt.Errorf("mysql docker: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", port)
 	}
 
 	if err := dockerutil.PullIfMissing(ctx, cli, imageRef); err != nil {
 		return fmt.Errorf("mysql docker: pull %s: %w", imageRef, err)
 	}
 
-	initDB := "bough"
-	if len(req.InitialDatabases) > 0 {
-		initDB = req.InitialDatabases[0]
+	initDB := api.PickFirstResourceName(req.InitialResources, "database")
+	if initDB == "" {
+		initDB = "bough"
 	}
 	env := []string{
 		"MYSQL_ALLOW_EMPTY_PASSWORD=yes",
 		"MYSQL_DATABASE=" + initDB,
 	}
-	// Per-engine extras lift verbatim from YAML `databases[].extras` so
+	// Per-engine extras lift verbatim from YAML `engines[].extras` so
 	// projects can pin character_set_server, default_time_zone, etc.
 	// without a plugin change.
 	for k, v := range req.Extras {
@@ -158,7 +159,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		env = append(env, "MYSQL_"+strings.ToUpper(k)+"="+v)
 	}
 
-	hostPort := fmt.Sprintf("%d", req.Port)
+	hostPort := fmt.Sprintf("%d", port)
 	portBindings := nat.PortMap{
 		nat.Port(dockerInternalPort): []nat.PortBinding{
 			{HostIP: "127.0.0.1", HostPort: hostPort},
@@ -172,7 +173,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, req.Port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
@@ -196,7 +197,7 @@ func (p *Provider) dockerUp(ctx context.Context, req api.UpReq) error {
 		// detect the daemon's "port is already allocated" error here
 		// and rewrap with an actionable hint.
 		if strings.Contains(err.Error(), "port is already allocated") {
-			return fmt.Errorf("mysql docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", req.Port, req.Port, err)
+			return fmt.Errorf("mysql docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", port, port, err)
 		}
 		return fmt.Errorf("mysql docker: start %s: %w", resp.ID, err)
 	}
@@ -279,13 +280,14 @@ func mysqlAdminPing(ctx context.Context, cli *client.Client, name string) error 
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req api.DownReq) error {
+func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
-	name := dockerContainerName(req.Port)
+	name := dockerContainerName(port)
 	id, err := dockerutil.LookupByName(ctx, cli, name)
 	if err != nil {
 		return err

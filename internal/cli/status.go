@@ -149,7 +149,7 @@ func computeEngineBackends(cfg *config.Config) map[string]string {
 
 // lsofListen returns the PID of whichever process holds the TCP
 // listener on `port`, or 0 when nothing is listening. Mirror of the
-// helper in plugins/db/mysql/mysql.go.
+// helper in plugins/engine/mysql/mysql.go.
 func lsofListen(port int) int {
 	out, err := exec.Command("lsof", fmt.Sprintf("-tiTCP:%d", port), "-sTCP:LISTEN").Output()
 	if err != nil {

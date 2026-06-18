@@ -3,7 +3,7 @@
 // The conformance test exercises the bough redis plugin end-to-end
 // against a real redis container. Build tag `conformance` keeps
 // docker out of the plain `go test ./...` path; CI invokes
-// `go test -tags=conformance ./plugins/db/redis/...` after a build
+// `go test -tags=conformance ./plugins/engine/redis/...` after a build
 // of `bin/bough-plugin-redis`.
 package redis_test
 

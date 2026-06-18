@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package mysql
+package postgres
 
 import (
 	"context"
@@ -9,43 +9,50 @@ import (
 	"strings"
 	"testing"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 func TestProvider_PortRangeDefault(t *testing.T) {
 	p := New()
-	low, high, err := p.PortRangeDefault(context.Background())
+	ranges, err := p.PortRangeDefault(context.Background())
 	if err != nil {
 		t.Fatalf("PortRangeDefault: %v", err)
 	}
-	if low != 42000 || high != 44999 {
-		t.Errorf("defaults: got [%d, %d], want [42000, 44999]", low, high)
+	mainRange, ok := ranges["main"]
+	if !ok {
+		t.Fatalf("PortRangeDefault did not declare role 'main' (got %v)", ranges)
+	}
+	if mainRange.Low != defaultPortLow || mainRange.High != defaultPortHigh {
+		t.Errorf("defaults: got [%d, %d], want [%d, %d]", mainRange.Low, mainRange.High, defaultPortLow, defaultPortHigh)
 	}
 }
 
 func TestProvider_PortRangeDefault_overrides(t *testing.T) {
-	p := &Provider{PortLow: 50000, PortHigh: 51000}
-	low, high, err := p.PortRangeDefault(context.Background())
+	p := &Provider{PortLow: 60000, PortHigh: 61000}
+	ranges, err := p.PortRangeDefault(context.Background())
 	if err != nil {
 		t.Fatalf("PortRangeDefault: %v", err)
 	}
-	if low != 50000 || high != 51000 {
-		t.Errorf("override: got [%d, %d], want [50000, 51000]", low, high)
+	mainRange := ranges["main"]
+	if mainRange.Low != 60000 || mainRange.High != 61000 {
+		t.Errorf("override: got [%d, %d], want [60000, 61000]", mainRange.Low, mainRange.High)
 	}
 }
 
 func TestProvider_EnvVars(t *testing.T) {
 	p := New()
-	out, err := p.EnvVars(context.Background(), api.EnvVarsReq{
-		Port: 42345, SocketDir: "/tmp", InitialDatabases: []string{"bough"},
+	out, err := p.EnvVars(context.Background(), &api.EnvVarsReq{
+		Ports:            []api.PortSpec{{Role: "main", Port: 50345}},
+		SocketDir:        "/tmp",
+		InitialResources: []api.ResourceSpec{{Type: "database", Name: "bough"}},
 	})
 	if err != nil {
 		t.Fatalf("EnvVars: %v", err)
 	}
 	cases := map[string]string{
-		"BOUGH_MYSQL_HOST":   "127.0.0.1",
-		"BOUGH_MYSQL_PORT":   "42345",
-		"BOUGH_MYSQL_SOCKET": "/tmp/bough-mysql-42345.sock",
+		"BOUGH_POSTGRES_HOST":       "127.0.0.1",
+		"BOUGH_POSTGRES_PORT":       "50345",
+		"BOUGH_POSTGRES_SOCKET_DIR": "/tmp",
 	}
 	for k, want := range cases {
 		if got := out[k]; got != want {
@@ -56,12 +63,14 @@ func TestProvider_EnvVars(t *testing.T) {
 
 func TestProvider_EnvVars_socketDirDefault(t *testing.T) {
 	p := New()
-	out, err := p.EnvVars(context.Background(), api.EnvVarsReq{Port: 12345})
+	out, err := p.EnvVars(context.Background(), &api.EnvVarsReq{
+		Ports: []api.PortSpec{{Role: "main", Port: 12345}},
+	})
 	if err != nil {
 		t.Fatalf("EnvVars: %v", err)
 	}
-	if !strings.HasPrefix(out["BOUGH_MYSQL_SOCKET"], "/tmp/") {
-		t.Errorf("SocketDir default: got %q, want /tmp/ prefix", out["BOUGH_MYSQL_SOCKET"])
+	if out["BOUGH_POSTGRES_SOCKET_DIR"] != "/tmp" {
+		t.Errorf("SocketDir default: got %q, want /tmp", out["BOUGH_POSTGRES_SOCKET_DIR"])
 	}
 }
 
@@ -83,12 +92,12 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	checks := []string{
 		`services-flake.url`,
 		`process-compose-flake.url`,
-		`BOUGH_MYSQL_PORT`,
-		`BOUGH_MYSQL_SOCKET_DIR`,
-		`BOUGH_MYSQL_DATADIR`,
-		`pkgs.mysql84`,
-		`mysqlx = "OFF"`,
-		`lib.mkForce`, // readiness probe override
+		`BOUGH_POSTGRES_PORT`,
+		`BOUGH_POSTGRES_SOCKET_DIR`,
+		`BOUGH_POSTGRES_DATADIR`,
+		`pkgs.postgresql_16`,
+		`listen_addresses`,
+		`socketDir`,
 	}
 	for _, c := range checks {
 		if !strings.Contains(contents, c) {
@@ -111,14 +120,14 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 
 func TestProvider_Cleanup(t *testing.T) {
 	tmp := t.TempDir()
-	datadir := filepath.Join(tmp, "mysql-data")
+	datadir := filepath.Join(tmp, "postgres-data")
 	if err := os.MkdirAll(datadir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(datadir, "stub"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := New().Cleanup(context.Background(), datadir, 0); err != nil {
+	if err := New().Cleanup(context.Background(), datadir, nil); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if _, err := os.Stat(datadir); !os.IsNotExist(err) {
@@ -127,7 +136,7 @@ func TestProvider_Cleanup(t *testing.T) {
 }
 
 func TestProvider_Cleanup_emptyDatadir(t *testing.T) {
-	if err := New().Cleanup(context.Background(), "", 0); err == nil {
+	if err := New().Cleanup(context.Background(), "", nil); err == nil {
 		t.Fatalf("expected error on empty datadir, got nil")
 	}
 }

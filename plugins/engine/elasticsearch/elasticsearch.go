@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-// Package elasticsearch implements the bough DBProvider for
+// Package elasticsearch implements the bough EngineProvider for
 // Elasticsearch 7.x via a custom process-compose entry (services-flake
 // does not ship a built-in elasticsearch module). The plugin binary
 // spawned from cmd/bough-plugin-elasticsearch/main.go wraps this
@@ -47,13 +47,13 @@ import (
 	"syscall"
 	"time"
 
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 //go:embed nix
 var nixAssets embed.FS
 
-// Provider implements api.DBProvider for Elasticsearch 7.x via the
+// Provider implements api.EngineProvider for Elasticsearch 7.x via the
 // embedded process-compose-flake wrapper.
 type Provider struct {
 	FlakeRefOverride string
@@ -78,15 +78,16 @@ const (
 //
 // When `req.Extras["backend"] == "docker"` the Docker code path
 // (docker.go) is used instead.
-func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
+func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Extras["backend"] == "docker" {
 		return p.dockerUp(ctx, req)
 	}
 	if req.WorktreeRoot == "" {
 		return errors.New("elasticsearch: Up: WorktreeRoot is required")
 	}
-	if req.Port <= 0 {
-		return fmt.Errorf("elasticsearch: Up: invalid port %d", req.Port)
+	port := api.PickMainPort(req.Ports)
+	if port <= 0 {
+		return fmt.Errorf("elasticsearch: Up: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
 	if err := deployFlake(flakeDir); err != nil {
@@ -114,7 +115,7 @@ func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
 		flakeRef+"#elasticsearch", "--", "up", "--tui=false")
 	cmd.Dir = req.WorktreeRoot
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("BOUGH_ELASTICSEARCH_PORT=%d", req.Port),
+		fmt.Sprintf("BOUGH_ELASTICSEARCH_PORT=%d", port),
 		fmt.Sprintf("BOUGH_ELASTICSEARCH_DATADIR=%s", req.Datadir),
 		fmt.Sprintf("BOUGH_ELASTICSEARCH_HEAP=%s", heap),
 	)
@@ -137,9 +138,10 @@ func (p *Provider) Up(ctx context.Context, req api.UpReq) error {
 //
 // Backend detection: a container named `bough-elasticsearch-<port>` →
 // docker path; otherwise the nix path.
-func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (p *Provider) ReadyCheck(ctx context.Context, ports []int, timeoutSec int) (bool, error) {
+	port := firstListenPort(ports)
 	if port <= 0 {
-		return false, fmt.Errorf("elasticsearch: ReadyCheck: invalid port %d", port)
+		return false, fmt.Errorf("elasticsearch: ReadyCheck: invalid ports %v", ports)
 	}
 	if usingDockerBackend(ctx, port) {
 		return p.dockerReadyCheck(ctx, port, timeoutSec)
@@ -182,12 +184,13 @@ func (p *Provider) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, 
 }
 
 // Down attempts a graceful `nix run … -- down`, then reaps any PID
-// still listening on `Port`, then kills stray process-compose
+// still listening on the main port, then kills stray process-compose
 // supervisors whose cwd lives under the worktree.
 //
 // Backend detection mirrors ReadyCheck.
-func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
-	if usingDockerBackend(ctx, req.Port) {
+func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
+	port := firstListenPort(req.Ports)
+	if usingDockerBackend(ctx, port) {
 		return p.dockerDown(ctx, req)
 	}
 	if req.WorktreeRoot == "" {
@@ -203,14 +206,14 @@ func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
 		cmd := exec.CommandContext(gctx, "nix", "run", "--impure",
 			p.flakeRef(flakeDir)+"#elasticsearch", "--", "down")
 		cmd.Dir = req.WorktreeRoot
-		cmd.Env = append(os.Environ(), fmt.Sprintf("BOUGH_ELASTICSEARCH_PORT=%d", req.Port))
+		cmd.Env = append(os.Environ(), fmt.Sprintf("BOUGH_ELASTICSEARCH_PORT=%d", port))
 		_ = cmd.Run()
 		cancel()
 	}
-	if pid := lsofListener(req.Port); pid > 0 {
+	if pid := lsofListener(port); pid > 0 {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 		time.Sleep(2 * time.Second) // ES needs a moment to flush translogs
-		if again := lsofListener(req.Port); again == pid {
+		if again := lsofListener(port); again == pid {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
@@ -219,15 +222,16 @@ func (p *Provider) Down(ctx context.Context, req api.DownReq) error {
 }
 
 // Cleanup removes the elasticsearch datadir.
-func (p *Provider) Cleanup(_ context.Context, datadir string, _ int) error {
+func (p *Provider) Cleanup(_ context.Context, datadir string, _ []int) error {
 	if datadir == "" {
 		return errors.New("elasticsearch: Cleanup: datadir is required")
 	}
 	return os.RemoveAll(datadir)
 }
 
-// PortRangeDefault returns the plugin's recommended port range.
-func (p *Provider) PortRangeDefault(_ context.Context) (int, int, error) {
+// PortRangeDefault returns the plugin's recommended port range under
+// role "main" (the only role this single-port engine uses).
+func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange, error) {
 	low := p.PortLow
 	high := p.PortHigh
 	if low == 0 {
@@ -236,18 +240,27 @@ func (p *Provider) PortRangeDefault(_ context.Context) (int, int, error) {
 	if high == 0 {
 		high = defaultPortHigh
 	}
-	return low, high, nil
+	return map[string]api.PortRange{"main": {Low: low, High: high}}, nil
 }
 
 // EnvVars exposes the per-worktree connection coordinates. The URL is
 // the http://… form most Elasticsearch SDKs (go-elasticsearch,
 // elasticsearch-py, @elastic/elasticsearch) accept verbatim.
-func (p *Provider) EnvVars(_ context.Context, req api.EnvVarsReq) (map[string]string, error) {
+func (p *Provider) EnvVars(_ context.Context, req *api.EnvVarsReq) (map[string]string, error) {
+	port := api.PickMainPort(req.Ports)
 	return map[string]string{
 		"BOUGH_ELASTICSEARCH_HOST": "127.0.0.1",
-		"BOUGH_ELASTICSEARCH_PORT": strconv.Itoa(req.Port),
-		"BOUGH_ELASTICSEARCH_URL":  fmt.Sprintf("http://127.0.0.1:%d", req.Port),
+		"BOUGH_ELASTICSEARCH_PORT": strconv.Itoa(port),
+		"BOUGH_ELASTICSEARCH_URL":  fmt.Sprintf("http://127.0.0.1:%d", port),
 	}, nil
+}
+
+// firstListenPort returns ports[0], or 0 when ports is empty.
+func firstListenPort(ports []int) int {
+	if len(ports) > 0 {
+		return ports[0]
+	}
+	return 0
 }
 
 func (p *Provider) flakeRef(extracted string) string {

@@ -1,10 +1,10 @@
 // Command bough-plugin-redis is the Hashicorp go-plugin gRPC server
-// for the Redis 7 database engine.
+// for the Redis 7 engine.
 package main
 
 import (
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
-	redisprovider "github.com/ikeikeikeike/bough/plugins/db/redis"
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
+	redisprovider "github.com/ikeikeikeike/bough/plugins/engine/redis"
 	"github.com/hashicorp/go-plugin"
 )
 
@@ -12,7 +12,7 @@ func main() {
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: api.Handshake,
 		Plugins: map[string]plugin.Plugin{
-			api.DBProviderPluginKey: &api.DBProviderPlugin{Impl: redisprovider.New()},
+			api.EngineProviderPluginKey: &api.EngineProviderPlugin{Impl: redisprovider.New()},
 		},
 		GRPCServer: plugin.DefaultGRPCServer,
 	})
