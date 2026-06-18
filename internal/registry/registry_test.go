@@ -18,7 +18,7 @@ func fixedClock(ts string) func() time.Time {
 
 func TestStore_LoadMissingFileReturnsEmpty(t *testing.T) {
 	tmp := t.TempDir()
-	s := &Store{Path: filepath.Join(tmp, ".worktree-ports.json"), Now: time.Now}
+	s := &Store{Path: filepath.Join(tmp, ".bough-ports.json"), Now: time.Now}
 	reg, err := s.Load()
 	if err != nil {
 		t.Fatalf("Load on missing file: unexpected error: %v", err)
@@ -28,9 +28,12 @@ func TestStore_LoadMissingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestStore_RoundTrip exercises the v0.4 canonical key shape
+// `<kind>.<role>` (e.g. `mysql.main`, `rabbitmq.amqp`). Set / Save /
+// Load / Get must be lossless on these keys.
 func TestStore_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
-	regPath := filepath.Join(tmp, ".worktree-ports.json")
+	regPath := filepath.Join(tmp, ".bough-ports.json")
 	backupDir := filepath.Join(tmp, "backups")
 	s := &Store{Path: regPath, BackupDir: backupDir, Now: fixedClock("20260101-120000")}
 
@@ -38,45 +41,71 @@ func TestStore_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Load: %v", err)
 	}
-	Set(reg, "F-Auth", "db", 33144)
-	Set(reg, "F-Auth", "api", 36144)
-	Set(reg, "F-Other", "db", 33245)
+	Set(reg, "F-Auth", "mysql.main", 33144)
+	Set(reg, "F-Auth", "api.main", 36144)
+	Set(reg, "F-Other", "mysql.main", 33245)
 
 	if err := s.Save(reg, "allocate"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Reload and verify exact match.
 	reg2, err := s.Load()
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if p, ok := Get(reg2, "F-Auth", "db"); !ok || p != 33144 {
-		t.Errorf("Get F-Auth/db: got (%d,%v), want (33144,true)", p, ok)
+	if p, ok := Get(reg2, "F-Auth", "mysql.main"); !ok || p != 33144 {
+		t.Errorf("Get F-Auth/mysql.main: got (%d,%v), want (33144,true)", p, ok)
 	}
-	if p, ok := Get(reg2, "F-Other", "db"); !ok || p != 33245 {
-		t.Errorf("Get F-Other/db: got (%d,%v), want (33245,true)", p, ok)
+	if p, ok := Get(reg2, "F-Other", "mysql.main"); !ok || p != 33245 {
+		t.Errorf("Get F-Other/mysql.main: got (%d,%v), want (33245,true)", p, ok)
 	}
 
-	// Backup was not produced on the first write (no pre-existing file).
 	backups, _ := filepath.Glob(filepath.Join(backupDir, "*.json"))
 	if len(backups) != 0 {
 		t.Errorf("first Save should not produce a backup; got %d", len(backups))
 	}
 }
 
-func TestStore_BackupOnOverwrite(t *testing.T) {
+// TestStore_LoadUpgradesLegacyKeys is the v0.4 compat guard. A
+// v0.3-era registry file (single-port DB keys like `{mysql: 33144}`)
+// must load as `{mysql.main: 33144}` in memory, so the same auba
+// deployment migrating from v0.3 sees zero port drift on its existing
+// engines.
+func TestStore_LoadUpgradesLegacyKeys(t *testing.T) {
 	tmp := t.TempDir()
 	regPath := filepath.Join(tmp, ".worktree-ports.json")
+	raw := `{"F-Auth": {"mysql": 33144, "api": 45000}}`
+	if err := os.WriteFile(regPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+	s := &Store{Path: regPath, Now: time.Now}
+	reg, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p, ok := Get(reg, "F-Auth", "mysql.main"); !ok || p != 33144 {
+		t.Errorf("upgraded mysql.main: got (%d,%v), want (33144,true)", p, ok)
+	}
+	if p, ok := Get(reg, "F-Auth", "api.main"); !ok || p != 45000 {
+		t.Errorf("upgraded api.main: got (%d,%v), want (45000,true)", p, ok)
+	}
+	// Old keys must not coexist alongside the upgraded ones — the
+	// upgrade is a rename, not a duplication.
+	if _, ok := Get(reg, "F-Auth", "mysql"); ok {
+		t.Errorf("legacy 'mysql' key still present after upgrade")
+	}
+}
+
+func TestStore_BackupOnOverwrite(t *testing.T) {
+	tmp := t.TempDir()
+	regPath := filepath.Join(tmp, ".bough-ports.json")
 	backupDir := filepath.Join(tmp, "backups")
 	s := &Store{Path: regPath, BackupDir: backupDir, Now: fixedClock("20260101-120000")}
 
-	// First Save → file appears, no backup.
-	if err := s.Save(Registry{"A": {"db": 33000}}, "allocate"); err != nil {
+	if err := s.Save(Registry{"A": {"mysql.main": 33000}}, "allocate"); err != nil {
 		t.Fatalf("first Save: %v", err)
 	}
-	// Second Save → backup of the first file shows up.
-	if err := s.Save(Registry{"A": {"db": 33000}, "B": {"db": 33001}}, "allocate"); err != nil {
+	if err := s.Save(Registry{"A": {"mysql.main": 33000}, "B": {"mysql.main": 33001}}, "allocate"); err != nil {
 		t.Fatalf("second Save: %v", err)
 	}
 
@@ -94,20 +123,17 @@ func TestStore_BackupOnOverwrite(t *testing.T) {
 }
 
 func TestStore_AtomicityPreservesOldFileOnEncodeFailure(t *testing.T) {
-	// Encode failure is hard to simulate without channel/io-error fakery;
-	// instead we assert the on-disk file mode is preserved across Save,
-	// which is the public invariant we promise.
 	tmp := t.TempDir()
-	regPath := filepath.Join(tmp, ".worktree-ports.json")
+	regPath := filepath.Join(tmp, ".bough-ports.json")
 	s := &Store{Path: regPath, BackupDir: filepath.Join(tmp, "backups"), Now: time.Now}
 
-	if err := s.Save(Registry{"A": {"db": 33000}}, "init"); err != nil {
+	if err := s.Save(Registry{"A": {"mysql.main": 33000}}, "init"); err != nil {
 		t.Fatalf("first Save: %v", err)
 	}
 	if err := os.Chmod(regPath, 0o600); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	if err := s.Save(Registry{"A": {"db": 33000}, "B": {"db": 33001}}, "update"); err != nil {
+	if err := s.Save(Registry{"A": {"mysql.main": 33000}, "B": {"mysql.main": 33001}}, "update"); err != nil {
 		t.Fatalf("second Save: %v", err)
 	}
 	st, err := os.Stat(regPath)
@@ -121,29 +147,29 @@ func TestStore_AtomicityPreservesOldFileOnEncodeFailure(t *testing.T) {
 
 func TestRegistry_TakenByKind(t *testing.T) {
 	reg := Registry{
-		"A": {"db": 33000, "api": 36000},
-		"B": {"db": 33001, "api": 36001},
-		"C": {"db": 33002},
+		"A": {"mysql.main": 33000, "api.main": 36000},
+		"B": {"mysql.main": 33001, "api.main": 36001},
+		"C": {"mysql.main": 33002},
 	}
-	if got, want := len(TakenByKind(reg, "db")), 3; got != want {
-		t.Errorf("db taken: got %d want %d", got, want)
+	if got, want := len(TakenByKind(reg, "mysql.main")), 3; got != want {
+		t.Errorf("mysql.main taken: got %d want %d", got, want)
 	}
-	if got, want := len(TakenByKind(reg, "api")), 2; got != want {
-		t.Errorf("api taken: got %d want %d", got, want)
+	if got, want := len(TakenByKind(reg, "api.main")), 2; got != want {
+		t.Errorf("api.main taken: got %d want %d", got, want)
 	}
-	if len(TakenByKind(reg, "gateway")) != 0 {
+	if len(TakenByKind(reg, "gateway.main")) != 0 {
 		t.Errorf("absent kind: want empty")
 	}
 }
 
 func TestRegistry_Delete(t *testing.T) {
-	reg := Registry{"A": {"db": 33000}}
+	reg := Registry{"A": {"mysql.main": 33000}}
 	dropped, ok := Delete(reg, "A")
 	if !ok {
 		t.Errorf("Delete existing: want ok=true")
 	}
-	if dropped["db"] != 33000 {
-		t.Errorf("Delete returned %v, want {db:33000}", dropped)
+	if dropped["mysql.main"] != 33000 {
+		t.Errorf("Delete returned %v, want {mysql.main:33000}", dropped)
 	}
 	if _, ok := reg["A"]; ok {
 		t.Errorf("Delete should have removed entry")
@@ -153,15 +179,16 @@ func TestRegistry_Delete(t *testing.T) {
 	}
 }
 
-func TestStore_JSONShapeMatchesLegacy(t *testing.T) {
-	// On-disk shape must match the layout used by the predecessor
-	// `.worktree-ports.json` so a registry produced by either bough or
-	// the legacy bash script remains portable.
+// TestStore_JSONShape pins the v0.4 on-disk format. The shape is the
+// same map-of-map as v0.3; the only change is the inner key
+// convention (`<kind>.<role>` instead of `<kind>`), which keeps any
+// shell/jq tooling that reads the file as JSON working unchanged.
+func TestStore_JSONShape(t *testing.T) {
 	tmp := t.TempDir()
-	regPath := filepath.Join(tmp, ".worktree-ports.json")
+	regPath := filepath.Join(tmp, ".bough-ports.json")
 	s := &Store{Path: regPath, BackupDir: filepath.Join(tmp, "backups"), Now: time.Now}
 
-	reg := Registry{"F-Auth": {"db": 33144, "api": 36144, "view": 39144}}
+	reg := Registry{"F-Auth": {"mysql.main": 33144, "api.main": 36144, "view.main": 39144}}
 	if err := s.Save(reg, "init"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -174,7 +201,7 @@ func TestStore_JSONShapeMatchesLegacy(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got, want := parsed["F-Auth"]["db"], 33144; got != want {
-		t.Errorf("F-Auth.db: got %d want %d", got, want)
+	if got, want := parsed["F-Auth"]["mysql.main"], 33144; got != want {
+		t.Errorf("F-Auth.mysql.main: got %d want %d", got, want)
 	}
 }

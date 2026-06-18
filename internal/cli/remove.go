@@ -13,7 +13,8 @@ import (
 	"github.com/ikeikeikeike/bough/internal/gitwt"
 	"github.com/ikeikeikeike/bough/internal/pluginhost"
 	"github.com/ikeikeikeike/bough/internal/registry"
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
+
 	"github.com/spf13/cobra"
 )
 
@@ -34,8 +35,6 @@ func newRemoveCmd() *cobra.Command {
 					return err
 				}
 				path = in.WorktreePath
-				// If only `name` was supplied by the hook, fall through to
-				// the --name branch.
 				if path == "" {
 					name = in.Name
 				}
@@ -47,7 +46,7 @@ func newRemoveCmd() *cobra.Command {
 			switch {
 			case path != "":
 				wtName = filepath.Base(path)
-				monorepoRoot = filepath.Dir(filepath.Dir(path)) // <root>/.worktrees/<name> → <root>
+				monorepoRoot = filepath.Dir(filepath.Dir(path))
 			case name != "":
 				cwd, _ := os.Getwd()
 				monorepoRoot = cwd
@@ -70,18 +69,11 @@ func newRemoveCmd() *cobra.Command {
 	return cmd
 }
 
-// runRemove tears down in roughly the inverse order of create. We are
-// deliberately tolerant — every step that can succeed independently
-// does so, so a partially broken state (mysqld already dead, branch
-// already deleted, etc.) still converges on "no record of this
-// worktree".
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
 	logf(stderr, "[bough] remove %s @ %s", name, worktreePath)
 
-	// 1. Registry first — we want to know the ports we allocated even
-	// if the worktree dir is half-deleted.
 	store := registry.NewStore(
-		filepath.Join(monorepoRoot, cfg.Registry.Path),
+		resolveRegistryPath(monorepoRoot, cfg.Registry.Path),
 		cfg.Registry.BackupDir,
 	)
 	reg, err := store.Load()
@@ -89,39 +81,38 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		return fmt.Errorf("load registry: %w", err)
 	}
 
-	// 2. Down + Cleanup every DB plugin. Discover may fail for kinds
-	// the operator never installed; we log + continue.
-	provider := dbProviderRepo(cfg)
-	dbProviderWorktree := worktreePath
+	provider := engineProviderRepo(cfg)
+	engineProviderWorktree := worktreePath
 	if provider != nil {
-		dbProviderWorktree = filepath.Join(worktreePath, provider.Name)
+		engineProviderWorktree = filepath.Join(worktreePath, provider.Name)
 	}
-	for _, dbCfg := range cfg.Databases {
-		port, _ := registry.Get(reg, name, dbCfg.Kind)
+	for _, eng := range cfg.Engines {
+		port, _ := registry.Get(reg, name, eng.Kind+".main")
 		if port <= 0 {
-			logf(stderr, "[bough] %s: no registry entry, skipping plugin", dbCfg.Kind)
+			logf(stderr, "[bough] %s: no registry entry, skipping plugin", eng.Kind)
 			continue
 		}
-		prov, kill, err := pluginhost.Discover(dbCfg.Kind)
+		prov, kill, err := pluginhost.Discover(eng.Kind)
 		if err != nil {
-			logf(stderr, "[bough] %s discover: %v", dbCfg.Kind, err)
+			logf(stderr, "[bough] %s discover: %v", eng.Kind, err)
 			continue
 		}
-		if err := prov.Down(ctx, api.DownReq{
-			Port: port, WorktreeRoot: dbProviderWorktree, GracefulTimeoutSec: gracefulSecs,
+		if err := prov.Down(ctx, &engineapi.DownReq{
+			Ports:              []int{port},
+			WorktreeRoot:       engineProviderWorktree,
+			GracefulTimeoutSec: gracefulSecs,
 		}); err != nil {
-			logf(stderr, "[bough] %s Down: %v", dbCfg.Kind, err)
+			logf(stderr, "[bough] %s Down: %v", eng.Kind, err)
 		}
 		if cfg.Teardown.RemoveDatadir {
-			dataDir := filepath.Join(worktreePath, fmt.Sprintf(".local/%s-data", dbCfg.Kind))
-			if err := prov.Cleanup(ctx, dataDir, port); err != nil {
-				logf(stderr, "[bough] %s Cleanup: %v", dbCfg.Kind, err)
+			dataDir := filepath.Join(worktreePath, fmt.Sprintf(".local/%s-data", eng.Kind))
+			if err := prov.Cleanup(ctx, dataDir, []int{port}); err != nil {
+				logf(stderr, "[bough] %s Cleanup: %v", eng.Kind, err)
 			}
 		}
 		kill()
 	}
 
-	// 3. pre_remove hooks then git worktree remove + branch -D.
 	runner := gitwt.NewRunner()
 	for _, repo := range cfg.Repositories {
 		repoSrc := filepath.Join(monorepoRoot, repo.Name)
@@ -147,12 +138,10 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		}
 	}
 
-	// 4. Remove the worktree root dir.
 	if err := os.RemoveAll(worktreePath); err != nil {
 		logf(stderr, "[bough] rm -rf %s: %v", worktreePath, err)
 	}
 
-	// 5. Drop the registry entry.
 	registry.Delete(reg, name)
 	if err := store.Save(reg, "cleanup"); err != nil {
 		return fmt.Errorf("save registry: %w", err)

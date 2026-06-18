@@ -1,19 +1,22 @@
-// Package registry is the on-disk owner of `.worktree-ports.json` — the
-// per-monorepo source of truth that maps each worktree branch to its
-// deterministic port triplet (mysql / api / gateway / view / ...).
+// Package registry is the on-disk owner of `.bough-ports.json` (v0.4+)
+// or `.worktree-ports.json` (v0.3 legacy) — the per-monorepo source of
+// truth that maps each worktree branch to its deterministic per-engine,
+// per-role port allocation.
 //
-// The file format is `{<worktree-name>: {<kind>: <port>}}` — the same
-// structure used by a prior Bash-based worktree-{create,remove}.sh
-// hook this package replaces, so a registry produced by either side
-// is consumable by the other without any conversion.
+// The file format is `{<worktree-name>: {<kind>.<role>: <port>}}` from
+// v0.4.0 onward (e.g. `"mysql.main": 42345`, `"rabbitmq.amqp": 60123`,
+// `"rabbitmq.management": 60556`). A v0.3 entry written as
+// `{F-Auth: {mysql: 42345}}` (no dot, single-port DB) is auto-upgraded
+// to `{F-Auth: {"mysql.main": 42345}}` on Load, so an auba deployment
+// migrating from v0.3 sees zero port drift on its existing engines.
 //
 // All writes go through atomicWriteJSON (tempfile + os.Rename) so a
 // concurrent `bough create` and `bough remove` can never observe a
 // partial JSON document. Every write is preceded by a copy of the
-// previous file to ${backupDir}/worktree-ports-pre-<action>-<ts>.json so
-// human mistakes (an accidental port collision the schema doesn't catch,
-// a corrupted file from a SIGKILL'd hook) can be recovered without
-// reconstructing port history by hand.
+// previous file to ${backupDir}/<basename>-pre-<action>-<ts>.json so
+// human mistakes (an accidental port collision the schema doesn't
+// catch, a corrupted file from a SIGKILL'd hook) can be recovered
+// without reconstructing port history by hand.
 package registry
 
 import (
@@ -51,9 +54,11 @@ func NewStore(path, backupDir string) *Store {
 	return &Store{Path: path, BackupDir: backupDir, Now: time.Now}
 }
 
-// Load reads `.worktree-ports.json` from disk. An absent file is not an
-// error — the first invocation of `bough create` ever runs against an
-// empty registry and the file materialises on the first Save.
+// Load reads the registry from disk. An absent file is not an error —
+// the first invocation of `bough create` ever runs against an empty
+// registry and the file materialises on the first Save. Keys without
+// a "." (v0.3 single-port DB entries like `mysql: 42345`) are
+// auto-upgraded to `<kind>.main`.
 func (s *Store) Load() (Registry, error) {
 	raw, err := os.ReadFile(s.Path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -72,8 +77,46 @@ func (s *Store) Load() (Registry, error) {
 	if r == nil {
 		r = Registry{}
 	}
+	upgradeLegacyKeys(r)
 	return r, nil
 }
+
+// upgradeLegacyKeys appends ".main" to any kind key that does not
+// already contain a "." — v0.3 single-port DBs were written as
+// `{F-Auth: {mysql: 42345}}` and v0.4 expects
+// `{F-Auth: {mysql.main: 42345}}`. Removed in v0.5.0 alongside the
+// other legacy fallbacks.
+func upgradeLegacyKeys(r Registry) {
+	for name, entry := range r {
+		upgraded := false
+		for k := range entry {
+			if !strings.Contains(k, ".") {
+				upgraded = true
+				break
+			}
+		}
+		if !upgraded {
+			continue
+		}
+		newEntry := make(map[string]int, len(entry))
+		for k, v := range entry {
+			if strings.Contains(k, ".") {
+				newEntry[k] = v
+			} else {
+				newEntry[k+".main"] = v
+			}
+		}
+		r[name] = newEntry
+	}
+}
+
+// LegacyPath returns the v0.3 default registry path so the host CLI
+// can fall back when the v0.4 `.bough-ports.json` is absent. Removed
+// in v0.5.0.
+const LegacyPath = ".worktree-ports.json"
+
+// CanonicalPath is the v0.4 default registry filename.
+const CanonicalPath = ".bough-ports.json"
 
 // Save writes the registry back to disk after copying the previous file
 // to ${BackupDir}/<basename>.pre-<action>-<ts>.json. The action label

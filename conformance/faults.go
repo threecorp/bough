@@ -161,7 +161,7 @@ func runFaultImagePullFailure(t *testing.T, cfg Config) {
 // fault gets its own process so a panic in one cannot poison the
 // next) and returns its PortRangeDefault low end as the port to
 // drive Up with. Caller MUST defer the returned cleanup func.
-func spawnFreshAndPickPort(t *testing.T, cfg Config) (api.DBProvider, func(), int) {
+func spawnFreshAndPickPort(t *testing.T, cfg Config) (api.EngineProvider, func(), int) {
 	t.Helper()
 	prov, kill, err := pluginhost.DiscoverFromBinary(cfg.PluginBinary)
 	if err != nil {
@@ -169,10 +169,15 @@ func spawnFreshAndPickPort(t *testing.T, cfg Config) (api.DBProvider, func(), in
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	low, _, err := prov.PortRangeDefault(ctx)
+	ranges, err := prov.PortRangeDefault(ctx)
 	if err != nil {
 		kill()
 		t.Fatalf("PortRangeDefault: %v", err)
 	}
-	return prov, kill, low
+	mainRange, ok := ranges["main"]
+	if !ok {
+		kill()
+		t.Fatalf("PortRangeDefault did not declare role 'main'; multi-port engine: pass conformance.Config.MainPortRole")
+	}
+	return prov, kill, mainRange.Low
 }

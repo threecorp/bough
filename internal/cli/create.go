@@ -16,7 +16,8 @@ import (
 	"github.com/ikeikeikeike/bough/internal/gitwt"
 	"github.com/ikeikeikeike/bough/internal/pluginhost"
 	"github.com/ikeikeikeike/bough/internal/registry"
-	api "github.com/ikeikeikeike/bough/plugins/db/api"
+	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
+
 	"github.com/spf13/cobra"
 )
 
@@ -55,23 +56,28 @@ func newCreateCmd() *cobra.Command {
 	return cmd
 }
 
-// dbInstance holds the per-database side-effects we need to remember
-// between the spawn-pass and the env-render pass. The connection cleanup
-// closure runs at the end of runCreate regardless of partial-success —
-// keeping the gRPC subprocess alive would leak after the host returns.
-type dbInstance struct {
-	cfg     config.Database
+// engineInstance holds the per-engine side-effects we need to
+// remember between the spawn-pass and the env-render pass. The
+// connection cleanup closure runs at the end of runCreate regardless
+// of partial-success — keeping the gRPC subprocess alive would leak
+// after the host returns.
+//
+// v0.4.0: single-port engines (mysql/postgres/redis/elasticsearch)
+// allocate one port under role="main". Multi-port engines extend
+// this to a per-role port map in Λ-7.4.
+type engineInstance struct {
+	cfg     config.Engine
 	port    int
 	envVars map[string]string
 	kill    func()
 }
 
 // runCreate is the ordered choreography of allocator → registry →
-// gitwt → pluginhost → envwriter → post_create. Errors are progressive:
-// per-repo failures log to stderr and continue (the host typically
-// converges across two-or-three `bough create` retries), but registry /
-// plugin failures abort because they leave the operator in an
-// inconsistent state.
+// gitwt → pluginhost → envwriter → post_create. Errors are
+// progressive: per-repo failures log to stderr and continue (the host
+// typically converges across two-or-three `bough create` retries),
+// but registry / plugin failures abort because they leave the
+// operator in an inconsistent state.
 func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int, error) }, cfg *config.Config, monorepoRoot, name string, noFetch bool) error {
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
 	worktreeRoot := filepath.Join(monorepoRoot, ".worktrees", name)
@@ -80,21 +86,22 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 	}
 
 	// 1. Registry: load, allocate, save in one mutation block. The
-	// registry is the single source of truth for "which ports does this
-	// worktree own"; the allocator only ever sees the map snapshot.
-	store := registry.NewStore(
-		filepath.Join(monorepoRoot, cfg.Registry.Path),
-		cfg.Registry.BackupDir,
-	)
+	// registry is the single source of truth for "which ports does
+	// this worktree own"; the allocator only ever sees the map
+	// snapshot. v0.4 path: prefer .bough-ports.json, fall back to
+	// .worktree-isolation.yaml-declared path (typically v0.3's
+	// .worktree-ports.json) when the canonical file is absent.
+	registryPath := resolveRegistryPath(monorepoRoot, cfg.Registry.Path)
+	store := registry.NewStore(registryPath, cfg.Registry.BackupDir)
 	reg, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("load registry: %w", err)
 	}
-	dbPorts, err := allocateRegistry(reg, cfg, name)
+	enginePorts, err := allocateEngines(reg, cfg, name)
 	if err != nil {
 		return err
 	}
-	portsCtx, err := allocateNonDBPorts(reg, cfg, name)
+	portsCtx, err := allocateNonEnginePorts(reg, cfg, name)
 	if err != nil {
 		return err
 	}
@@ -102,30 +109,28 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		return fmt.Errorf("save registry: %w", err)
 	}
 
-	// 2. Discover + Up + ReadyCheck every DB plugin. The defers run in
-	// reverse so the LIFO order matches startup order — handy when the
-	// run aborts mid-loop and we want to tear down the providers we
-	// did manage to start.
-	var dbs []dbInstance
+	// 2. Discover + Up + ReadyCheck every engine plugin. The defers
+	// run in reverse so the LIFO order matches startup order — handy
+	// when the run aborts mid-loop and we want to tear down the
+	// providers we did manage to start.
+	var engines []engineInstance
 	defer func() {
-		for _, db := range dbs {
-			db.kill()
+		for _, e := range engines {
+			e.kill()
 		}
 	}()
-	provider := dbProviderRepo(cfg)
-	dbProviderWorktree := worktreeRoot
+	provider := engineProviderRepo(cfg)
+	engineProviderWorktree := worktreeRoot
 	if provider != nil {
-		dbProviderWorktree = filepath.Join(worktreeRoot, provider.Name)
+		engineProviderWorktree = filepath.Join(worktreeRoot, provider.Name)
 	}
 	// Auto-detect once per `bough create` — at most one nix/docker
-	// probe per invocation regardless of how many databases are
-	// declared. The result is reused across every dbCfg whose Backend
-	// is empty; explicit YAML values bypass it entirely. We fail the
-	// whole create up-front rather than letting the plugin Up explode
-	// with a confusing nix/docker error mid-way through.
+	// probe per invocation regardless of how many engines are
+	// declared. The result is reused across every engine whose
+	// Backend is empty; explicit YAML values bypass it entirely.
 	var detected string
-	for _, dbCfg := range cfg.Databases {
-		if dbCfg.Backend != "" {
+	for _, eng := range cfg.Engines {
+		if eng.Backend != "" {
 			continue
 		}
 		d, err := backend.Detect(ctx)
@@ -136,59 +141,60 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		logf(stderr, "[bough] backend: auto-detected %s", detected)
 		break
 	}
-	for _, dbCfg := range cfg.Databases {
-		port := dbPorts[dbCfg.Kind]
-		prov, kill, err := pluginhost.Discover(dbCfg.Kind)
+	for _, eng := range cfg.Engines {
+		port := enginePorts[eng.Kind]
+		prov, kill, err := pluginhost.Discover(eng.Kind)
 		if err != nil {
-			return fmt.Errorf("discover %s plugin: %w", dbCfg.Kind, err)
+			return fmt.Errorf("discover %s plugin: %w", eng.Kind, err)
 		}
-		dbs = append(dbs, dbInstance{cfg: dbCfg, port: port, kill: kill})
-		logf(stderr, "[bough] %s: plugin discovered, starting on port %d", dbCfg.Kind, port)
-		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", dbCfg.Kind))
-		// Inject the backend selector into the plugin's Extras map so
-		// the plugin can dispatch between nix / docker / future
-		// backends without a proto change. dbCfg.Extras may be nil, so
-		// allocate a fresh map either way and copy the user-supplied
-		// keys in verbatim. An empty Backend falls back to the
-		// auto-detection result resolved once above; an explicit
-		// "nix"/"docker" value short-circuits detection.
-		extras := make(map[string]string, len(dbCfg.Extras)+2)
-		for k, v := range dbCfg.Extras {
+		engines = append(engines, engineInstance{cfg: eng, port: port, kill: kill})
+		logf(stderr, "[bough] %s: plugin discovered, starting on port %d", eng.Kind, port)
+		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind))
+		extras := make(map[string]string, len(eng.Extras)+2)
+		for k, v := range eng.Extras {
 			extras[k] = v
 		}
 		switch {
-		case dbCfg.Backend != "":
-			extras["backend"] = dbCfg.Backend
+		case eng.Backend != "":
+			extras["backend"] = eng.Backend
 		case detected != "":
 			extras["backend"] = detected
 		}
-		if dbCfg.Version != "" {
-			extras["version"] = dbCfg.Version
+		if eng.Version != "" {
+			extras["version"] = eng.Version
 		}
-		if err := prov.Up(ctx, api.UpReq{
-			Port: port, Datadir: dataDir, WorktreeRoot: dbProviderWorktree,
-			SocketDir: dbCfg.SocketDir, InitialDatabases: dbCfg.InitialDatabases, Extras: extras,
+		ports := []engineapi.PortSpec{{Role: "main", Port: port}}
+		resources := toResourceSpecs(eng.InitialResources)
+		if err := prov.Up(ctx, &engineapi.UpReq{
+			Ports:            ports,
+			Datadir:          dataDir,
+			WorktreeRoot:     engineProviderWorktree,
+			SocketDir:        eng.SocketDir,
+			InitialResources: resources,
+			Extras:           extras,
 		}); err != nil {
-			return fmt.Errorf("%s Up: %w", dbCfg.Kind, err)
+			return fmt.Errorf("%s Up: %w", eng.Kind, err)
 		}
-		ready, err := prov.ReadyCheck(ctx, port, dbCfg.ReadyTimeoutSec)
+		ready, err := prov.ReadyCheck(ctx, []int{port}, eng.ReadyTimeoutSec)
 		if err != nil || !ready {
-			return fmt.Errorf("%s ReadyCheck: %w", dbCfg.Kind, err)
+			return fmt.Errorf("%s ReadyCheck: %w", eng.Kind, err)
 		}
-		vars, err := prov.EnvVars(ctx, api.EnvVarsReq{
-			Port: port, InitialDatabases: dbCfg.InitialDatabases, SocketDir: dbCfg.SocketDir,
+		vars, err := prov.EnvVars(ctx, &engineapi.EnvVarsReq{
+			Ports:            ports,
+			InitialResources: resources,
+			SocketDir:        eng.SocketDir,
 		})
 		if err != nil {
-			return fmt.Errorf("%s EnvVars: %w", dbCfg.Kind, err)
+			return fmt.Errorf("%s EnvVars: %w", eng.Kind, err)
 		}
-		dbs[len(dbs)-1].envVars = vars
-		logf(stderr, "[bough] %s: ready on port %d", dbCfg.Kind, port)
+		engines[len(engines)-1].envVars = vars
+		logf(stderr, "[bough] %s: ready on port %d", eng.Kind, port)
 	}
 
 	// 3. git worktree add + direnv + symlinks per repository. We
 	// continue on per-repo failure because partial worktree
-	// materialisation is more useful than aborting on the first error
-	// — the operator can `bough remove` and retry.
+	// materialisation is more useful than aborting on the first
+	// error — the operator can `bough remove` and retry.
 	runner := gitwt.NewRunner()
 	runner.Fetch = !noFetch
 	for _, repo := range cfg.Repositories {
@@ -200,10 +206,6 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 			logf(stderr, "[bough] %s: worktree add FAILED: %v", repo.Name, err)
 			continue
 		}
-		// Resolve the SHA the new worktree actually landed on so the
-		// operator can confirm against `git ls-remote origin <base>`
-		// when a CI failure on the worktree pins the blame on stale
-		// state versus a new bug.
 		sha, _ := runner.HeadSHA(ctx, repoDst)
 		baseLabel := base
 		if runner.Fetch {
@@ -227,9 +229,9 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		}
 	}
 
-	// 4. Render + write .env.local per repository. The Mysql DBCtx is
-	// keyed off `kind: mysql` for now; richer engines will expose more
-	// distinct contexts in a future schema revision.
+	// 4. Render + write .env.local per repository. The Mysql DBCtx
+	// is keyed off `kind: mysql` for now; richer engines will expose
+	// more distinct contexts in a future schema revision.
 	for _, repo := range cfg.Repositories {
 		if len(repo.EnvLocal) == 0 {
 			continue
@@ -238,17 +240,15 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		envCtx := envwriter.Context{
 			Worktree: envwriter.WorktreeCtx{Name: name, Root: worktreeRoot},
 			Repo:     envwriter.RepoCtx{Name: repo.Name, Path: repoDst},
-			Mysql:    dbContextFor("mysql", dbs),
+			Mysql:    engineContextFor("mysql", engines),
 			Ports:    portsCtx,
 		}
 		rendered, err := envwriter.Render(repo.EnvLocal, envCtx)
 		if err != nil {
 			return fmt.Errorf("%s env_local render: %w", repo.Name, err)
 		}
-		// Merge the plugin-supplied env vars on top so monorepo authors
-		// can omit BOUGH_MYSQL_* from the YAML when the defaults suffice.
-		for _, db := range dbs {
-			for k, v := range db.envVars {
+		for _, e := range engines {
+			for k, v := range e.envVars {
 				if _, ok := rendered[k]; !ok {
 					rendered[k] = v
 				}
@@ -263,16 +263,8 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 
 	// 5. post_create hooks. Best-effort: a failing migration here is
 	// reported to stderr but does not unwind the entire create — the
-	// operator usually wants the worktree materialised even when seed
-	// data is missing.
-	//
-	// Each script runs with the parsed .env.local entries merged into
-	// the inherited process env, so the YAML author can `${VAR}` the
-	// bough-injected port / DSN / URL values without having to
-	// `source .env.local` from bash. Sourcing was the original idiom
-	// but breaks the moment a value contains `(` / `?` / `&` — bash
-	// interprets those as shell metacharacters at source time and
-	// silently aborts the rest of the file, leaving `${VAR}` empty.
+	// operator usually wants the worktree materialised even when
+	// seed data is missing.
 	for _, repo := range cfg.Repositories {
 		if len(repo.PostCreate) == 0 {
 			continue
@@ -292,91 +284,115 @@ func runCreate(ctx context.Context, stderr, stdout interface{ Write([]byte) (int
 		}
 	}
 
-	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly the
-	// absolute worktree root path on stdout so Claude Code can cd into
-	// it. Everything else goes to stderr.
+	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
+	// the absolute worktree root path on stdout so Claude Code can
+	// cd into it. Everything else goes to stderr.
 	fmt.Fprintln(stdout, worktreeRoot)
 	return nil
 }
 
-// allocateRegistry walks every DB and writes the chosen port into reg.
-// Returns kind→port for the create loop downstream.
-func allocateRegistry(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
-	out := make(map[string]int, len(cfg.Databases))
-	for _, db := range cfg.Databases {
-		// Deterministic re-allocation: if the registry already holds a
-		// port for (name, kind), reuse it rather than re-seeding from
-		// scratch. The allocator gets the same answer regardless, but
-		// short-circuiting here keeps backups noise-free.
-		if existing, ok := registry.Get(reg, name, db.Kind); ok {
-			out[db.Kind] = existing
+// allocateEngines walks every engine and writes the chosen port
+// (role="main") into reg. Returns kind→port for the create loop
+// downstream. v0.4.0: single-port engines only — multi-port engines
+// (rabbitmq AMQP+Management, kafka broker+controller) extend this in
+// Λ-7.4 to allocate per-role.
+func allocateEngines(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
+	out := make(map[string]int, len(cfg.Engines))
+	for _, eng := range cfg.Engines {
+		mainRange, ok := eng.PortRanges["main"]
+		if !ok {
+			// Λ-7.4 will iterate every role; for now we require
+			// "main" so single-port plugins boot. A multi-port
+			// engine that declares no "main" is a config error.
+			return nil, fmt.Errorf("config: engines[%s].port_ranges must declare 'main' (multi-port allocation lands in Λ-7.4)", eng.Kind)
+		}
+		key := eng.Kind + ".main"
+		if existing, ok := registry.Get(reg, name, key); ok {
+			out[eng.Kind] = existing
 			continue
 		}
-		port, err := allocator.Allocate(name, db.PortRange[0], rangeLen(db.PortRange),
-			registry.TakenByKind(reg, db.Kind))
+		port, err := allocator.Allocate(name, "main", mainRange[0], rangeLen(mainRange),
+			registry.TakenByKind(reg, key))
 		if err != nil {
-			return nil, fmt.Errorf("allocate %s port: %w", db.Kind, err)
+			return nil, fmt.Errorf("allocate %s.main port: %w", eng.Kind, err)
 		}
-		registry.Set(reg, name, db.Kind, port)
-		out[db.Kind] = port
+		registry.Set(reg, name, key, port)
+		out[eng.Kind] = port
 	}
 	return out, nil
 }
 
-func allocateNonDBPorts(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
+func allocateNonEnginePorts(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
 	out := make(map[string]int, len(cfg.Ports))
 	for kind, pr := range cfg.Ports {
-		if existing, ok := registry.Get(reg, name, kind); ok {
+		key := kind + ".main"
+		if existing, ok := registry.Get(reg, name, key); ok {
 			out[kind] = existing
 			continue
 		}
-		port, err := allocator.Allocate(name, pr.Range[0], rangeLen(pr.Range),
-			registry.TakenByKind(reg, kind))
+		port, err := allocator.Allocate(name, "main", pr.Range[0], rangeLen(pr.Range),
+			registry.TakenByKind(reg, key))
 		if err != nil {
 			return nil, fmt.Errorf("allocate %s port: %w", kind, err)
 		}
-		registry.Set(reg, name, kind, port)
+		registry.Set(reg, name, key, port)
 		out[kind] = port
 	}
 	return out, nil
 }
 
-func dbContextFor(kind string, dbs []dbInstance) envwriter.DBCtx {
-	for _, d := range dbs {
-		if d.cfg.Kind != kind {
+func engineContextFor(kind string, engines []engineInstance) envwriter.DBCtx {
+	for _, e := range engines {
+		if e.cfg.Kind != kind {
 			continue
 		}
-		dir := d.cfg.SocketDir
+		dir := e.cfg.SocketDir
 		if dir == "" {
 			dir = "/tmp"
 		}
 		return envwriter.DBCtx{
-			Port:   d.port,
+			Port:   e.port,
 			Host:   "127.0.0.1",
-			Socket: filepath.Join(dir, fmt.Sprintf("bough-%s-%d.sock", kind, d.port)),
+			Socket: filepath.Join(dir, fmt.Sprintf("bough-%s-%d.sock", kind, e.port)),
 		}
 	}
 	return envwriter.DBCtx{Host: "127.0.0.1"}
 }
 
+func toResourceSpecs(in []config.InitialResource) []engineapi.ResourceSpec {
+	out := make([]engineapi.ResourceSpec, len(in))
+	for i, r := range in {
+		out[i] = engineapi.ResourceSpec{Type: r.Type, Name: r.Name, Params: r.Params}
+	}
+	return out
+}
+
+// resolveRegistryPath picks the v0.4 canonical `.bough-ports.json`
+// when it exists, otherwise falls back to whatever the YAML declared
+// (typically v0.3's `.worktree-ports.json`). The host's registry
+// loader auto-upgrades legacy keys in either case, so the operator
+// can rename at any pace during the v0.4.x transition.
+func resolveRegistryPath(monorepoRoot, yamlPath string) string {
+	canonical := filepath.Join(monorepoRoot, registry.CanonicalPath)
+	if _, err := os.Stat(canonical); err == nil {
+		return canonical
+	}
+	// `yamlPath` is whatever the operator wrote in registry.path —
+	// honour it relative to the monorepo root.
+	return filepath.Join(monorepoRoot, yamlPath)
+}
+
 // parseEnvLocal reads a `.env.local` file and returns its `KEY=VALUE`
 // lines verbatim so the caller can pass them through to a child
-// process's exec.Cmd.Env. Comments (`#`-prefixed) and blank lines are
-// skipped; lines without an `=` are silently dropped.
+// process's exec.Cmd.Env. Comments (`#`-prefixed) and blank lines
+// are skipped; lines without an `=` are silently dropped.
 //
 // IMPORTANT: this parser does NOT do shell unquoting / interpolation
 // of values. The bough envwriter emits raw values without surrounding
 // quotes (matching the historical direnv `dotenv_if_exists .env.local`
 // idiom) and bash `source` would choke on the `(`, `&`, `?` chars
 // many DSNs / URLs contain — that exact failure mode is the bug this
-// helper exists to bypass. A raw `KEY=VALUE` slice handed to
-// exec.Cmd.Env hits the runtime's `extendEnviron` path which is plain
-// string-passing, not shell parsing, so any byte sequence in VALUE is
-// preserved as-is.
-//
-// A nil-returning path (file missing / unreadable / empty) is normal
-// — the caller wants the post_create env to degrade to os.Environ()
-// in that case.
+// helper exists to bypass.
 func parseEnvLocal(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
