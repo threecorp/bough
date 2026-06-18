@@ -1,0 +1,149 @@
+// engine.proto is the v0.4.0 contract between the bough host and any
+// `bough-plugin-<kind>` binary that provisions a per-worktree engine
+// instance (database / message broker / object store / search index /
+// KV store, etc.). Plugins implement EngineProvider over Hashicorp
+// go-plugin's gRPC transport.
+//
+// Renamed from db.proto in v0.4.0 along with `plugins/db/` →
+// `plugins/engine/`. The shape was generalised: `Port int` →
+// `repeated PortSpec ports` for multi-port engines (rabbitmq AMQP +
+// Management, kafka broker + controller, NATS client + monitor),
+// `repeated string initial_databases` → `repeated ResourceSpec
+// initial_resources` (DB schema / kafka topic / minio bucket /
+// rabbitmq vhost / consul KV). See docs/MIGRATION-v0.3-to-v0.4.md.
+//
+// Versioning: bumping ProtocolVersion in plugins/engine/api/handshake.go
+// is what gates a backwards-incompatible change here. Add new fields
+// with new tag numbers, do not renumber existing ones.
+
+syntax = "proto3";
+
+package bough.engine.v1;
+
+option go_package = "github.com/ikeikeikeike/bough/plugins/engine/api/proto;pb";
+
+import "google/protobuf/empty.proto";
+
+// EngineProvider is the lifecycle of one per-worktree engine instance.
+service EngineProvider {
+  // Up starts the engine listening on the host-allocated `ports`, with
+  // its data directory anchored at `datadir`. The host passes
+  // `worktree_root` so the plugin can resolve a `nix run` invocation
+  // against the embedded flake without needing global state, and
+  // `initial_resources` so the engine can self-provision (DB schemas,
+  // kafka topics, minio buckets — engine-specific by `type`).
+  rpc Up(UpRequest) returns (UpResponse);
+
+  // Down asks the plugin to gracefully stop the instance and clean up
+  // any supervisor processes it spawned.
+  rpc Down(DownRequest) returns (DownResponse);
+
+  // ReadyCheck polls for `timeout_sec` seconds until the instance
+  // accepts connections on every entry in `ports`. Returns ready=true
+  // only after the engine answers a protocol-level probe (not just
+  // TCP listen); the conformance suite enforces this contract.
+  rpc ReadyCheck(ReadyCheckRequest) returns (ReadyCheckResponse);
+
+  // Cleanup removes the on-disk data directory after Down has
+  // confirmed the instance is no longer running.
+  rpc Cleanup(CleanupRequest) returns (CleanupResponse);
+
+  // PortRangeDefault returns, per `role`, the [low, high] range the
+  // plugin recommends. Single-port engines return one entry keyed
+  // `"main"`; multi-port engines return one per role
+  // (e.g. {"amqp": [...], "management": [...]} for rabbitmq).
+  // Used when the YAML does not override `port_ranges`.
+  rpc PortRangeDefault(google.protobuf.Empty) returns (PortRangeResponse);
+
+  // EnvVars returns the set of environment variables consumers (the
+  // host and any sibling repo) should see in their rendered .env.local.
+  // For multi-port engines, role-suffixed keys are expected
+  // (BOUGH_RABBITMQ_AMQP_PORT, BOUGH_RABBITMQ_MANAGEMENT_PORT, ...);
+  // single-port engines keep the v0.3-era role-omitted form
+  // (BOUGH_MYSQL_PORT).
+  rpc EnvVars(EnvVarsRequest) returns (EnvVarsResponse);
+}
+
+// PortSpec ties a port number to its semantic role inside an engine.
+// Roles are engine-defined strings ("main" for single-port engines,
+// "amqp" / "management" for rabbitmq, "broker" / "controller" for
+// kafka, "client" / "monitor" / "cluster" for NATS, etc.). The host
+// allocates one port per role declared by the engine's
+// PortRangeDefault response (or by the YAML `port_ranges` override).
+message PortSpec {
+  string role = 1;
+  int32 port = 2;
+}
+
+// ResourceSpec is one piece of state the engine should provision at
+// Up time. `type` discriminates which kind of resource ("database",
+// "topic", "bucket", "vhost", "kv", "index", ...) — the plugin
+// silently drops types it does not implement. `params` is engine-
+// specific tuning (kafka topic partitions, postgres schema encoding,
+// etc.).
+message ResourceSpec {
+  string type = 1;
+  string name = 2;
+  map<string, string> params = 3;
+}
+
+// PortRange is an inclusive [low, high] window from which the host's
+// allocator picks deterministic-per-worktree ports.
+message PortRange {
+  int32 low = 1;
+  int32 high = 2;
+}
+
+message UpRequest {
+  repeated PortSpec ports = 1;
+  string datadir = 2;
+  string worktree_root = 3;
+  string socket_dir = 4;
+  repeated ResourceSpec initial_resources = 5;
+  map<string, string> extras = 6;
+}
+
+// String error instead of gRPC status so plugins authored in non-Go
+// languages can serialise a simple message without learning gRPC
+// error codes. Empty string == success.
+message UpResponse { string error = 1; }
+
+message DownRequest {
+  repeated int32 ports = 1;
+  string worktree_root = 2;
+  int32 graceful_timeout_sec = 3;
+}
+
+message DownResponse { string error = 1; }
+
+message ReadyCheckRequest {
+  repeated int32 ports = 1;
+  int32 timeout_sec = 2;
+}
+
+message ReadyCheckResponse {
+  bool ready = 1;
+  string error = 2;
+}
+
+message CleanupRequest {
+  string datadir = 1;
+  repeated int32 ports = 2;
+}
+
+message CleanupResponse { string error = 1; }
+
+message PortRangeResponse {
+  // Keyed by role. Single-port engines return {"main": [low, high]}.
+  map<string, PortRange> ranges = 1;
+}
+
+message EnvVarsRequest {
+  repeated PortSpec ports = 1;
+  repeated ResourceSpec initial_resources = 2;
+  string socket_dir = 3;
+}
+
+message EnvVarsResponse {
+  map<string, string> vars = 1;
+}

@@ -1,14 +1,22 @@
 .DEFAULT_GOAL := help
 
-PROTO_DIR := plugins/db/api/proto
+PROTO_DIR_ENGINE := plugins/engine/api/proto
+PROTO_DIR_DB := plugins/db/api/proto
 
 
 .PHONY: proto
-proto:  ## Regenerate gRPC stubs from plugins/db/api/proto/db.proto.
-	protoc -I $(PROTO_DIR) \
-		--go_out=$(PROTO_DIR) --go_opt=paths=source_relative \
-		--go-grpc_out=$(PROTO_DIR) --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/db.proto
+proto:  ## Regenerate gRPC stubs from plugins/engine/api/proto/engine.proto.
+	protoc -I $(PROTO_DIR_ENGINE) \
+		--go_out=$(PROTO_DIR_ENGINE) --go_opt=paths=source_relative \
+		--go-grpc_out=$(PROTO_DIR_ENGINE) --go-grpc_opt=paths=source_relative \
+		$(PROTO_DIR_ENGINE)/engine.proto
+	# v0.4.0 transition: regenerate the legacy db.proto too while the
+	# old plugins/db/ tree still exists (deleted in Λ-7.1). After that
+	# this line goes away.
+	protoc -I $(PROTO_DIR_DB) \
+		--go_out=$(PROTO_DIR_DB) --go_opt=paths=source_relative \
+		--go-grpc_out=$(PROTO_DIR_DB) --go-grpc_opt=paths=source_relative \
+		$(PROTO_DIR_DB)/db.proto
 
 
 .PHONY: test
