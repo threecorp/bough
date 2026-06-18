@@ -1,5 +1,95 @@
 # Changelog
 
+## v0.4.0
+
+bough generalises from "DB plugin orchestrator" to "engine plugin
+orchestrator". Middleware (rabbitmq, kafka, nats, minio, …) can now be
+written as plugins on the same lifecycle as the existing DB plugins.
+The breaking changes are intentionally collected into one release so
+plugin authors pay the cost once. The v0.4.x line keeps fallbacks for
+every renamed surface so existing deployments do not have to migrate
+in lockstep — they will be removed in v0.5.0. See
+[`docs/MIGRATION-v0.3-to-v0.4.md`](./docs/MIGRATION-v0.3-to-v0.4.md)
+for the full diff.
+
+### Changed (breaking, with fallback)
+
+- **`DBProvider` → `EngineProvider`.** The gRPC contract is renamed,
+  `UpReq.Port int` becomes `UpReq.Ports []PortSpec`, `InitialDatabases
+  []string` becomes `InitialResources []ResourceSpec`,
+  `PortRangeDefault` returns `map[string]PortRange` (one entry per
+  role). Single-port plugins keep the v0.3 shape via `Role: "main"`
+  (or empty, treated identically). See
+  [`plugins/engine/api/CONTRACT.md`](./plugins/engine/api/CONTRACT.md).
+- **`plugins/db/` → `plugins/engine/`.** The four bundled plugins
+  (mysql / postgres / redis / elasticsearch) move to the new path.
+  External plugins need to update their Go module import from
+  `github.com/ikeikeikeike/bough/plugins/db/api` to
+  `github.com/ikeikeikeike/bough/plugins/engine/api`.
+- **YAML schema_version 2.** `databases:` → `engines:`,
+  `port_range: [a, b]` → `port_ranges: { main: [a, b] }`,
+  `initial_databases: ["foo"]` → `initial_resources: [{ type:
+  database, name: foo }]`. The host loader still accepts the v0.3
+  field names with a deprecation warning and converts them in memory.
+- **File / dir / handshake renames.**
+  `.worktree-isolation.yaml` → `.bough.yaml`,
+  `.worktree-ports.json` → `.bough-ports.json`,
+  `~/.claude/backups/` → `~/.bough/backups/`,
+  gRPC handshake magic cookie `BOUGH_DB_PLUGIN` → `BOUGH_ENGINE_PLUGIN`.
+  Every old surface is read/honoured during the v0.4.x line; the host
+  attempts the new handshake first and falls back to the v0.3 one so
+  v0.3.x plugin binaries still spawn under a v0.4.x host.
+- **Repository role rename.** `role: db-provider` →
+  `role: engine-provider` (the YAML accepts both during v0.4.x).
+- **Registry composite key.** Engine entries are now stored as
+  `<kind>.<role>` (e.g. `mysql.main`); legacy keys without a dot are
+  upgraded on load so existing `.worktree-ports.json` files keep
+  their port allocations.
+
+### Added
+
+- **Multi-port engines.** Plugins declare one role per listen point
+  from `PortRangeDefault`; the host allocates a deterministic port
+  per role; `EnvVars` emits `BOUGH_<ENGINE>_HOST` (shared) plus
+  `BOUGH_<ENGINE>_<ROLE>_PORT` / `_URL` per role. The conformance
+  suite exercises the full multi-port lifecycle end-to-end against
+  the in-tree mock plugin (`TestRun_MockPlugin_MultiPort_GreenPath`).
+- **`conformance.Config.MainPortRole`** (default `"main"`). Targets
+  the fault tests at a single role on multi-port plugins; the
+  lifecycle still iterates over every declared role.
+- **`AssertReachable` longest-prefix host lookup.** A `*_<ROLE>_PORT`
+  key now pairs back to the nearest ancestor `*_HOST` instead of
+  requiring a per-role `*_HOST` duplicate.
+- **Shim helpers** `api.PickMainPort([]PortSpec)` and
+  `api.PickFirstResourceName([]ResourceSpec, type)` in
+  `plugins/engine/api/shims.go` keep single-port engine internals
+  signature-compatible with the v0.3.x docker/nix code.
+- **`docs/MIGRATION-v0.3-to-v0.4.md`** — side-by-side YAML +
+  plugin-author checklist + fallback table + v0.5.0 removal timeline.
+- **`docs/PLUGIN_AUTHOR_GUIDE.md` multi-port section** — rabbitmq
+  author's view of `PortRangeDefault` / `Up` / `EnvVars` /
+  `MainPortRole`.
+- **`examples/plugin-template`** — Multi-port section in README,
+  `MainPortRole` TODO marker in the conformance template, canonical
+  paths throughout.
+
+### Notes for plugin maintainers
+
+Existing v0.3.x plugin binaries still spawn under v0.4.x via the
+fallback handshake. To target v0.4 natively:
+
+1. Update the import path
+   (`plugins/db/api` → `plugins/engine/api`).
+2. Switch the lifecycle signatures (`req *UpReq` taking `Ports
+   []PortSpec`; `ReadyCheck(ctx, ports []int, ...)`; `Cleanup(ctx,
+   datadir string, ports []int)`; `PortRangeDefault` returning
+   `map[string]PortRange`).
+3. Rebuild and re-run the conformance suite against bough/conformance
+   v0.4.0.
+
+The v0.5.0 release removes the v0.3 fallbacks — plugins that have
+not been rebuilt by then will stop loading.
+
 ## v0.3.0
 
 ### Added

@@ -1,8 +1,11 @@
 # GoReleaser config for bough.
-# Builds the host + the MySQL plugin together so every release archive
-# is self-contained: an operator who downloads
-# `bough_v0.1.0_darwin_arm64.tar.gz` already has the matching
-# `bough-plugin-mysql` on PATH without a second install step.
+# Builds the host + the four bundled engine plugins
+# (mysql / postgres / redis / elasticsearch) together so every release
+# archive is self-contained: an operator who downloads
+# `bough_v0.4.0_darwin_arm64.tar.gz` already has every
+# `bough-plugin-<kind>` on PATH without a second install step.
+# (External plugin authors keep distributing their own
+# `bough-plugin-<kind>` binaries separately.)
 #
 # Docs: https://goreleaser.com/customization/
 
