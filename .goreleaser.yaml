@@ -105,6 +105,26 @@ builds:
     env:
       - CGO_ENABLED=0
 
+  # v0.5 memory subsystem: SQLite reference-fallback. modernc.org/sqlite
+  # is pure Go (no CGO) so this binary cross-compiles to the same
+  # 4 OS-arch matrix as the engine plugins without a C toolchain.
+  - id: bough-plugin-memory-sqlite
+    main: ./cmd/bough-plugin-memory-sqlite
+    binary: bough-plugin-memory-sqlite
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+    env:
+      - CGO_ENABLED=0
+
 archives:
   - id: default
     ids:
@@ -113,6 +133,7 @@ archives:
       - bough-plugin-postgres
       - bough-plugin-redis
       - bough-plugin-elasticsearch
+      - bough-plugin-memory-sqlite
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:

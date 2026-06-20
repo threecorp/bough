@@ -1,5 +1,79 @@
 # Changelog
 
+## v0.5.0
+
+The "instinct primitive" release. v0.5 introduces a per-worktree
+memory orchestration layer (instinct subsystem) on top of the v0.4
+engine plugin model. The subsystem is opt-in — set
+`instinct.enabled: true` in `.bough.yaml` to use it. Existing v0.4
+monorepos see no behavioural change on upgrade.
+
+**bough is not an agent memory system. bough is a per-worktree
+memory orchestration layer.** Memory intelligence is delegated to
+external OSS backends (mem0 / Graphiti / Letta, v0.6+); bough
+provides the canonical schemas, scope model, safety pipeline
+(redaction, poisoning guard, dedupe, decay), and conformance
+contract.
+
+### Added
+
+- **Four new plugin contracts**: `plugins/{memory,instinct,
+  capability,evaluator}/api/`. v0.5 ships memory (with 7 RPCs:
+  Health, Capabilities, Store, Query, Forget, Export, Import)
+  and instinct (Mint) as working contracts; capability and
+  evaluator are frozen as stubs for v0.6 / v0.7+.
+- **Canonical schemas**: `pkg/schema/` declares TraceBundle,
+  InstinctCandidate, Instinct, CapabilityArtifact (12 minimal
+  fields + Payload json.RawMessage escape hatch), Scope,
+  EvidencePolicy, RetrieveBudget.
+- **SQLite reference-fallback plugin** (`plugins/memory/sqlite/`):
+  modernc.org/sqlite (pure Go, no CGO) + FTS5 + WAL +
+  busy_timeout + metadata escape hatch column. Passes the full
+  conformance/memory suite (Lifecycle + Bloat + Concurrency).
+- **Host coordinator** (`internal/instinct/`): redaction,
+  source-aware confidence policy, poisoning guard with hybrid
+  mint mode, decay scheduler, scope promote, events.jsonl audit.
+- **Stdin ingest** as the PRIMARY observer path:
+  `make test 2>&1 | bough instinct ingest --stdin --source test_failure`.
+- **Claude `.jsonl` file watch** as opt-in beta with inode-
+  rotation + truncate handling (`internal/observer/`).
+- **CLI subcommands**: `bough instinct {status, mint, ingest,
+  approve, query, forget, promote, export, import}` and
+  `bough memory {status, query, forget, export}`. `bough memory
+  status` emits a stderr NOTICE when the backend is the SQLite
+  reference-fallback so users see the "consider mem0 / graphiti"
+  signal every time they probe.
+- **Conformance suites**: `conformance/memory/` (Lifecycle,
+  Bloat, Concurrency) and `conformance/instinct/` (Lifecycle),
+  with in-tree mock plugins and a TestSelf entrypoint.
+- **Plugin templates**: `examples/memory-plugin-template/` and
+  `examples/memory-plugin-mem0-skeleton/`.
+- **Documentation**: `docs/INSTINCTS.md`, `docs/BACKENDS.md`,
+  `docs/EXTERNAL_MEMORY_BACKENDS.md`,
+  `docs/MEMORY_PLUGIN_AUTHOR_GUIDE.md`,
+  `docs/NAMESPACE_MAPPING.md`, `docs/SECURITY.md`,
+  `docs/ROADMAP.md`.
+
+### Removed (breaking for v0.3 plugin binaries)
+
+- **`internal/pluginhost`** drops the v0.3 DBProvider fallback
+  handshake. v0.3.x plugin binaries no longer spawn under a v0.5
+  host. Users running an old plugin binary must rebuild against
+  `plugins/engine/api/` from v0.4.0 or later. The legacy
+  `pickDatabaseNames` helper and `legacyEngineAdapter` are also
+  removed.
+
+### Changed
+
+- `.bough.yaml` schema gains `instinct:`, `memory_backends:`, and
+  `export:` sections. All are opt-in (empty/absent → subsystem
+  disabled). `schema_version` stays at 2.
+- GoReleaser now produces 6 binaries: the existing host + four
+  engine plugins, plus the new `bough-plugin-memory-sqlite`.
+- CI matrix splits engine-conformance and memory-conformance into
+  separate jobs so the SQLite plugin's WAL / concurrency tests do
+  not contend with the engine plugin's docker pre-pull.
+
 ## v0.4.1
 
 Docs / user-visible-string cleanup follow-up to v0.4.0. No

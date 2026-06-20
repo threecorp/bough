@@ -107,3 +107,56 @@ jobs:
             echo "=== logs --tail 200 $c ==="
             docker logs --tail 200 "$c" 2>&1 || true
           done
+
+  memory-conformance:
+    # v0.5 instinct subsystem: round 3 AI #3 made it explicit that
+    # memory backends should run in a separate matrix from engine
+    # backends so SQLite WAL / concurrency contention does not pile
+    # onto engine docker pre-pull. The SQLite plugin (modernc.org/sqlite
+    # pure Go) needs neither nix nor docker.
+    name: Memory plugin conformance
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        plugin: [sqlite]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          diagnostic-endpoint: ''
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build memory plugin binary
+        run: |
+          mkdir -p bin
+          nix develop .#ci -c go build \
+            -o bin/bough-plugin-memory-${{ matrix.plugin }} \
+            ./cmd/bough-plugin-memory-${{ matrix.plugin }}
+
+      - name: Run memory conformance suite
+        env:
+          BOUGH_CONFORMANCE_MEMORY_PLUGIN_BIN: ${{ github.workspace }}/bin/bough-plugin-memory-${{ matrix.plugin }}
+        run: |
+          nix develop .#ci -c go test -tags=conformance -race -timeout=10m -v \
+            ./plugins/memory/${{ matrix.plugin }}/...
+
+  memory-macos-smoke:
+    # macOS smoke for the SQLite reference-fallback. The release matrix
+    # ships darwin/amd64 + darwin/arm64, so at least running the
+    # unit-test layer on macOS catches platform-specific regressions
+    # (modernc.org/sqlite's darwin shim, PRAGMA behaviour) before we
+    # tag.
+    name: Memory plugin macOS smoke
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: go test ./plugins/memory/sqlite/...
+        run: go test -race ./plugins/memory/sqlite/...
