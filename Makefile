@@ -1,22 +1,34 @@
 .DEFAULT_GOAL := help
 
-PROTO_DIR_ENGINE := plugins/engine/api/proto
-PROTO_DIR_DB := plugins/db/api/proto
+PROTO_DIR_ENGINE     := plugins/engine/api/proto
+PROTO_DIR_DB         := plugins/db/api/proto
+PROTO_DIR_MEMORY     := plugins/memory/api/proto
+PROTO_DIR_INSTINCT   := plugins/instinct/api/proto
+PROTO_DIR_CAPABILITY := plugins/capability/api/proto
+PROTO_DIR_EVALUATOR  := plugins/evaluator/api/proto
+
+# protogen builds one proto package; the per-plugin `proto-*` targets
+# below pass the right include dir and source file. Keeps the proto
+# regeneration target idempotent across plugin add/drop cycles.
+define protogen
+	protoc -I $(1) \
+		--go_out=$(1) --go_opt=paths=source_relative \
+		--go-grpc_out=$(1) --go-grpc_opt=paths=source_relative \
+		$(1)/$(2).proto
+endef
 
 
 .PHONY: proto
-proto:  ## Regenerate gRPC stubs from plugins/engine/api/proto/engine.proto.
-	protoc -I $(PROTO_DIR_ENGINE) \
-		--go_out=$(PROTO_DIR_ENGINE) --go_opt=paths=source_relative \
-		--go-grpc_out=$(PROTO_DIR_ENGINE) --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR_ENGINE)/engine.proto
+proto:  ## Regenerate gRPC stubs for every plugin contract.
+	$(call protogen,$(PROTO_DIR_ENGINE),engine)
+	$(call protogen,$(PROTO_DIR_MEMORY),memory)
+	$(call protogen,$(PROTO_DIR_INSTINCT),instinct)
+	$(call protogen,$(PROTO_DIR_CAPABILITY),capability)
+	$(call protogen,$(PROTO_DIR_EVALUATOR),evaluator)
 	# v0.4.0 transition: regenerate the legacy db.proto too while the
 	# old plugins/db/ tree still exists (deleted in Λ-7.1). After that
 	# this line goes away.
-	protoc -I $(PROTO_DIR_DB) \
-		--go_out=$(PROTO_DIR_DB) --go_opt=paths=source_relative \
-		--go-grpc_out=$(PROTO_DIR_DB) --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR_DB)/db.proto
+	$(call protogen,$(PROTO_DIR_DB),db)
 
 
 .PHONY: test

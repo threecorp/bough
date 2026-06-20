@@ -27,8 +27,6 @@ package bough.evaluator.v1;
 
 option go_package = "github.com/ikeikeikeike/bough/plugins/evaluator/api/proto;pb";
 
-import "bough/capability/v1/capability.proto";
-
 // SkillEvaluator scores a single CapabilityArtifact and recommends
 // whether the host should promote, revise, or prune it. Evaluators
 // are stateless from the host's point of view; if an evaluator needs
@@ -51,9 +49,16 @@ enum EvaluationOutcome {
   OUTCOME_PRUNE       = 4;
 }
 
+// EvaluateRequest passes the artifact as opaque JSON bytes rather
+// than importing plugins/capability/api/proto/capability.proto.
+// Decoupling lets evaluator plugins (v0.7+) ship without picking up
+// a transitive proto dependency on the capability surface — the host
+// marshals the schema.CapabilityArtifact to JSON before invoking
+// Evaluate.
 message EvaluateRequest {
-  bough.capability.v1.CapabilityArtifact artifact = 1;
-  bytes evaluator_context_json = 2;  // free-form plugin-defined inputs
+  string artifact_id = 1;
+  bytes artifact_json = 2;
+  bytes evaluator_context_json = 3;  // free-form plugin-defined inputs
 }
 
 message EvaluateResponse {
