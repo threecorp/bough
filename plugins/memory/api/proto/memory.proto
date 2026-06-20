@@ -120,12 +120,29 @@ message HealthResponse {
 }
 
 message CapabilitiesResponse {
+  // v0.5 fields (= shipped 2026-06-20).
   bool semantic_query = 1;     // dense vector + reranker (v0.6+)
   bool graph_query = 2;        // entity / relation query (v0.6+)
   bool bulk_export = 3;        // streaming export (v0.6+)
   bool vector_search = 4;      // pure ANN backend (v0.6+)
   bool supports_metadata = 5;  // honors Instinct.metadata_json
   string plugin_version = 6;
+
+  // v0.6 additions (= round 4 priority A12, AI #2 proposal).
+  // Each flag lets the host pick the right query path, retry policy,
+  // or fallback strategy per backend (mem0 / Graphiti / SQLite all
+  // honour different subsets).
+  bool temporal_query = 7;        // temporal validity windows / change history
+  bool metadata_filter = 8;       // server-side metadata filtering at Query
+  bool namespace_isolation = 9;   // backend natively isolates Scope (mem0 user_id = true, sqlite scope_id = false)
+  bool soft_delete = 10;          // Forget keeps row + flips state (sqlite/mem0 = true)
+  bool bulk_import = 11;          // streaming Import; v0.5.1 sqlite restores rows, so true
+  bool dedupe_key = 12;           // honours StoreRequest.dedupe_key for idempotency
+  bool source_event_id = 13;      // honours StoreRequest.source_event_id for retry idempotency
+  bool ttl = 14;                  // automatic expiry (mem0 = true, sqlite = false)
+  bool eventual_consistency = 15; // Store may return success before durability (mem0 cloud = true)
+  int32 max_batch_size = 16;      // 0 = unlimited; host trims Import/Export batches when > 0
+  int32 max_query_tokens = 17;    // 0 = unlimited; host caps MaxTokens at this when > 0
 }
 
 message StoreRequest {

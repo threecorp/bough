@@ -44,12 +44,31 @@ type HealthResp struct {
 }
 
 type CapabilitiesResp struct {
+	// v0.5 fields (= shipped 2026-06-20).
 	SemanticQuery    bool // dense vector + reranker (v0.6+)
 	GraphQuery       bool // entity / relation query (v0.6+)
 	BulkExport       bool // streaming export (v0.6+)
 	VectorSearch     bool // pure ANN backend (v0.6+)
 	SupportsMetadata bool // honours Instinct.MetadataJSON
 	PluginVersion    string
+
+	// v0.6 additions (= round 4 priority A12, AI #2 proposal).
+	// Each flag lets the host pick the right query path, retry
+	// policy, or fallback strategy per backend. sqlite advertises
+	// SoftDelete + BulkImport + DedupeKey + SourceEventID = true,
+	// MaxQueryTokens = 4000; mem0 lights up SemanticQuery / VectorSearch
+	// / NamespaceIsolation / TTL / EventualConsistency.
+	TemporalQuery       bool // temporal validity windows / change history
+	MetadataFilter      bool // server-side metadata filtering at Query
+	NamespaceIsolation  bool // backend natively isolates Scope (mem0 user_id = true, sqlite scope_id = false)
+	SoftDelete          bool // Forget keeps row + flips state (sqlite/mem0 = true)
+	BulkImport          bool // streaming Import; v0.5.1 sqlite restores rows, so true
+	DedupeKey           bool // honours StoreReq.DedupeKey for idempotency
+	SourceEventID       bool // honours StoreReq.SourceEventID for retry idempotency
+	TTL                 bool // automatic expiry (mem0 = true, sqlite = false)
+	EventualConsistency bool // Store may return success before durability (mem0 cloud = true)
+	MaxBatchSize        int  // 0 = unlimited; host trims Import/Export batches when > 0
+	MaxQueryTokens      int  // 0 = unlimited; host caps MaxTokens at this when > 0
 }
 
 type StoreReq struct {

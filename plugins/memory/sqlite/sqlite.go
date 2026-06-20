@@ -109,17 +109,38 @@ func (p *Provider) Health(ctx context.Context, _ *memapi.HealthReq) (*memapi.Hea
 	return &memapi.HealthResp{BackendKind: "sqlite", PluginVersion: Version}, nil
 }
 
-// Capabilities advertises the v0.5 feature set. SupportsMetadata
-// is true because the `metadata` column is committed; everything
-// else is false on v0.5 and lights up in v0.6+ plugins.
+// Capabilities advertises sqlite's feature set. v0.5 fields are
+// unchanged (SupportsMetadata=true because the `metadata` column
+// is committed). v0.6 fields (= round 4 priority A12) lit up where
+// the implementation actually honours them: BulkImport=true since
+// v0.5.1 restored real rows, DedupeKey/SourceEventID=true since the
+// Store path consults both, SoftDelete=true since Forget flips state
+// rather than removing the row, MaxQueryTokens=4000 mirrors the host
+// validator default. Everything mem0-specific (SemanticQuery,
+// VectorSearch, NamespaceIsolation, TTL, EventualConsistency,
+// TemporalQuery, MetadataFilter) stays false so the host coordinator
+// keeps routing decisions correct.
 func (p *Provider) Capabilities(_ context.Context) (*memapi.CapabilitiesResp, error) {
 	return &memapi.CapabilitiesResp{
+		// v0.5
 		SemanticQuery:    false,
 		GraphQuery:       false,
 		BulkExport:       false,
 		VectorSearch:     false,
 		SupportsMetadata: true,
 		PluginVersion:    Version,
+		// v0.6 (= round 4 priority A12)
+		TemporalQuery:       false,
+		MetadataFilter:      false,
+		NamespaceIsolation:  false,
+		SoftDelete:          true,
+		BulkImport:          true,
+		DedupeKey:           true,
+		SourceEventID:       true,
+		TTL:                 false,
+		EventualConsistency: false,
+		MaxBatchSize:        0,
+		MaxQueryTokens:      4000,
 	}, nil
 }
 

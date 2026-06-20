@@ -38,12 +38,25 @@ func (c *grpcClient) Capabilities(ctx context.Context) (*CapabilitiesResp, error
 		return nil, err
 	}
 	return &CapabilitiesResp{
+		// v0.5
 		SemanticQuery:    resp.GetSemanticQuery(),
 		GraphQuery:       resp.GetGraphQuery(),
 		BulkExport:       resp.GetBulkExport(),
 		VectorSearch:     resp.GetVectorSearch(),
 		SupportsMetadata: resp.GetSupportsMetadata(),
 		PluginVersion:    resp.GetPluginVersion(),
+		// v0.6 (= round 4 priority A12)
+		TemporalQuery:       resp.GetTemporalQuery(),
+		MetadataFilter:      resp.GetMetadataFilter(),
+		NamespaceIsolation:  resp.GetNamespaceIsolation(),
+		SoftDelete:          resp.GetSoftDelete(),
+		BulkImport:          resp.GetBulkImport(),
+		DedupeKey:           resp.GetDedupeKey(),
+		SourceEventID:       resp.GetSourceEventId(),
+		TTL:                 resp.GetTtl(),
+		EventualConsistency: resp.GetEventualConsistency(),
+		MaxBatchSize:        int(resp.GetMaxBatchSize()),
+		MaxQueryTokens:      int(resp.GetMaxQueryTokens()),
 	}, nil
 }
 

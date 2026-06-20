@@ -372,15 +372,31 @@ func (x *HealthResponse) GetPluginVersion() string {
 }
 
 type CapabilitiesResponse struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	SemanticQuery    bool                   `protobuf:"varint,1,opt,name=semantic_query,json=semanticQuery,proto3" json:"semantic_query,omitempty"`          // dense vector + reranker (v0.6+)
-	GraphQuery       bool                   `protobuf:"varint,2,opt,name=graph_query,json=graphQuery,proto3" json:"graph_query,omitempty"`                   // entity / relation query (v0.6+)
-	BulkExport       bool                   `protobuf:"varint,3,opt,name=bulk_export,json=bulkExport,proto3" json:"bulk_export,omitempty"`                   // streaming export (v0.6+)
-	VectorSearch     bool                   `protobuf:"varint,4,opt,name=vector_search,json=vectorSearch,proto3" json:"vector_search,omitempty"`             // pure ANN backend (v0.6+)
-	SupportsMetadata bool                   `protobuf:"varint,5,opt,name=supports_metadata,json=supportsMetadata,proto3" json:"supports_metadata,omitempty"` // honors Instinct.metadata_json
-	PluginVersion    string                 `protobuf:"bytes,6,opt,name=plugin_version,json=pluginVersion,proto3" json:"plugin_version,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// v0.5 fields (= shipped 2026-06-20).
+	SemanticQuery    bool   `protobuf:"varint,1,opt,name=semantic_query,json=semanticQuery,proto3" json:"semantic_query,omitempty"`          // dense vector + reranker (v0.6+)
+	GraphQuery       bool   `protobuf:"varint,2,opt,name=graph_query,json=graphQuery,proto3" json:"graph_query,omitempty"`                   // entity / relation query (v0.6+)
+	BulkExport       bool   `protobuf:"varint,3,opt,name=bulk_export,json=bulkExport,proto3" json:"bulk_export,omitempty"`                   // streaming export (v0.6+)
+	VectorSearch     bool   `protobuf:"varint,4,opt,name=vector_search,json=vectorSearch,proto3" json:"vector_search,omitempty"`             // pure ANN backend (v0.6+)
+	SupportsMetadata bool   `protobuf:"varint,5,opt,name=supports_metadata,json=supportsMetadata,proto3" json:"supports_metadata,omitempty"` // honors Instinct.metadata_json
+	PluginVersion    string `protobuf:"bytes,6,opt,name=plugin_version,json=pluginVersion,proto3" json:"plugin_version,omitempty"`
+	// v0.6 additions (= round 4 priority A12, AI #2 proposal).
+	// Each flag lets the host pick the right query path, retry policy,
+	// or fallback strategy per backend (mem0 / Graphiti / SQLite all
+	// honour different subsets).
+	TemporalQuery       bool  `protobuf:"varint,7,opt,name=temporal_query,json=temporalQuery,proto3" json:"temporal_query,omitempty"`                    // temporal validity windows / change history
+	MetadataFilter      bool  `protobuf:"varint,8,opt,name=metadata_filter,json=metadataFilter,proto3" json:"metadata_filter,omitempty"`                 // server-side metadata filtering at Query
+	NamespaceIsolation  bool  `protobuf:"varint,9,opt,name=namespace_isolation,json=namespaceIsolation,proto3" json:"namespace_isolation,omitempty"`     // backend natively isolates Scope (mem0 user_id = true, sqlite scope_id = false)
+	SoftDelete          bool  `protobuf:"varint,10,opt,name=soft_delete,json=softDelete,proto3" json:"soft_delete,omitempty"`                            // Forget keeps row + flips state (sqlite/mem0 = true)
+	BulkImport          bool  `protobuf:"varint,11,opt,name=bulk_import,json=bulkImport,proto3" json:"bulk_import,omitempty"`                            // streaming Import; v0.5.1 sqlite restores rows, so true
+	DedupeKey           bool  `protobuf:"varint,12,opt,name=dedupe_key,json=dedupeKey,proto3" json:"dedupe_key,omitempty"`                               // honours StoreRequest.dedupe_key for idempotency
+	SourceEventId       bool  `protobuf:"varint,13,opt,name=source_event_id,json=sourceEventId,proto3" json:"source_event_id,omitempty"`                 // honours StoreRequest.source_event_id for retry idempotency
+	Ttl                 bool  `protobuf:"varint,14,opt,name=ttl,proto3" json:"ttl,omitempty"`                                                            // automatic expiry (mem0 = true, sqlite = false)
+	EventualConsistency bool  `protobuf:"varint,15,opt,name=eventual_consistency,json=eventualConsistency,proto3" json:"eventual_consistency,omitempty"` // Store may return success before durability (mem0 cloud = true)
+	MaxBatchSize        int32 `protobuf:"varint,16,opt,name=max_batch_size,json=maxBatchSize,proto3" json:"max_batch_size,omitempty"`                    // 0 = unlimited; host trims Import/Export batches when > 0
+	MaxQueryTokens      int32 `protobuf:"varint,17,opt,name=max_query_tokens,json=maxQueryTokens,proto3" json:"max_query_tokens,omitempty"`              // 0 = unlimited; host caps MaxTokens at this when > 0
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CapabilitiesResponse) Reset() {
@@ -453,6 +469,83 @@ func (x *CapabilitiesResponse) GetPluginVersion() string {
 		return x.PluginVersion
 	}
 	return ""
+}
+
+func (x *CapabilitiesResponse) GetTemporalQuery() bool {
+	if x != nil {
+		return x.TemporalQuery
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetMetadataFilter() bool {
+	if x != nil {
+		return x.MetadataFilter
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetNamespaceIsolation() bool {
+	if x != nil {
+		return x.NamespaceIsolation
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetSoftDelete() bool {
+	if x != nil {
+		return x.SoftDelete
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetBulkImport() bool {
+	if x != nil {
+		return x.BulkImport
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetDedupeKey() bool {
+	if x != nil {
+		return x.DedupeKey
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetSourceEventId() bool {
+	if x != nil {
+		return x.SourceEventId
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetTtl() bool {
+	if x != nil {
+		return x.Ttl
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetEventualConsistency() bool {
+	if x != nil {
+		return x.EventualConsistency
+	}
+	return false
+}
+
+func (x *CapabilitiesResponse) GetMaxBatchSize() int32 {
+	if x != nil {
+		return x.MaxBatchSize
+	}
+	return 0
+}
+
+func (x *CapabilitiesResponse) GetMaxQueryTokens() int32 {
+	if x != nil {
+		return x.MaxQueryTokens
+	}
+	return 0
 }
 
 type StoreRequest struct {
@@ -1168,7 +1261,7 @@ const file_memory_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x14\n" +
 	"\x05error\x18\x01 \x01(\tR\x05error\x12!\n" +
 	"\fbackend_kind\x18\x02 \x01(\tR\vbackendKind\x12%\n" +
-	"\x0eplugin_version\x18\x03 \x01(\tR\rpluginVersion\"\xf8\x01\n" +
+	"\x0eplugin_version\x18\x03 \x01(\tR\rpluginVersion\"\x97\x05\n" +
 	"\x14CapabilitiesResponse\x12%\n" +
 	"\x0esemantic_query\x18\x01 \x01(\bR\rsemanticQuery\x12\x1f\n" +
 	"\vgraph_query\x18\x02 \x01(\bR\n" +
@@ -1177,7 +1270,22 @@ const file_memory_proto_rawDesc = "" +
 	"bulkExport\x12#\n" +
 	"\rvector_search\x18\x04 \x01(\bR\fvectorSearch\x12+\n" +
 	"\x11supports_metadata\x18\x05 \x01(\bR\x10supportsMetadata\x12%\n" +
-	"\x0eplugin_version\x18\x06 \x01(\tR\rpluginVersion\"\xb7\x01\n" +
+	"\x0eplugin_version\x18\x06 \x01(\tR\rpluginVersion\x12%\n" +
+	"\x0etemporal_query\x18\a \x01(\bR\rtemporalQuery\x12'\n" +
+	"\x0fmetadata_filter\x18\b \x01(\bR\x0emetadataFilter\x12/\n" +
+	"\x13namespace_isolation\x18\t \x01(\bR\x12namespaceIsolation\x12\x1f\n" +
+	"\vsoft_delete\x18\n" +
+	" \x01(\bR\n" +
+	"softDelete\x12\x1f\n" +
+	"\vbulk_import\x18\v \x01(\bR\n" +
+	"bulkImport\x12\x1d\n" +
+	"\n" +
+	"dedupe_key\x18\f \x01(\bR\tdedupeKey\x12&\n" +
+	"\x0fsource_event_id\x18\r \x01(\bR\rsourceEventId\x12\x10\n" +
+	"\x03ttl\x18\x0e \x01(\bR\x03ttl\x121\n" +
+	"\x14eventual_consistency\x18\x0f \x01(\bR\x13eventualConsistency\x12$\n" +
+	"\x0emax_batch_size\x18\x10 \x01(\x05R\fmaxBatchSize\x12(\n" +
+	"\x10max_query_tokens\x18\x11 \x01(\x05R\x0emaxQueryTokens\"\xb7\x01\n" +
 	"\fStoreRequest\x125\n" +
 	"\binstinct\x18\x01 \x01(\v2\x19.bough.memory.v1.InstinctR\binstinct\x12\x1d\n" +
 	"\n" +

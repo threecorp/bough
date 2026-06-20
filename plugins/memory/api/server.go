@@ -36,12 +36,25 @@ func (s *grpcServer) Capabilities(ctx context.Context, _ *emptypb.Empty) (*pb.Ca
 		return nil, err
 	}
 	return &pb.CapabilitiesResponse{
+		// v0.5
 		SemanticQuery:    resp.SemanticQuery,
 		GraphQuery:       resp.GraphQuery,
 		BulkExport:       resp.BulkExport,
 		VectorSearch:     resp.VectorSearch,
 		SupportsMetadata: resp.SupportsMetadata,
 		PluginVersion:    resp.PluginVersion,
+		// v0.6 (= round 4 priority A12)
+		TemporalQuery:       resp.TemporalQuery,
+		MetadataFilter:      resp.MetadataFilter,
+		NamespaceIsolation:  resp.NamespaceIsolation,
+		SoftDelete:          resp.SoftDelete,
+		BulkImport:          resp.BulkImport,
+		DedupeKey:           resp.DedupeKey,
+		SourceEventId:       resp.SourceEventID,
+		Ttl:                 resp.TTL,
+		EventualConsistency: resp.EventualConsistency,
+		MaxBatchSize:        int32(resp.MaxBatchSize),
+		MaxQueryTokens:      int32(resp.MaxQueryTokens),
 	}, nil
 }
 
