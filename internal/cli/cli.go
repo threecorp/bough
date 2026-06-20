@@ -40,6 +40,8 @@ func NewRootCmd(version string) *cobra.Command {
 		// v0.5 instinct subsystem (opt-in).
 		newInstinctCmd(),
 		newMemoryCmd(),
+		// v0.6 capability compiler subsystem.
+		newCapabilityCmd(),
 	)
 	return root
 }
