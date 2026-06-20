@@ -37,6 +37,9 @@ func NewRootCmd(version string) *cobra.Command {
 		newBackfillCmd(),
 		newConfigCmd(),
 		newPluginsCmd(),
+		// v0.5 instinct subsystem (opt-in).
+		newInstinctCmd(),
+		newMemoryCmd(),
 	)
 	return root
 }

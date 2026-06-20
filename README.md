@@ -226,6 +226,53 @@ bough/
 └── .github/workflows/                      ci.yml + release.yml
 ```
 
+## Instincts (v0.5+)
+
+> **bough is not an agent memory system. bough is a per-worktree memory orchestration layer.**
+
+v0.5 adds an opt-in instinct subsystem: behavioural rules and
+observations the host accumulates per worktree, repo, and global
+scope. Memory intelligence is delegated to external OSS backends
+(mem0 / Graphiti / Letta, v0.6+); bough provides the canonical
+schemas, scope model, safety pipeline (redaction, poisoning
+guard, dedupe, decay), and the conformance contract every backend
+honours.
+
+The subsystem is **off by default**. Enable it by setting
+`instinct.enabled: true` in `.bough.yaml`:
+
+```yaml
+instinct:
+  enabled: true
+  default_memory_backend: sqlite
+
+memory_backends:
+  - kind: sqlite
+    role: reference-fallback
+    path: ".bough/memory/reference.db"
+    fts: true
+    wal: true
+```
+
+The PRIMARY ingest path is stdin:
+
+```sh
+make test 2>&1 | bough instinct ingest --stdin --source test_failure
+bough instinct query --term "early returns"
+bough instinct approve <id>
+```
+
+The Claude `.jsonl` file watch observer is opt-in beta because of
+fsnotify cross-platform fragility (macOS FSEvents vs Linux inotify
+divergence, log rotation, truncate).
+
+See [docs/INSTINCTS.md](docs/INSTINCTS.md) for the full lifecycle,
+[docs/BACKENDS.md](docs/BACKENDS.md) for choosing a backend,
+[docs/EXTERNAL_MEMORY_BACKENDS.md](docs/EXTERNAL_MEMORY_BACKENDS.md)
+for wiring mem0 / Graphiti, [docs/SECURITY.md](docs/SECURITY.md)
+for plugin trust, and [docs/ROADMAP.md](docs/ROADMAP.md) for
+v0.6 / v0.7+.
+
 ## Roadmap
 
 | Milestone | Headline                                                                                    |
@@ -235,7 +282,8 @@ bough/
 | v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted |
 | v0.3.0    | Plugin conformance suite + CI matrix on real Docker — plugin authors verify their contract end-to-end with one test func, four bough-internal plugins are gated on `ubuntu-24.04` + `ubuntu-24.04-arm` × `mysql` / `postgres` / `redis` / `elasticsearch` |
 | v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning, removed in v0.5.0 |
-| v0.5+     | Removal of v0.3 fallbacks. Reference rabbitmq / kafka / NATS / minio plugins. `backend_options` for per-engine image / pull policy overrides, embedded backends (e.g. [`fergusstrange/embedded-postgres`][embedded-postgres]) for niche cases, multi-AI hook adapters (Cursor / Windsurf / Aider), Homebrew tap |
+| v0.5.0    | Per-worktree memory orchestration layer (`instinct.enabled: true`, opt-in). 4 plugin contracts frozen: `MemoryBackend` (7 RPCs) + `InstinctMinter` (1 RPC) ship working; `CapabilityCompiler` + `SkillEvaluator` frozen as stubs for v0.6/v0.7+. SQLite reference-fallback plugin (`modernc.org/sqlite` pure Go + FTS5 + WAL). Stdin ingest as primary observer; `.jsonl` file watch opt-in beta. v0.3 pluginhost fallback removed (breaking for v0.3.x plugin binaries). See [docs/INSTINCTS.md](docs/INSTINCTS.md). |
+| v0.6+     | mem0 official memory plugin, Graphiti optional plugin, `CapabilityCompiler` materialised + `bough capability compile` + Claude Skills / Agent Skills / MCP export (round 3 AI #3: tools/resources/prompts split), `bough-mcp-server` companion. Plugin signing enforcement. Reference rabbitmq / kafka / NATS / minio engine plugins. Homebrew tap. |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 

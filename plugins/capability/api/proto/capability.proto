@@ -1,0 +1,123 @@
+// capability.proto freezes the v0.5.0 wire contract for
+// `bough-plugin-capability-<name>` plugins WITHOUT shipping a working
+// implementation. v0.5 only generates the gRPC stubs and the Go
+// interface; the host's `bough capability compile` CLI lands in
+// v0.6.0 along with the first official compilers (SkillX adapter,
+// Anything2Skill adapter, Alita-G adapter — all v0.6.x experimental
+// status, none ship as core artifacts).
+//
+// Why freeze in v0.5 if we will not implement until v0.6:
+//   1. plugin authors can start prototyping against a stable contract
+//      while v0.5 is shipping.
+//   2. pkg/schema/CapabilityArtifact is committed in v0.5 too, so
+//      the Go-side data structures and the wire format land together.
+//   3. v0.5 docs (CAPABILITY_COMPILER_PREVIEW.md) can show concrete
+//      message shapes rather than vapourware diagrams.
+//
+// The CapabilityArtifact message intentionally carries minimum-viable
+// fields (Kind, Name, Description, InvocationCondition, Inputs,
+// Outputs, Steps, Constraints, EvidenceRefs, Confidence, Version,
+// SourceInstinctIDs) plus a Payload byte slot for plugin-defined
+// metadata. v0.6 adds richer provenance (target_format, target_host,
+// validation probes, supply-chain tree_sha) — those land as new
+// optional fields on the same message, never as a breaking change to
+// the v0.5 wire shape. See docs/CAPABILITY_COMPILER_PREVIEW.md and
+// docs/SECURITY.md (SKILL.md supply-chain attack surface).
+
+syntax = "proto3";
+
+package bough.capability.v1;
+
+option go_package = "github.com/ikeikeikeike/bough/plugins/capability/api/proto;pb";
+
+// CapabilityCompiler turns an approved set of InstinctCandidates
+// (referenced by ID; the host owns lookup) into one or more
+// CapabilityArtifacts that can be exported in v0.6+ as Claude Skills,
+// Agent Skills, MCP tools/resources/prompts, raw markdown, or JSON.
+service CapabilityCompiler {
+  // Compile is the only RPC. The host passes the candidates' IDs and
+  // the desired target_kinds; the plugin synthesises matching
+  // artifacts. DryRun=true asks the plugin to return the artifacts
+  // without committing any side effects (relevant when a future
+  // compiler runs an LLM with non-zero spend per invocation).
+  rpc Compile(CompileRequest) returns (CompileResponse);
+}
+
+message Scope {
+  string level = 1;
+  string worktree_id = 2;
+  string repo_name = 3;
+}
+
+// CapabilityArtifactKind enumerates the eight derivation targets the
+// bough vision (post round 2.5 / round 3) treats as first-class. v0.5
+// only persists artifacts of these kinds; the compiler is not asked
+// to invent new kinds.
+enum CapabilityArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_MEMORY      = 1;
+  ARTIFACT_KIND_RULE        = 2;
+  ARTIFACT_KIND_SKILL       = 3;
+  ARTIFACT_KIND_COMMAND     = 4;
+  ARTIFACT_KIND_WORKFLOW    = 5;
+  ARTIFACT_KIND_TOOL        = 6;
+  ARTIFACT_KIND_AGENT       = 7;
+  ARTIFACT_KIND_EVALUATOR   = 8;
+}
+
+// Stability mirrors pkg/schema.Stability. v0.5 ships the
+// CapabilityArtifact schema as EXPERIMENTAL so consumers know the
+// shape may grow optional fields in v0.6 without a wire break.
+enum Stability {
+  STABILITY_UNSPECIFIED  = 0;
+  STABILITY_STABLE       = 1;
+  STABILITY_PREVIEW      = 2;
+  STABILITY_EXPERIMENTAL = 3;
+}
+
+// CapabilityArtifact is the compiled output. Payload is a free-form
+// JSON byte slot so v0.6+ compilers (Anything2Skill, gh skill format,
+// MCP tools/resources/prompts) can carry their richer metadata
+// without needing a wire bump. The host treats Payload as opaque on
+// v0.5 — it is round-tripped through Export/Import but not parsed.
+message CapabilityArtifact {
+  Stability stability = 1;
+  string id = 2;
+  CapabilityArtifactKind kind = 3;
+  string name = 4;
+  string description = 5;
+  string invocation_condition = 6;
+  repeated string inputs = 7;
+  repeated string outputs = 8;
+  repeated string steps = 9;
+  repeated string constraints = 10;
+  repeated string evidence_refs = 11;
+  double confidence = 12;
+  string version = 13;
+  repeated string source_instincts = 14;
+  Scope scope = 15;
+  int64 created_at = 16;
+  bytes payload = 17;          // free-form JSON, plugin-defined
+}
+
+// EvidencePolicy gates how aggressive a compiler is allowed to be.
+// require_min_traces=3 keeps single-shot anecdotes from being
+// promoted; allowed_sources whitelists which trace sources count
+// toward the minimum.
+message EvidencePolicy {
+  int32 require_min_traces = 1;
+  repeated string allowed_sources = 2;
+}
+
+message CompileRequest {
+  repeated string source_instinct_ids = 1;
+  repeated CapabilityArtifactKind target_kinds = 2;
+  Scope scope = 3;
+  EvidencePolicy evidence_policy = 4;
+  bool require_approval = 5;
+  bool dry_run = 6;
+}
+message CompileResponse {
+  string error = 1;
+  repeated CapabilityArtifact candidates = 2;
+}
