@@ -34,6 +34,7 @@ import (
 type Coordinator struct {
 	cfg        *config.Config
 	backend    memapi.MemoryBackend
+	fallback   memapi.MemoryBackend // optional reference-fallback backend; nil when none configured
 	redactor   *Redactor
 	confidence *ConfidencePolicy
 	guard      *PoisoningGuard
@@ -41,18 +42,21 @@ type Coordinator struct {
 	events     *EventWriter
 
 	// fallbackOnError lets the coordinator silently degrade Query
-	// to the SQLite reference-fallback when the configured
-	// external backend errors. v0.5 only has one backend so the
-	// flag is mostly future-proofing for v0.6.
+	// to the reference-fallback backend when the primary backend
+	// errors. v0.5 only ships SQLite, so the caller almost always
+	// passes nil for fallback (= no-op pass-through); v0.6 wires
+	// mem0 + SQLite together and this flag starts mattering.
 	fallbackOnError bool
 }
 
 // New stitches the policy layers together. The caller has already
 // discovered the backend through pluginhost; we own the policy.
 // eventsPath is typically `<MonorepoRoot>/.bough/memory/events.jsonl`
-// — the caller is expected to supply an absolute path so two
-// worktrees never race on the same file handle.
-func New(cfg *config.Config, backend memapi.MemoryBackend, eventsPath string) (*Coordinator, error) {
+// — the caller MUST supply an absolute path so two worktrees never
+// race on the same file handle. NewEventWriter (round 3 LOW #18)
+// rejects relative paths with a clear error, so misuse fails loud at
+// construction instead of silently writing under the CLI's cwd.
+func New(cfg *config.Config, backend memapi.MemoryBackend, eventsPath string, fallback memapi.MemoryBackend) (*Coordinator, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("instinct.New: cfg is nil")
 	}
@@ -86,6 +90,7 @@ func New(cfg *config.Config, backend memapi.MemoryBackend, eventsPath string) (*
 	return &Coordinator{
 		cfg:             cfg,
 		backend:         backend,
+		fallback:        fallback,
 		redactor:        r,
 		confidence:      policy,
 		guard:           guard,
@@ -201,16 +206,43 @@ func (c *Coordinator) ApproveInstinct(ctx context.Context, inst schema.Instinct)
 // (round 3 AI #1). The backend is supposed to respect MaxResults
 // and MaxTokens, but the coordinator is the source of truth — if
 // the backend over-returns, we trim here.
+//
+// Round 3 MEDIUM #15 (v0.5.1): when the primary backend errors and
+// `instinct.fallback_on_error: true` is set, we replay the same
+// QueryReq against the reference-fallback backend. The fallback
+// path emits a `query_fallback` event so operators can tell when
+// the primary failed; the path is a no-op when fallback is nil
+// (v0.5 ships only SQLite, so the typical config keeps fallback
+// nil).
 func (c *Coordinator) Query(ctx context.Context, term string, scope schema.Scope) ([]schema.Instinct, error) {
-	resp, err := c.backend.Query(ctx, &memapi.QueryReq{
+	req := &memapi.QueryReq{
 		Term:          term,
 		Scope:         scopeToMemAPI(scope),
 		MaxResults:    c.cfg.Instinct.Retrieve.MaxResults,
 		MaxTokens:     c.cfg.Instinct.Retrieve.MaxTokens,
 		MinConfidence: c.cfg.Instinct.Retrieve.MinConfidence,
-	})
+	}
+	resp, err := c.backend.Query(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("coordinator.Query: %w", err)
+		if !c.fallbackOnError || c.fallback == nil {
+			return nil, fmt.Errorf("coordinator.Query: %w", err)
+		}
+		fallbackResp, fallbackErr := c.fallback.Query(ctx, req)
+		if fallbackErr != nil {
+			// Both backends failed — surface the original error and
+			// note the fallback also broke. The audit log records
+			// both failures so the operator can diagnose.
+			_ = c.events.Append(Event{
+				Kind:   "query_fallback",
+				Detail: fmt.Sprintf("primary=%v fallback=%v term=%q outcome=both_failed", err, fallbackErr, term),
+			})
+			return nil, fmt.Errorf("coordinator.Query: primary=%w; fallback also failed: %v", err, fallbackErr)
+		}
+		_ = c.events.Append(Event{
+			Kind:   "query_fallback",
+			Detail: fmt.Sprintf("primary=%v fallback_results=%d term=%q outcome=recovered", err, len(fallbackResp.Results), term),
+		})
+		resp = fallbackResp
 	}
 	budget := &schema.RetrieveBudget{
 		MaxResults: c.cfg.Instinct.Retrieve.MaxResults,
@@ -229,6 +261,29 @@ func (c *Coordinator) Query(ctx context.Context, term string, scope schema.Scope
 		Detail: fmt.Sprintf("term=%q results=%d/%d tokens=%d truncated=%v", term, len(out), len(resp.Results), budget.UsedTokens, budget.AnyTruncated),
 	})
 	return out, nil
+}
+
+// Import replays a previously-exported payload through the backend
+// and emits an audit event. v0.5.1 MEDIUM #17: the CLI used to
+// short-circuit Import with a "not yet wired" error; we now drive
+// the backend RPC and surface the per-row counts so an operator can
+// confirm the round-trip actually restored data.
+func (c *Coordinator) Import(ctx context.Context, format string, payload []byte, overwrite bool) (*memapi.ImportResp, error) {
+	resp, err := c.backend.Import(ctx, &memapi.ImportReq{
+		Format:            format,
+		Payload:           payload,
+		OverwriteExisting: overwrite,
+	})
+	if err != nil {
+		_ = c.events.Append(Event{Kind: "import", Detail: fmt.Sprintf("format=%s bytes=%d error=%v", format, len(payload), err)})
+		return nil, fmt.Errorf("coordinator.Import: %w", err)
+	}
+	_ = c.events.Append(Event{
+		Kind: "import",
+		Detail: fmt.Sprintf("format=%s bytes=%d imported=%d upserted=%d skipped=%d",
+			format, len(payload), resp.ImportedCount, resp.UpsertedCount, resp.SkippedCount),
+	})
+	return resp, nil
 }
 
 // Forget calls the backend's soft-delete and emits an audit event.

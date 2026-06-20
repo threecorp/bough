@@ -18,7 +18,7 @@ func TestCoordinator_Close_NilEvents(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Instinct.Enabled = true
 	backend := newFakeBackend()
-	c, err := New(cfg, backend, "")
+	c, err := New(cfg, backend, "", nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -260,6 +260,10 @@ type fakeBackend struct {
 	stores       []memapi.StoreReq
 	forgets      []memapi.ForgetReq
 	queryResults []schema.Instinct
+	// queryErr (v0.5.1 MEDIUM #15) lets a test simulate a primary-
+	// backend failure so the coordinator's fallback path can be
+	// exercised. nil keeps the existing happy-path behaviour.
+	queryErr error
 }
 
 func newFakeBackend() *fakeBackend { return &fakeBackend{} }
@@ -278,6 +282,9 @@ func (f *fakeBackend) Store(_ context.Context, req *memapi.StoreReq) (*memapi.St
 }
 
 func (f *fakeBackend) Query(_ context.Context, _ *memapi.QueryReq) (*memapi.QueryResp, error) {
+	if f.queryErr != nil {
+		return nil, f.queryErr
+	}
 	out := make([]memapi.QueryResult, 0, len(f.queryResults))
 	for _, i := range f.queryResults {
 		out = append(out, memapi.QueryResult{

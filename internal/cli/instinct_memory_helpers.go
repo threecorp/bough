@@ -103,8 +103,14 @@ func discoverMemoryBackend(cfg *config.Config) (memapi.MemoryBackend, func(), st
 // memory subcommands need: load .bough.yaml, discover the backend,
 // construct the coordinator. The returned close func disposes
 // both the backend subprocess and the coordinator's events file.
+//
+// Round 3 LOW #18 fix: the events.jsonl path is resolved against the
+// monorepo root that loadConfigAndRoot returns, NOT the CLI cwd.
+// This stops `bough memory query` and `bough instinct ingest` from
+// each writing to a cwd-local events.jsonl when one ran from the
+// monorepo root and the other from a worktree subdirectory.
 func loadInstinctCoordinator(cmd *cobra.Command) (*instinct.Coordinator, func(), error) {
-	_, cfg, err := loadConfigAndRoot(cmd, "")
+	root, cfg, err := loadConfigAndRoot(cmd, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -122,7 +128,19 @@ func loadInstinctCoordinator(cmd *cobra.Command) (*instinct.Coordinator, func(),
 			break
 		}
 	}
-	coord, err := instinct.New(cfg, backend, filepath.Clean(eventsPath))
+	// Anchor relative paths to the monorepo root so the writer always
+	// targets the same file regardless of cwd. Absolute paths from the
+	// YAML (advanced users) are honoured as-is.
+	if !filepath.IsAbs(eventsPath) {
+		eventsPath = filepath.Join(root, eventsPath)
+	}
+	// v0.5.1 MEDIUM #15: the reference-fallback backend would be
+	// spawned here when the primary backend is *not* SQLite (e.g.
+	// v0.6 mem0). v0.5 only ships SQLite, so the fallback is the
+	// same binary as the primary and we keep it nil — coordinator
+	// short-circuits the fallback path when this slot is empty.
+	var fallback memapi.MemoryBackend
+	coord, err := instinct.New(cfg, backend, filepath.Clean(eventsPath), fallback)
 	if err != nil {
 		killBackend()
 		return nil, nil, err

@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -449,11 +450,14 @@ ORDER BY created_at`,
 }
 
 // Import accepts the same shapes Export produces and upserts each
-// row. v0.5 ships a deliberately small parser: JSONL lines turn
-// into Instinct fields directly; YAML payloads are walked by
-// counting `- id:` markers and re-upserting the matching rows that
-// already exist (the round-trip Export → Import pair the
-// conformance suite uses).
+// row. v0.5.1 MEDIUM #17 fix: previously the parser only counted
+// `- id:` markers (YAML) or JSON unmarshals (JSONL) without ever
+// re-storing the rows, so an Import after Forget left the table
+// empty even though the response advertised ImportedCount > 0.
+// The fix walks the payload, materialises one memapi.Instinct per
+// row, and routes it through the same Store path the host uses for
+// fresh ingest — UpsertSemantics=true so an existing row is
+// reinforced rather than dropped.
 //
 // v0.6+ adds full claude-skills / agent-skill / mcp parsing.
 func (p *Provider) Import(ctx context.Context, req *memapi.ImportReq) (*memapi.ImportResp, error) {
@@ -463,32 +467,155 @@ func (p *Provider) Import(ctx context.Context, req *memapi.ImportReq) (*memapi.I
 	if len(req.Payload) == 0 {
 		return &memapi.ImportResp{}, nil
 	}
-	resp := &memapi.ImportResp{}
+	var (
+		rows []memapi.Instinct
+		err  error
+	)
 	if req.Format == "jsonl" {
-		for _, line := range strings.Split(string(req.Payload), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var row map[string]any
-			if err := json.Unmarshal([]byte(line), &row); err != nil {
-				resp.SkippedCount++
-				continue
-			}
-			resp.ImportedCount++
-			// We do not currently re-Store the row (v0.6 will);
-			// counting it as imported is the v0.5 contract.
-		}
-		return resp, nil
+		rows = parseExportedJSONL(req.Payload)
+	} else {
+		rows, err = parseExportedYAML(req.Payload)
 	}
-	// YAML: count `- id:` markers. Good enough for round-trip
-	// validation; v0.6 adds proper deserialisation.
-	for _, line := range strings.Split(string(req.Payload), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "- id:") {
+	if err != nil {
+		return nil, fmt.Errorf("sqlite Import: parse: %w", err)
+	}
+	resp := &memapi.ImportResp{}
+	for _, inst := range rows {
+		if inst.ID == "" {
+			resp.SkippedCount++
+			continue
+		}
+		storeResp, sErr := p.Store(ctx, &memapi.StoreReq{
+			Instinct:        inst,
+			UpsertSemantics: true,
+		})
+		if sErr != nil {
+			resp.SkippedCount++
+			continue
+		}
+		if storeResp.WasUpsert {
+			resp.UpsertedCount++
+		} else {
 			resp.ImportedCount++
 		}
 	}
 	return resp, nil
+}
+
+// parseExportedJSONL inverts Export's JSONL emit. Malformed lines
+// are skipped (= counted as SkippedCount by the caller through
+// inst.ID == "" branch).
+func parseExportedJSONL(payload []byte) []memapi.Instinct {
+	var out []memapi.Instinct
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var row struct {
+			ID         string  `json:"id"`
+			Rule       string  `json:"rule"`
+			Why        string  `json:"why"`
+			ScopeLevel string  `json:"scope_level"`
+			ScopeID    string  `json:"scope_id"`
+			Source     string  `json:"source"`
+			Confidence float64 `json:"confidence"`
+			State      string  `json:"state"`
+			CreatedAt  int64   `json:"created_at"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			out = append(out, memapi.Instinct{})
+			continue
+		}
+		worktreeID, repoName := splitScopeID(row.ScopeLevel, row.ScopeID)
+		inst := memapi.Instinct{
+			ID:         row.ID,
+			Rule:       row.Rule,
+			Why:        row.Why,
+			Scope:      memapi.Scope{Level: row.ScopeLevel, WorktreeID: worktreeID, RepoName: repoName},
+			Source:     row.Source,
+			Confidence: row.Confidence,
+			State:      row.State,
+		}
+		if row.CreatedAt > 0 {
+			inst.CreatedAt = time.Unix(row.CreatedAt, 0).UTC()
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
+// parseExportedYAML inverts Export's YAML emit. The emit uses a
+// fixed 7-field block per row, so we can do a line-based scan
+// without pulling in a full YAML library.
+func parseExportedYAML(payload []byte) ([]memapi.Instinct, error) {
+	var out []memapi.Instinct
+	var cur memapi.Instinct
+	inBlock := false
+	for _, line := range strings.Split(string(payload), "\n") {
+		if strings.HasPrefix(line, "- id:") {
+			if inBlock {
+				out = append(out, cur)
+			}
+			cur = memapi.Instinct{}
+			inBlock = true
+			cur.ID = strings.TrimSpace(strings.TrimPrefix(line, "- id:"))
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "  rule:"):
+			cur.Rule = unescapeYAML(strings.TrimSpace(strings.TrimPrefix(line, "  rule:")))
+		case strings.HasPrefix(line, "  scope_level:"):
+			cur.Scope.Level = strings.TrimSpace(strings.TrimPrefix(line, "  scope_level:"))
+		case strings.HasPrefix(line, "  scope_id:"):
+			sid := strings.TrimSpace(strings.TrimPrefix(line, "  scope_id:"))
+			cur.Scope.WorktreeID, cur.Scope.RepoName = splitScopeID(cur.Scope.Level, sid)
+		case strings.HasPrefix(line, "  source:"):
+			cur.Source = strings.TrimSpace(strings.TrimPrefix(line, "  source:"))
+		case strings.HasPrefix(line, "  confidence:"):
+			v := strings.TrimSpace(strings.TrimPrefix(line, "  confidence:"))
+			if conf, err := strconv.ParseFloat(v, 64); err == nil {
+				cur.Confidence = conf
+			}
+		case strings.HasPrefix(line, "  state:"):
+			cur.State = strings.TrimSpace(strings.TrimPrefix(line, "  state:"))
+		}
+	}
+	if inBlock {
+		out = append(out, cur)
+	}
+	return out, nil
+}
+
+// splitScopeID inverts scopeID: a "worktree" scope is encoded as
+// "<RepoName>/<WorktreeID>", "repo" is just "<RepoName>", and
+// "global" carries no id at all.
+func splitScopeID(level, sid string) (worktreeID, repoName string) {
+	switch level {
+	case "worktree":
+		if idx := strings.LastIndex(sid, "/"); idx >= 0 {
+			return sid[idx+1:], sid[:idx]
+		}
+		return sid, ""
+	case "repo":
+		return "", sid
+	default:
+		return "", ""
+	}
+}
+
+// unescapeYAML inverts escapeYAML's quote-and-escape behaviour.
+// Bare values pass through untouched; quoted values lose the
+// surrounding `"` and revert the embedded `\"` to `"`.
+func unescapeYAML(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+		s = strings.ReplaceAll(s, `\"`, `"`)
+	}
+	return s
 }
 
 // ---- helpers ----

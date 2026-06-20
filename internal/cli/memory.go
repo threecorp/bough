@@ -23,6 +23,7 @@ mem0 / Graphiti in v0.6+).`,
 		newMemoryQueryCmd(),
 		newMemoryForgetCmd(),
 		newMemoryExportCmd(),
+		newMemoryImportCmd(),
 	)
 	return cmd
 }
@@ -150,5 +151,52 @@ func newMemoryExportCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "yaml", "yaml | jsonl")
+	return cmd
+}
+
+// newMemoryImportCmd reverses newMemoryExportCmd. v0.5.1 MEDIUM #17
+// fix: the previous "use bough memory import" stub the instinct cmd
+// pointed at did not exist; we ship one here that drives the
+// backend RPC directly. The instinct flavour (`bough instinct
+// import`) goes through the coordinator so it can emit an audit
+// event; this one stays close to the backend for operator debug.
+func newMemoryImportCmd() *cobra.Command {
+	var (
+		format    string
+		overwrite bool
+	)
+	cmd := &cobra.Command{
+		Use:   "import <file>",
+		Short: "Import a previously-exported payload directly into the backend",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			payload, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("read %s: %w", args[0], err)
+			}
+			_, cfg, err := loadConfigAndRoot(c, "")
+			if err != nil {
+				return err
+			}
+			backend, kill, _, err := discoverMemoryBackend(cfg)
+			if err != nil {
+				return err
+			}
+			defer kill()
+			resp, err := backend.Import(context.Background(), &memapi.ImportReq{
+				Format:            format,
+				Payload:           payload,
+				OverwriteExisting: overwrite,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "Imported: imported=%d upserted=%d skipped=%d\n",
+				resp.ImportedCount, resp.UpsertedCount, resp.SkippedCount)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "yaml", "yaml | jsonl")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", true, "overwrite existing rows on dedupe match")
 	return cmd
 }

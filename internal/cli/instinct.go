@@ -269,13 +269,34 @@ func newInstinctExportCmd() *cobra.Command {
 }
 
 func newInstinctImportCmd() *cobra.Command {
+	var (
+		format    string
+		overwrite bool
+	)
 	cmd := &cobra.Command{
 		Use:   "import <file>",
 		Short: "Import previously-exported instincts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return fmt.Errorf("import: not yet wired (Μ-1.12); use `bough memory import` for now")
+			payload, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("read %s: %w", args[0], err)
+			}
+			coord, closeAll, err := loadInstinctCoordinator(c)
+			if err != nil {
+				return err
+			}
+			defer closeAll()
+			resp, err := coord.Import(noopCtx(), format, payload, overwrite)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "Imported: imported=%d upserted=%d skipped=%d\n",
+				resp.ImportedCount, resp.UpsertedCount, resp.SkippedCount)
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "yaml", "yaml | jsonl")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", true, "overwrite existing rows on dedupe match")
 	return cmd
 }
