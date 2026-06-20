@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -15,10 +16,35 @@ import (
 	"github.com/ikeikeikeike/bough/pkg/schema"
 )
 
+// isAllowlisted is the v0.5 plugin trust check. An empty allowlist
+// is interpreted as "v0.5 bundled plugins only" so the default
+// config path works for solo dev (the SQLite reference-fallback
+// passes silently) but a third-party `bough-plugin-memory-foo` on
+// PATH triggers the warn-only NOTICE every spawn. Production teams
+// set allowlist explicitly per docs/SECURITY.md.
+func isAllowlisted(binName string, allowlist []string) bool {
+	if len(allowlist) == 0 {
+		return binName == "bough-plugin-memory-sqlite"
+	}
+	for _, a := range allowlist {
+		if a == binName {
+			return true
+		}
+	}
+	return false
+}
+
 // discoverMemoryBackend spawns the configured memory plugin (only
 // `bough-plugin-memory-sqlite` ships in v0.5; v0.6+ adds mem0 /
 // Graphiti). The returned cleanup func MUST be deferred — the
 // host's go-plugin client keeps the subprocess alive otherwise.
+//
+// Round 3 follow-up fix (HIGH #8): v0.5 honours
+// `instinct.plugin_security.allowlist` in warn-only mode.
+// A plugin not in the allowlist still spawns, but a stderr
+// NOTICE is emitted so the user sees "untrusted third-party
+// plugin running" every time. v0.6 graduates this to an enforce
+// option per docs/SECURITY.md.
 func discoverMemoryBackend(cfg *config.Config) (memapi.MemoryBackend, func(), string, error) {
 	kind := cfg.Instinct.DefaultMemoryBackend
 	if kind == "" {
@@ -34,6 +60,13 @@ func discoverMemoryBackend(cfg *config.Config) (memapi.MemoryBackend, func(), st
 		}
 	}
 	binName := "bough-plugin-memory-" + kind
+	if cfg.Instinct.PluginSecurity.UntrustedWarning && !isAllowlisted(binName, cfg.Instinct.PluginSecurity.Allowlist) {
+		fmt.Fprintf(os.Stderr,
+			"[WARNING] memory plugin %q is not in plugin_security.allowlist.\n"+
+				"          Third-party plugins are untrusted code (see docs/SECURITY.md).\n",
+			binName,
+		)
+	}
 	binPath, err := exec.LookPath(binName)
 	if err != nil {
 		return nil, nil, role, fmt.Errorf("%s not found on PATH (run `make build` or install the plugin): %w", binName, err)

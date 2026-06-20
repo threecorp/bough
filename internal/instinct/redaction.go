@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/ikeikeikeike/bough/pkg/schema"
 )
@@ -85,6 +84,3 @@ func (r *Redactor) Sanitise(b schema.TraceBundle) schema.TraceBundle {
 	return b
 }
 
-// Compile-time guard against the package being imported but the
-// redactor never invoked (suppresses unused-package warnings).
-var _ sync.Locker = (*sync.Mutex)(nil)

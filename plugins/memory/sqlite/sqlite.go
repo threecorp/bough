@@ -25,16 +25,15 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
-
-	"database/sql"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -155,6 +154,14 @@ func (p *Provider) Store(ctx context.Context, req *memapi.StoreReq) (*memapi.Sto
 	}
 
 	// Dedupe-key match: same rule at same scope folds into an upsert.
+	// CRITICAL (round 3 follow-up fix): when a dedupe match exists but
+	// the caller did not request UpsertSemantics, the previous
+	// INSERT OR REPLACE fall-through could either insert a duplicate
+	// row sharing the same dedupe_key (silent contract violation) or
+	// overwrite the existing row losing hits / last_hit_at / evidence.
+	// We now refuse the call with an explicit error so the caller can
+	// either retry with UpsertSemantics=true or pick a fresh
+	// dedupe_key.
 	var existingID string
 	if req.DedupeKey != "" {
 		err := p.db.QueryRowContext(ctx,
@@ -165,10 +172,18 @@ func (p *Provider) Store(ctx context.Context, req *memapi.StoreReq) (*memapi.Sto
 			return nil, fmt.Errorf("sqlite Store dedupe lookup: %w", err)
 		}
 	}
-	if existingID != "" && req.UpsertSemantics {
+	if existingID != "" {
+		if !req.UpsertSemantics {
+			return nil, fmt.Errorf("sqlite Store: dedupe match for %s/%s at id=%s (set UpsertSemantics=true to reinforce, or change the rule)",
+				i.Scope.Level, scopeID(i.Scope), existingID)
+		}
+		// Reinforce path. Include the State field so the decay
+		// scheduler can transition an active row to archived
+		// without needing a separate UpdateState RPC. Round 3
+		// follow-up fix to CRITICAL #4.
 		if _, err := p.db.ExecContext(ctx,
-			`UPDATE instincts SET hits = hits + 1, confidence = MAX(confidence, ?1), last_hit_at = ?2 WHERE id = ?3`,
-			i.Confidence, time.Now().Unix(), existingID,
+			`UPDATE instincts SET hits = hits + 1, confidence = MAX(confidence, ?1), last_hit_at = ?2, state = ?3 WHERE id = ?4`,
+			i.Confidence, time.Now().Unix(), nonZeroState(i.State), existingID,
 		); err != nil {
 			return nil, fmt.Errorf("sqlite Store reinforce: %w", err)
 		}
@@ -177,7 +192,6 @@ func (p *Provider) Store(ctx context.Context, req *memapi.StoreReq) (*memapi.Sto
 
 	// Fresh insert. Use INSERT OR REPLACE so an explicit retry at
 	// the same ID is also safe.
-	domainJSON, _ := json.Marshal(i.Domain)
 	evidenceJSON, _ := json.Marshal(i.EvidenceRefs)
 	tracesJSON, _ := json.Marshal(i.SourceTraces)
 	if _, err := p.db.ExecContext(ctx, `
@@ -197,7 +211,6 @@ INSERT OR REPLACE INTO instincts (
 		nonZeroState(i.State), i.Confidence, i.Hits, unixOf(i.LastHitAt), unixOrNow(i.CreatedAt),
 		string(evidenceJSON), string(tracesJSON), i.MetadataJSON,
 	); err != nil {
-		_ = domainJSON
 		return nil, fmt.Errorf("sqlite Store insert: %w", err)
 	}
 	return &memapi.StoreResp{StoredID: i.ID, WasUpsert: false}, nil
@@ -232,10 +245,20 @@ LIMIT ?4`,
 			req.Scope.Level, scopeID(req.Scope), req.MinConfidence, max,
 		)
 	} else {
-		// FTS5 MATCH: keep the query string simple. A user-supplied
-		// raw string is escaped to a literal phrase to avoid syntax
-		// surprises from `:` / `*` etc.
-		ftsTerm := strings.ReplaceAll(req.Term, `"`, "")
+		// FTS5 MATCH: normalise the user-supplied term to a safe
+		// charset (letters, digits, spaces, hyphen, underscore)
+		// before wrapping in a phrase quote. CRITICAL fix from
+		// round 3 follow-up review: stripping only ASCII `"` left
+		// FTS5 query-language injection paths open via unicode
+		// quotes, NEAR, column filters, and null bytes. The
+		// normalised charset cannot express any FTS5 metasyntax.
+		ftsTerm := normalizeFTSTerm(req.Term)
+		if ftsTerm == "" {
+			// Term is empty after normalisation (e.g. all punctuation);
+			// fall through to a scope-only scan instead of a MATCH that
+			// would error.
+			return p.queryWithoutTerm(ctx, req, max)
+		}
 		rows, err = p.db.QueryContext(ctx, `
 SELECT i.id, i.rule, i.why, i.how_to_apply, i.domain_csv,
        i.scope_level, i.scope_id, i.source, i.source_event_id, i.dedupe_key,
@@ -263,48 +286,109 @@ LIMIT ?5`,
 		runningTok int
 	)
 	for rows.Next() {
-		var (
-			r           memapi.QueryResult
-			inst        memapi.Instinct
-			scopeLevel  string
-			scopeID     string
-			lastHit     int64
-			created     int64
-			domainCSV   string
-			evidenceJSON string
-			tracesJSON   string
-		)
-		if err := rows.Scan(
-			&inst.ID, &inst.Rule, &inst.Why, &inst.HowToApply, &domainCSV,
-			&scopeLevel, &scopeID, &inst.Source, new(string), &inst.DedupeKey,
-			&inst.State, &inst.Confidence, &inst.Hits, &lastHit, &created,
-			&evidenceJSON, &tracesJSON, &inst.MetadataJSON,
-		); err != nil {
-			return nil, fmt.Errorf("sqlite Query scan: %w", err)
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		inst.Scope = memapi.Scope{Level: scopeLevel, WorktreeID: workreeFromScopeID(scopeLevel, scopeID), RepoName: repoFromScopeID(scopeLevel, scopeID)}
-		if lastHit > 0 {
-			inst.LastHitAt = time.Unix(lastHit, 0).UTC()
-		}
-		if created > 0 {
-			inst.CreatedAt = time.Unix(created, 0).UTC()
-		}
-		inst.Domain = splitCSV(domainCSV)
-		_ = json.Unmarshal([]byte(evidenceJSON), &inst.EvidenceRefs)
-		_ = json.Unmarshal([]byte(tracesJSON), &inst.SourceTraces)
-		r.Instinct = inst
-		r.Score = inst.Confidence
-		r.EstimatedTokens = estimateTokens(inst)
-
+		// HIGH fix (round 3 follow-up): the previous semantics
+		// included the over-cap row with Truncated=true, which
+		// (a) let UsedTokens exceed MaxTokens on the host budget
+		// aggregator and (b) conflated "this row was elided" with
+		// "iteration stopped here". The new semantics stop
+		// iteration without appending the row that would breach the
+		// cap. The host knows iteration stopped early via
+		// `RetrieveBudget.Allow` returning false on the next call.
 		if req.MaxTokens > 0 && runningTok+r.EstimatedTokens > req.MaxTokens {
-			r.Truncated = true
-			results = append(results, r)
 			break
 		}
 		runningTok += r.EstimatedTokens
 		results = append(results, r)
 	}
 	return &memapi.QueryResp{Results: results}, rows.Err()
+}
+
+// queryWithoutTerm runs the scope-only scan path (no FTS MATCH).
+// Reuses the same scan helper as the term-bearing path so the two
+// branches always materialise identical Instinct shapes.
+func (p *Provider) queryWithoutTerm(ctx context.Context, req *memapi.QueryReq, max int) (*memapi.QueryResp, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id, rule, why, how_to_apply, domain_csv,
+       scope_level, scope_id, source, source_event_id, dedupe_key,
+       state, confidence, hits, last_hit_at, created_at,
+       evidence_refs, source_traces, metadata
+FROM instincts
+WHERE (?1 = '' OR scope_level = ?1)
+  AND (?2 = '' OR scope_id    = ?2)
+  AND state != 'forgotten'
+  AND confidence >= ?3
+ORDER BY confidence DESC, last_hit_at DESC
+LIMIT ?4`,
+		req.Scope.Level, scopeID(req.Scope), req.MinConfidence, max,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite Query: %w", err)
+	}
+	defer rows.Close()
+	var (
+		results    []memapi.QueryResult
+		runningTok int
+	)
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		if req.MaxTokens > 0 && runningTok+r.EstimatedTokens > req.MaxTokens {
+			break
+		}
+		runningTok += r.EstimatedTokens
+		results = append(results, r)
+	}
+	return &memapi.QueryResp{Results: results}, rows.Err()
+}
+
+// scanRow materialises one instincts row into a memapi.QueryResult.
+// Shared between the FTS path and the scope-only path.
+func scanRow(rows *sql.Rows) (memapi.QueryResult, error) {
+	var (
+		r            memapi.QueryResult
+		inst         memapi.Instinct
+		scopeLevel   string
+		scopeID      string
+		sourceEvtID  string
+		lastHit      int64
+		created      int64
+		domainCSV    string
+		evidenceJSON string
+		tracesJSON   string
+	)
+	if err := rows.Scan(
+		&inst.ID, &inst.Rule, &inst.Why, &inst.HowToApply, &domainCSV,
+		&scopeLevel, &scopeID, &inst.Source, &sourceEvtID, &inst.DedupeKey,
+		&inst.State, &inst.Confidence, &inst.Hits, &lastHit, &created,
+		&evidenceJSON, &tracesJSON, &inst.MetadataJSON,
+	); err != nil {
+		return r, fmt.Errorf("sqlite Query scan: %w", err)
+	}
+	_ = sourceEvtID // currently round-trippable through audit only; v0.6 may surface it as a Query response field
+	inst.Scope = memapi.Scope{
+		Level:      scopeLevel,
+		WorktreeID: worktreeFromScopeID(scopeLevel, scopeID),
+		RepoName:   repoFromScopeID(scopeLevel, scopeID),
+	}
+	if lastHit > 0 {
+		inst.LastHitAt = time.Unix(lastHit, 0).UTC()
+	}
+	if created > 0 {
+		inst.CreatedAt = time.Unix(created, 0).UTC()
+	}
+	inst.Domain = splitCSV(domainCSV)
+	_ = json.Unmarshal([]byte(evidenceJSON), &inst.EvidenceRefs)
+	_ = json.Unmarshal([]byte(tracesJSON), &inst.SourceTraces)
+	r.Instinct = inst
+	r.Score = inst.Confidence
+	r.EstimatedTokens = estimateTokens(inst)
+	return r, nil
 }
 
 // Forget is the soft delete: state flips, the row stays.
@@ -420,7 +504,29 @@ func scopeID(s memapi.Scope) string {
 	}
 }
 
-func workreeFromScopeID(level, sid string) string {
+// normalizeFTSTerm strips every character the FTS5 query language
+// treats as metasyntax. Round 3 follow-up review flagged the
+// previous "strip just ASCII `\"`" approach as inadequate because
+// unicode quotes, NEAR, and column filters could still slip past.
+// We keep only Letters, Digits, Spaces, hyphen and underscore —
+// none of which carry FTS5 special meaning inside a phrase quote.
+func normalizeFTSTerm(term string) string {
+	var b strings.Builder
+	b.Grow(len(term))
+	for _, r := range term {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			b.WriteRune(r)
+		case r == ' ', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// worktreeFromScopeID derives the worktree id from the scope_id
+// column shape (`<repo>/<worktree>`).
+func worktreeFromScopeID(level, sid string) string {
 	if level != "worktree" {
 		return ""
 	}
@@ -495,6 +601,3 @@ func escapeYAML(s string) string {
 	return s
 }
 
-// _ silences the unused import warning when only the filepath
-// helper is needed in tests.
-var _ = filepath.Join

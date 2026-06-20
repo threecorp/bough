@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -83,7 +84,13 @@ func FileWatch(ctx context.Context, coord *instinct.Coordinator, opts FileWatchO
 
 	reader := bufio.NewReader(f)
 	var (
-		admitted int
+		// admitted is read by the main goroutine on return and
+		// written by the time.AfterFunc-driven flush goroutine.
+		// Round 3 follow-up fix (HIGH #10): the previous plain
+		// int caused a race detector failure when the suite
+		// exercised the file watch under -race. atomic.Int64 keeps
+		// the contract trivial without restructuring the loop.
+		admitted atomic.Int64
 		mu       sync.Mutex
 		pending  = false
 		timer    *time.Timer
@@ -102,16 +109,16 @@ func FileWatch(ctx context.Context, coord *instinct.Coordinator, opts FileWatchO
 			Scope:  opts.Scope,
 		}, 0, lines)}
 		n, _, _ := coord.Ingest(ctx, opts.Scope, bundles)
-		admitted += n
+		admitted.Add(int64(n))
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return admitted, nil
+			return int(admitted.Load()), nil
 		case ev, ok := <-watcher.Events:
 			if !ok {
-				return admitted, nil
+				return int(admitted.Load()), nil
 			}
 			// Handle rotation: if the file is renamed or removed
 			// and a new file with the same path appears, re-bind.
@@ -121,7 +128,7 @@ func FileWatch(ctx context.Context, coord *instinct.Coordinator, opts FileWatchO
 					f.Close()
 					f, err = os.Open(opts.Path)
 					if err != nil {
-						return admitted, fmt.Errorf("file_watch: re-open after rotation: %w", err)
+						return int(admitted.Load()), fmt.Errorf("file_watch: re-open after rotation: %w", err)
 					}
 					reader = bufio.NewReader(f)
 					_ = watcher.Add(opts.Path)
@@ -153,9 +160,9 @@ func FileWatch(ctx context.Context, coord *instinct.Coordinator, opts FileWatchO
 			mu.Unlock()
 		case err, ok := <-watcher.Errors:
 			if !ok {
-				return admitted, nil
+				return int(admitted.Load()), nil
 			}
-			return admitted, fmt.Errorf("file_watch: %w", err)
+			return int(admitted.Load()), fmt.Errorf("file_watch: %w", err)
 		}
 	}
 }

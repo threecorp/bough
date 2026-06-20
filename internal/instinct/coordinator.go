@@ -98,8 +98,13 @@ func New(cfg *config.Config, backend memapi.MemoryBackend, eventsPath string) (*
 // Close releases the events writer if any. The backend cleanup
 // stays with the pluginhost caller — the coordinator does not own
 // the plugin subprocess.
+//
+// Round 3 follow-up: EventWriter.Close is nil-receiver tolerant
+// but we add an explicit guard here so a future change to the
+// writer surface (e.g. a non-pointer receiver) does not silently
+// reintroduce the nil-deref hazard.
 func (c *Coordinator) Close() error {
-	if c == nil {
+	if c == nil || c.events == nil {
 		return nil
 	}
 	return c.events.Close()

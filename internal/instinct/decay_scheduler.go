@@ -44,6 +44,13 @@ func NewDecayScheduler(backend memapi.MemoryBackend, guard *PoisoningGuard, even
 // RunOnce iterates the backend's active + candidate rows for the
 // given scope (empty Scope = all scopes) and applies decay
 // transitions. Returns counts of rows touched per transition.
+//
+// Round 3 follow-up fix: MaxTokens=0 (= no token cap) ensures the
+// decay walk does not stop short on a token-budget boundary;
+// MaxResults=1000 still bounds the run so a single corrupted
+// scope cannot starve the rest. poisoning_guard's
+// max_active_per_scope default (200) is well below this ceiling,
+// so 1000 covers reasonable worktrees without a second run.
 func (s *DecayScheduler) RunOnce(ctx context.Context, scope schema.Scope) (forgotten, archived int, err error) {
 	if s == nil || s.backend == nil {
 		return 0, 0, nil
@@ -52,7 +59,7 @@ func (s *DecayScheduler) RunOnce(ctx context.Context, scope schema.Scope) (forgo
 		Term:       "",
 		Scope:      memapi.Scope{Level: string(scope.Level), WorktreeID: scope.WorktreeID, RepoName: scope.RepoName},
 		MaxResults: 1000,
-		MaxTokens:  100000,
+		MaxTokens:  0,
 	})
 	if err != nil {
 		return 0, 0, err
@@ -60,6 +67,11 @@ func (s *DecayScheduler) RunOnce(ctx context.Context, scope schema.Scope) (forgo
 	now := time.Now().UTC()
 	for _, r := range resp.Results {
 		inst := r.Instinct
+		// Skip archived / forgotten rows — they have already
+		// completed their transition. Without this guard the
+		// pre-fix Store reinforce path could be triggered to "re-
+		// archive" an archived row, which the round 3 follow-up
+		// flagged as CRITICAL #4.
 		switch schema.InstinctState(inst.State) {
 		case schema.InstinctStateCandidate:
 			if s.guard.IsCandidateExpired(inst.CreatedAt) {

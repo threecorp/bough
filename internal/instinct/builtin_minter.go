@@ -33,6 +33,12 @@ func NewBuiltinMinter() *BuiltinMinter { return &BuiltinMinter{} }
 // bundle. The returned slice is plural by design (round 3 AI #1)
 // so a future smarter minter can keep the same shape while
 // emitting multiple candidates per bundle.
+//
+// Round 3 follow-up fix (CRITICAL #5): when a bundle carries its
+// own non-zero Scope, the minter prefers it over the batch-level
+// `scope` argument. Without this, a coordinator wiring multiple
+// worktrees through one Ingest call would collapse all candidates
+// to a single scope and quietly lose multi-worktree isolation.
 func (m *BuiltinMinter) Mint(_ context.Context, bundles []schema.TraceBundle, scope schema.Scope) ([]*schema.InstinctCandidate, error) {
 	out := make([]*schema.InstinctCandidate, 0, len(bundles))
 	for _, b := range bundles {
@@ -40,16 +46,20 @@ func (m *BuiltinMinter) Mint(_ context.Context, bundles []schema.TraceBundle, sc
 		if rule == "" {
 			continue
 		}
+		candidateScope := scope
+		if b.Scope.IsValid() {
+			candidateScope = b.Scope
+		}
 		c := &schema.InstinctCandidate{
 			ID:           bundleID(b),
 			Rule:         rule,
-			Scope:        scope,
+			Scope:        candidateScope,
 			Source:       b.Source,
 			Confidence:   0.5, // ConfidencePolicy.ClampInitial lowers if source requires
 			State:        schema.InstinctStateCandidate,
 			SourceTraces: []string{b.ID},
 			CreatedAt:    nonZero(b.CapturedAt),
-			DedupeKey:    DedupeKey(rule, scope),
+			DedupeKey:    DedupeKey(rule, candidateScope),
 		}
 		out = append(out, c)
 	}
