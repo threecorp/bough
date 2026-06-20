@@ -2,7 +2,7 @@
 
 Round 3 external review (June 2026) settled the v0.5 → v0.6 → v0.7+ shape. This document is the canonical reference; the release CHANGELOG ties specific commits back to each item.
 
-## v0.5.0 — Foundation (this release)
+## v0.5.0 — Foundation
 
 - ✅ 4 plugin contracts frozen (`plugins/{memory,instinct,capability,evaluator}/api/`)
 - ✅ Canonical schemas in `pkg/schema/` (TraceBundle, InstinctCandidate, Instinct, CapabilityArtifact)
@@ -16,6 +16,15 @@ Round 3 external review (June 2026) settled the v0.5 → v0.6 → v0.7+ shape. T
 - ✅ `bough instinct` and `bough memory` CLI subcommands
 - ✅ conformance/memory + conformance/instinct suites with mock plugins
 - ✅ pluginhost legacy v0.3 fallback removed
+
+## v0.5.1 — Round 3 follow-up patch (shipped 2026-06-20)
+
+Drop-in patch on top of v0.5.0; no schema, plugin contract, or binary-API changes.
+
+- ✅ `instinct.fallback_on_error` consumed by `coordinator.Query` (MEDIUM #15)
+- ✅ `bough memory import` / `bough instinct import` actually restore rows (MEDIUM #17)
+- ✅ `events.jsonl` path required to be absolute, anchored to the monorepo root (LOW #18)
+- ✅ Round-trip regression tests for SQLite YAML/JSONL Import
 
 ## v0.6.0 — External memory + capability compilation
 
