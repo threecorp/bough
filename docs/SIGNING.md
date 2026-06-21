@@ -33,10 +33,14 @@ instinct:
     allowlist: []                      # bin-name → bypass the signing notice
 ```
 
-`require_signed: false` keeps v0.6 opt-in. When you flip it to
-`true`, the host refuses to spawn a plugin whose binary cannot be
-verified by `bough plugins verify <binary>` against one of the
-accepted schemes.
+`require_signed: false` keeps v0.6 opt-in. The flag itself is
+already accepted by the host config, but the **spawn-time enforce
+gate** (= refuse-to-spawn when verification fails) lands in v0.6.x —
+v0.6.0 only ships the verify CLI for dry-run, so flipping
+`require_signed: true` today is a no-op until you upgrade. Run
+`bough plugin verify <binary>` against each plugin in your install
+path now; the timeline below tells you when bough starts blocking
+unverified spawns.
 
 ## Verify CLI
 

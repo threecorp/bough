@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/config"
-	memapi "github.com/ikeikeikeike/bough/plugins/memory/api"
 	"github.com/ikeikeikeike/bough/pkg/schema"
+	memapi "github.com/ikeikeikeike/bough/plugins/memory/api"
 )
 
 // Coordinator wires the policy layers (redaction, confidence,
@@ -261,6 +261,29 @@ func (c *Coordinator) Query(ctx context.Context, term string, scope schema.Scope
 		Detail: fmt.Sprintf("term=%q results=%d/%d tokens=%d truncated=%v", term, len(out), len(resp.Results), budget.UsedTokens, budget.AnyTruncated),
 	})
 	return out, nil
+}
+
+// Export delegates to the backend snapshot and emits an audit event.
+// v0.5 shipped a `bough memory export` stub that bypassed the
+// coordinator; the v0.6 `bough instinct export` path routes through
+// here (review #23 #16) so the round-trip Import semantics — audit
+// event, Coordinator-as-source-of-truth, scope discipline — hold for
+// both sides of the snapshot operation.
+func (c *Coordinator) Export(ctx context.Context, format string, scope schema.Scope) (*memapi.ExportResp, error) {
+	resp, err := c.backend.Export(ctx, &memapi.ExportReq{
+		Format: format,
+		Scope:  scopeToMemAPI(scope),
+	})
+	scopeStr := fmt.Sprintf("%s/%s/%s", scope.Level, scope.WorktreeID, scope.RepoName)
+	if err != nil {
+		_ = c.events.Append(Event{Kind: "export", Detail: fmt.Sprintf("format=%s scope=%s error=%v", format, scopeStr, err)})
+		return nil, fmt.Errorf("coordinator.Export: %w", err)
+	}
+	_ = c.events.Append(Event{
+		Kind:   "export",
+		Detail: fmt.Sprintf("format=%s scope=%s bytes=%d", format, scopeStr, len(resp.Payload)),
+	})
+	return resp, nil
 }
 
 // Import replays a previously-exported payload through the backend

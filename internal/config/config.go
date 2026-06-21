@@ -51,9 +51,9 @@ type Config struct {
 
 	// v0.5 instinct subsystem (opt-in; disabled by default for full
 	// v0.4 compatibility). See InstinctConfig docs below.
-	Instinct        InstinctConfig     `yaml:"instinct"`
-	MemoryBackends  []MemoryBackendCfg `yaml:"memory_backends" validate:"dive"`
-	Export          ExportConfig       `yaml:"export"`
+	Instinct       InstinctConfig     `yaml:"instinct"`
+	MemoryBackends []MemoryBackendCfg `yaml:"memory_backends" validate:"dive"`
+	Export         ExportConfig       `yaml:"export"`
 }
 
 // Repository declares one git sub-repo that hangs off
@@ -87,11 +87,11 @@ type Repository struct {
 // `port_ranges: { main: [low, high] }`. Multi-port engines (rabbitmq,
 // kafka, nats) declare one entry per role.
 type Engine struct {
-	Kind             string             `yaml:"kind" validate:"required"`
-	Version          string             `yaml:"version" validate:"required"`
-	PortRanges       map[string][2]int  `yaml:"port_ranges" validate:"required,min=1"`
-	SocketDir        string             `yaml:"socket_dir"`
-	InitialResources []InitialResource  `yaml:"initial_resources" validate:"dive"`
+	Kind             string            `yaml:"kind" validate:"required"`
+	Version          string            `yaml:"version" validate:"required"`
+	PortRanges       map[string][2]int `yaml:"port_ranges" validate:"required,min=1"`
+	SocketDir        string            `yaml:"socket_dir"`
+	InitialResources []InitialResource `yaml:"initial_resources" validate:"dive"`
 	// Backend selects the lifecycle implementation inside the plugin.
 	// Allowed values: "nix" (default for v0.1.x), "docker" (v0.2+,
 	// bind-mounts datadir into the engine's official Docker image),
@@ -169,23 +169,23 @@ type SymlinkSpec struct {
 // file watch). See docs/INSTINCTS.md for the per-monorepo design
 // choices users make here.
 type InstinctConfig struct {
-	Enabled               bool                  `yaml:"enabled"`
-	DefaultMemoryBackend  string                `yaml:"default_memory_backend"`
-	DefaultInstinctMinter string                `yaml:"default_instinct_minter"`
+	Enabled               bool   `yaml:"enabled"`
+	DefaultMemoryBackend  string `yaml:"default_memory_backend"`
+	DefaultInstinctMinter string `yaml:"default_instinct_minter"`
 	// FallbackOnError tells the coordinator whether to silently
 	// degrade to the SQLite reference-fallback backend when the
 	// primary (external) backend reports an error, or to fail the
 	// operation. Production teams using mem0 / Graphiti typically
 	// want `true` so a transient network blip does not block a CI
 	// run; users debugging an external backend may want `false`.
-	FallbackOnError       bool                   `yaml:"fallback_on_error"`
-	Scopes                InstinctScopes         `yaml:"scopes"`
-	Mint                  InstinctMint           `yaml:"mint"`
-	Retrieve              InstinctRetrieve       `yaml:"retrieve"`
-	Confidence            InstinctConfidence     `yaml:"confidence"`
-	PoisoningGuard        InstinctPoisoningGuard `yaml:"poisoning_guard"`
-	Observer              InstinctObserver       `yaml:"observer"`
-	PluginSecurity        InstinctPluginSecurity `yaml:"plugin_security"`
+	FallbackOnError bool                   `yaml:"fallback_on_error"`
+	Scopes          InstinctScopes         `yaml:"scopes"`
+	Mint            InstinctMint           `yaml:"mint"`
+	Retrieve        InstinctRetrieve       `yaml:"retrieve"`
+	Confidence      InstinctConfidence     `yaml:"confidence"`
+	PoisoningGuard  InstinctPoisoningGuard `yaml:"poisoning_guard"`
+	Observer        InstinctObserver       `yaml:"observer"`
+	PluginSecurity  InstinctPluginSecurity `yaml:"plugin_security"`
 }
 
 // InstinctScopes toggles which of the three scope tiers the
@@ -288,22 +288,28 @@ type InstinctObserver struct {
 // Debounce ms gates how aggressively the observer batches events;
 // 0 disables debouncing.
 type InstinctFileWatch struct {
-	Enabled            bool   `yaml:"enabled"`
-	Stability          string `yaml:"stability" validate:"omitempty,oneof=stable preview beta"`
-	JSONLPathTemplate  string `yaml:"jsonl_path_template"`
-	RotationHandling   bool   `yaml:"rotation_handling"`
-	TruncateHandling   bool   `yaml:"truncate_handling"`
-	DebounceMs         int    `yaml:"debounce_ms"`
+	Enabled           bool   `yaml:"enabled"`
+	Stability         string `yaml:"stability" validate:"omitempty,oneof=stable preview beta"`
+	JSONLPathTemplate string `yaml:"jsonl_path_template"`
+	RotationHandling  bool   `yaml:"rotation_handling"`
+	TruncateHandling  bool   `yaml:"truncate_handling"`
+	DebounceMs        int    `yaml:"debounce_ms"`
 }
 
 // InstinctPluginSecurity governs third-party plugin trust. v0.5
-// shipped `require_signed: false` (warn-only); v0.6 (Ν-1.8) starts
-// consuming the flag: when true, the host refuses to spawn an
-// unverified plugin and asks the operator to run `bough plugins
-// verify <binary>` first. UntrustedWarning=true tells the host CLI
-// to print a "third-party plugin = untrusted code" banner whenever
-// a non-allowlisted plugin is discovered (independent of the
-// signing path so warning + enforce can coexist).
+// shipped `require_signed: false` (warn-only); v0.6 (Ν-1.8) added
+// the `bough plugin verify <binary>` CLI so an operator can dry-run
+// a binary against cosign or minisign before they trust it. The
+// host-side enforcement loop (= refuse-to-spawn when the binary
+// fails verification) is intentionally **not yet wired in v0.6.0**
+// (review #23 #9). The field is consumed by `bough plugin verify`
+// today; v0.6.x lands the spawn-time gate and the timeline in
+// `docs/SIGNING.md` (= v0.6 verify+opt-in / v0.6.x strict mode /
+// v0.7 official-plugin required / v0.8+ enterprise default true).
+// UntrustedWarning=true tells the host CLI to print a "third-party
+// plugin = untrusted code" banner whenever a non-allowlisted plugin
+// is discovered (independent of the signing path so warning +
+// enforce can coexist).
 //
 // AcceptedSignatureSchemes (round 4 priority A9 + A11) is the
 // two-system signing surface: "cosign" matches the GoReleaser
@@ -314,10 +320,10 @@ type InstinctFileWatch struct {
 // to pick a side; an enterprise operator can narrow the slice to
 // just "cosign" to enforce the supply-chain story.
 type InstinctPluginSecurity struct {
-	RequireSigned             bool     `yaml:"require_signed"`
-	Allowlist                 []string `yaml:"allowlist"`
-	UntrustedWarning          bool     `yaml:"untrusted_warning"`
-	AcceptedSignatureSchemes  []string `yaml:"accepted_signature_schemes"`
+	RequireSigned            bool     `yaml:"require_signed"`
+	Allowlist                []string `yaml:"allowlist"`
+	UntrustedWarning         bool     `yaml:"untrusted_warning"`
+	AcceptedSignatureSchemes []string `yaml:"accepted_signature_schemes"`
 }
 
 // MemoryBackendCfg declares one persistent memory backend the
@@ -333,19 +339,19 @@ type InstinctPluginSecurity struct {
 // that bough is competing with mem0 / Graphiti. v0.6+ external
 // backends declare role="external".
 type MemoryBackendCfg struct {
-	Kind          string                 `yaml:"kind" validate:"required"`
-	Role          string                 `yaml:"role" validate:"required,oneof=reference-fallback external"`
-	Path          string                 `yaml:"path"`
-	EventsLog     string                 `yaml:"events_log"`
-	MirrorDir     string                 `yaml:"mirror_dir"`
-	FTS           bool                   `yaml:"fts"`
-	WAL           bool                   `yaml:"wal"`
-	BusyTimeoutMs int                    `yaml:"busy_timeout_ms"`
-	Vector        MemoryBackendVector    `yaml:"vector"`
-	Endpoint      string                 `yaml:"endpoint"`            // v0.6+ external
-	APIKeyEnv     string                 `yaml:"api_key_env"`         // v0.6+ external
-	Fallback      string                 `yaml:"fallback"`            // v0.6+ chain
-	Extras        map[string]string      `yaml:"extras"`
+	Kind          string              `yaml:"kind" validate:"required"`
+	Role          string              `yaml:"role" validate:"required,oneof=reference-fallback external"`
+	Path          string              `yaml:"path"`
+	EventsLog     string              `yaml:"events_log"`
+	MirrorDir     string              `yaml:"mirror_dir"`
+	FTS           bool                `yaml:"fts"`
+	WAL           bool                `yaml:"wal"`
+	BusyTimeoutMs int                 `yaml:"busy_timeout_ms"`
+	Vector        MemoryBackendVector `yaml:"vector"`
+	Endpoint      string              `yaml:"endpoint"`    // v0.6+ external
+	APIKeyEnv     string              `yaml:"api_key_env"` // v0.6+ external
+	Fallback      string              `yaml:"fallback"`    // v0.6+ chain
+	Extras        map[string]string   `yaml:"extras"`
 }
 
 // MemoryBackendVector toggles dense vector indexing inside a memory

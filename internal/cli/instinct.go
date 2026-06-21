@@ -261,7 +261,19 @@ func newInstinctExportCmd() *cobra.Command {
 		Use:   "export",
 		Short: "Export instincts in yaml or jsonl",
 		RunE: func(c *cobra.Command, _ []string) error {
-			return fmt.Errorf("export: not yet wired (Μ-1.12); use `bough memory export` for now")
+			coord, closeAll, err := loadInstinctCoordinator(c)
+			if err != nil {
+				return err
+			}
+			defer closeAll()
+			_, cfg, _ := loadConfigAndRoot(c, "")
+			scope := currentScope(cfg, "", "")
+			resp, err := coord.Export(noopCtx(), format, scope)
+			if err != nil {
+				return err
+			}
+			_, _ = c.OutOrStdout().Write(resp.Payload)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "yaml", "yaml | jsonl")

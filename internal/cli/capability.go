@@ -192,7 +192,8 @@ func runCompile(c *cobra.Command, opts *compileOpts) error {
 // an empty list means "compile every active row in scope".
 func harvestInstincts(coord interface {
 	Query(ctx context.Context, term string, scope schema.Scope) ([]schema.Instinct, error)
-}, scope schema.Scope, idFilter []string) ([]schema.Instinct, error) {
+}, scope schema.Scope, idFilter []string,
+) ([]schema.Instinct, error) {
 	rows, err := coord.Query(context.Background(), "", scope)
 	if err != nil {
 		return nil, fmt.Errorf("query instincts: %w", err)
@@ -232,6 +233,15 @@ func harvestInstincts(coord interface {
 
 // writeEmissions persists each EmitResult to disk under outDir, or
 // prints the byte payload to stdout if outDir is empty.
+//
+// Review #23 #14: emitter Filename values arrive from registered
+// Emitter implementations; v0.6.0 ships three first-party emitters
+// but the registry is plugin-extensible from v0.6.x. A malicious or
+// buggy emitter that returns `../../etc/whatever` would otherwise
+// land bytes outside the operator's --out-dir. We canonicalise the
+// resolved path through filepath.Rel and refuse anything that
+// escapes the directory — same guard pattern the Go archive/tar
+// reference applies to extracted entries.
 func writeEmissions(c *cobra.Command, emissions []capapi.EmitResult, outDir string) error {
 	if outDir == "" {
 		for _, e := range emissions {
@@ -242,8 +252,20 @@ func writeEmissions(c *cobra.Command, emissions []capapi.EmitResult, outDir stri
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", outDir, err)
 	}
+	absOut, err := filepath.Abs(outDir)
+	if err != nil {
+		return fmt.Errorf("resolve out-dir %s: %w", outDir, err)
+	}
 	for _, e := range emissions {
-		path := filepath.Join(outDir, e.Filename)
+		cleaned := filepath.Clean(e.Filename)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+			return fmt.Errorf("emitter %q returned an unsafe filename %q (absolute or escapes --out-dir)", e.ContentType, e.Filename)
+		}
+		path := filepath.Join(absOut, cleaned)
+		rel, err := filepath.Rel(absOut, path)
+		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			return fmt.Errorf("emitter %q returned filename %q that escapes --out-dir %s", e.ContentType, e.Filename, outDir)
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 		}
