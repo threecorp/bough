@@ -11,12 +11,16 @@
 //	  ├─ mem0.New(Config{Endpoint: that server's URL}) (= the bough plugin)
 //	  └─ plugin.Serve over gRPC                         (= the bough host's wire)
 //
-// The mock honors the metadata.bough_dedupe_key field the host
-// computes so the conformance suite's AssertUpsert / dedupe checks
-// behave the same way they would against the SQLite reference-
-// fallback. mem0 itself does not natively dedupe — the bough plugin
-// advertises DedupeKey=false — but for conformance we surface UPDATE
-// events so the WasUpsert wire bit flips correctly.
+// The mock mirrors real mem0 cloud semantics where it matters for
+// contract verification: DELETE /api/v1/memories/<id>/ hard-deletes
+// the row, dedupe is the host's responsibility (the plugin advertises
+// DedupeKey=false), and an Export-after-Forget therefore returns
+// nothing. Review #23 #8: an earlier revision of this mock faked
+// soft-delete via metadata.bough_state="forgotten"; that hid the
+// production divergence from the conformance suite. The suite now
+// gates its dedupe and Export-after-Forget assertions on the
+// advertised Capabilities so backends with honest hard-delete
+// behaviour still pass without faking soft-delete in the wire layer.
 package main
 
 import (
@@ -98,8 +102,7 @@ func (s *mockStore) add(userID, sessionID, memory string, metadata map[string]an
 // search returns rows whose memory content contains the term within
 // the (user, session) namespace. Score is naive (1.0 for hits) —
 // the conformance suite cares about whose rows survive, not about
-// scoring nuance. Rows that have been soft-deleted (bough_state =
-// "forgotten") are skipped so Query never returns them.
+// scoring nuance.
 func (s *mockStore) search(userID, sessionID, term string) []mockRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,9 +112,6 @@ func (s *mockStore) search(userID, sessionID, term string) []mockRow {
 			continue
 		}
 		if sessionID != "" && r.SessionID != sessionID {
-			continue
-		}
-		if state, _ := r.Metadata["bough_state"].(string); state == "forgotten" {
 			continue
 		}
 		if term != "" && !strings.Contains(strings.ToLower(r.Memory), strings.ToLower(term)) {
@@ -124,10 +124,8 @@ func (s *mockStore) search(userID, sessionID, term string) []mockRow {
 }
 
 // list returns every row for the (user, session) tuple; used by
-// Export. Unlike search, list returns soft-deleted rows so a Forget
-// → Export → Import cycle can round-trip the row back into the
-// store with its forgotten state preserved (lifecycle.go relies on
-// this).
+// Export. mem0 hard-deletes on DELETE so forgotten rows are gone for
+// good — no soft-delete bookkeeping needed.
 func (s *mockStore) list(userID, sessionID string) []mockRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,24 +143,18 @@ func (s *mockStore) list(userID, sessionID string) []mockRow {
 	return out
 }
 
-// softDelete is the mem0 plugin's contract: SoftDelete=true means
-// Forget keeps the row but flips its state so subsequent Query
-// calls skip it. Real mem0 cloud hard-deletes, but the conformance
-// suite (lifecycle.go) tests the bough-side contract that Export
-// after Forget still returns the row so Import can round-trip the
-// dataset.
-func (s *mockStore) softDelete(id string) bool {
+// hardDelete drops the row entirely — mirroring real mem0 cloud's
+// DELETE /api/v1/memories/<id>/ behaviour (review #23 #8). The
+// conformance suite gates Export-after-Forget assertions on the
+// plugin-advertised Capabilities.SoftDelete so an honest
+// hard-deleting backend still passes.
+func (s *mockStore) hardDelete(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	row, ok := s.rows[id]
-	if !ok {
+	if _, ok := s.rows[id]; !ok {
 		return false
 	}
-	if row.Metadata == nil {
-		row.Metadata = map[string]any{}
-	}
-	row.Metadata["bough_state"] = "forgotten"
-	s.rows[id] = row
+	delete(s.rows, id)
 	return true
 }
 
@@ -241,7 +233,7 @@ func (s *mockStore) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if dec, err := url.PathUnescape(id); err == nil {
 		id = dec
 	}
-	if !s.softDelete(id) {
+	if !s.hardDelete(id) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

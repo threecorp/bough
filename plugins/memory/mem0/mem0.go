@@ -118,6 +118,14 @@ func (p *Provider) Health(_ context.Context, _ *memapi.HealthReq) (*memapi.Healt
 // dedupe primitive — the host computes idempotency tokens and the
 // SQLite reference-fallback owns that contract during Read fallback.
 //
+// SoftDelete is **false** (review #23 #8): mem0 cloud hard-deletes
+// on DELETE /api/v1/memories/<id>/, so an Export-after-Forget will
+// not return the forgotten row. v0.5 reference-fallback (sqlite)
+// keeps the row with state=forgotten, the conformance suite gates
+// the Export-after-Forget assertion on this flag so plugins with
+// honest hard-delete semantics still pass without faking soft-delete
+// in the wire layer.
+//
 // GraphQuery + TemporalQuery stay false: those land with the
 // Graphiti plugin (= Ν-1.3 docs + skeleton, full implementation
 // deferred to v0.6.x per round 4 AI #2).
@@ -134,7 +142,7 @@ func (p *Provider) Capabilities(_ context.Context) (*memapi.CapabilitiesResp, er
 		TemporalQuery:       false,
 		MetadataFilter:      true,
 		NamespaceIsolation:  true,
-		SoftDelete:          true,
+		SoftDelete:          false,
 		BulkImport:          true,
 		DedupeKey:           false,
 		SourceEventID:       false,

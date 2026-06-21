@@ -71,7 +71,7 @@ The plugin advertises the v0.6 17-field `CapabilitiesResponse` as:
 | `supports_metadata` | true | mem0 metadata is what holds bough's evidence refs |
 | `metadata_filter` | true | mem0 filters on metadata server-side |
 | `namespace_isolation` | true | `user_id` natively isolates Scope |
-| `soft_delete` | true | Forget removes the row; queryability stops |
+| `soft_delete` | false | mem0 cloud hard-deletes on `DELETE /api/v1/memories/<id>/`; an Export-after-Forget will not return the row. The conformance suite gates its Export-after-Forget assertion on this flag |
 | `ttl` | true | mem0 supports per-memory automatic expiry |
 | `eventual_consistency` | true | mem0 cloud may return Store success before durable |
 | `dedupe_key` | false | mem0 has no native dedupe — host computes |
