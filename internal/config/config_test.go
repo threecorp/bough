@@ -213,3 +213,87 @@ registry: {path: .worktree-ports.json}
 		t.Errorf("InitialResources[1].Name: got %q want %q", got, want)
 	}
 }
+
+// TestLoad_acceptsV05Sections pins the LegacyConfig superset against
+// the v0.5+ root sections (`instinct`, `engines`, `memory_backends`,
+// `export`). Post-ship dogfooding on 2026-06-22 surfaced that the
+// strict first-pass decode of `bough config validate` was rejecting
+// v0.5+ YAML with `unknown field` while every other subcommand loaded
+// the file cleanly through a separate entry point — LegacyConfig had
+// been frozen at the v0.3+v0.4 superset and the v0.5 schema bump did
+// not mirror the new sections in. Regression backstop: a YAML that
+// uses all four v0.5+ sections must parse, migrate, and validate
+// without complaint.
+func TestLoad_acceptsV05Sections(t *testing.T) {
+	yaml := `schema_version: 2
+monorepo_root: "."
+repositories:
+  - name: demo
+    branch_strategy: develop
+engines: []
+registry:
+  path: .bough-ports.json
+instinct:
+  enabled: true
+  default_memory_backend: sqlite
+  fallback_on_error: false
+  retrieve:
+    max_results: 12
+    max_tokens: 4000
+    min_confidence: 0.4
+  mint:
+    mode: hybrid
+    require_approval: true
+    redaction:
+      enabled: true
+  plugin_security:
+    require_signed: false
+    accepted_signature_schemes:
+      - cosign
+      - minisign
+memory_backends:
+  - kind: sqlite
+    role: reference-fallback
+    path: .bough/memory/instincts.db
+    fts: true
+    wal: true
+    busy_timeout_ms: 5000
+export:
+  formats: [agent-skill]
+  output_dir: ./skills
+`
+	c, err := LoadFromBytes([]byte(yaml), "test-v05-sections")
+	if err != nil {
+		t.Fatalf("LoadFromBytes(v0.5+ sections): %v", err)
+	}
+	if !c.Instinct.Enabled {
+		t.Errorf("Instinct.Enabled: want true")
+	}
+	if got, want := c.Instinct.DefaultMemoryBackend, "sqlite"; got != want {
+		t.Errorf("Instinct.DefaultMemoryBackend: got %q want %q", got, want)
+	}
+	if got, want := c.Instinct.Retrieve.MaxResults, 12; got != want {
+		t.Errorf("Instinct.Retrieve.MaxResults: got %d want %d", got, want)
+	}
+	if got, want := c.Instinct.Mint.Mode, "hybrid"; got != want {
+		t.Errorf("Instinct.Mint.Mode: got %q want %q", got, want)
+	}
+	if got, want := len(c.Instinct.PluginSecurity.AcceptedSignatureSchemes), 2; got != want {
+		t.Errorf("Instinct.PluginSecurity.AcceptedSignatureSchemes: got %d want %d", got, want)
+	}
+	if got, want := len(c.MemoryBackends), 1; got != want {
+		t.Fatalf("MemoryBackends: got %d want %d", got, want)
+	}
+	if got, want := c.MemoryBackends[0].Kind, "sqlite"; got != want {
+		t.Errorf("MemoryBackends[0].Kind: got %q want %q", got, want)
+	}
+	if got, want := c.MemoryBackends[0].Role, "reference-fallback"; got != want {
+		t.Errorf("MemoryBackends[0].Role: got %q want %q", got, want)
+	}
+	if got, want := len(c.Export.Formats), 1; got != want {
+		t.Errorf("Export.Formats: got %d want %d", got, want)
+	}
+	if got, want := c.Export.OutputDir, "./skills"; got != want {
+		t.Errorf("Export.OutputDir: got %q want %q", got, want)
+	}
+}

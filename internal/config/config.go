@@ -373,19 +373,33 @@ type ExportConfig struct {
 	OutputDir string   `yaml:"output_dir"`
 }
 
-// LegacyConfig mirrors Config's shape with the v0.3 field names so
-// `databases:` / `initial_databases:` / `port_range:` deserialise
-// without error. After deserialisation the LoadFromBytes path calls
-// migrateLegacy() to copy values into the canonical Config fields.
+// LegacyConfig mirrors Config's shape with both the v0.3 field names
+// (so `databases:` / `initial_databases:` / `port_range:` deserialise
+// without error) and the v0.4+ canonical field names. After
+// deserialisation the LoadFromBytes path calls migrateLegacy() to copy
+// values into the canonical Config struct.
+//
+// Post-v0.5 dogfooding finding (2026-06-22): the v0.5 schema bump added
+// `instinct:` / `memory_backends:` / `engines:` / `export:` root
+// sections but did not mirror them into this superset, so the strict
+// first-pass decode rejected every v0.5+ `.bough.yaml`. Every other
+// subcommand decoded the file fine through a separate entry point, but
+// `bough config validate` reported a false-negative. The fix here adds
+// the four sections as additive fields and migrateLegacy passes them
+// straight through to Config.
 type LegacyConfig struct {
-	SchemaVersion int                  `yaml:"schema_version"`
-	MonorepoRoot  string               `yaml:"monorepo_root"`
-	Repositories  []Repository         `yaml:"repositories"`
-	Databases     []LegacyDatabase     `yaml:"databases"`
-	Ports         map[string]PortRange `yaml:"ports"`
-	Registry      RegistryConfig       `yaml:"registry"`
-	Teardown      TeardownConfig       `yaml:"teardown"`
-	MCP           MCPConfig            `yaml:"mcp"`
+	SchemaVersion  int                  `yaml:"schema_version"`
+	MonorepoRoot   string               `yaml:"monorepo_root"`
+	Repositories   []Repository         `yaml:"repositories"`
+	Databases      []LegacyDatabase     `yaml:"databases"`
+	Engines        []Engine             `yaml:"engines"`
+	Ports          map[string]PortRange `yaml:"ports"`
+	Registry       RegistryConfig       `yaml:"registry"`
+	Teardown       TeardownConfig       `yaml:"teardown"`
+	MCP            MCPConfig            `yaml:"mcp"`
+	Instinct       InstinctConfig       `yaml:"instinct"`
+	MemoryBackends []MemoryBackendCfg   `yaml:"memory_backends"`
+	Export         ExportConfig         `yaml:"export"`
 }
 
 // LegacyDatabase is the v0.3 shape of one `databases:` entry. The
@@ -551,13 +565,17 @@ func (c *Config) applyInstinctDefaults() {
 func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 	var warnings []string
 	c := &Config{
-		SchemaVersion: lc.SchemaVersion,
-		MonorepoRoot:  lc.MonorepoRoot,
-		Repositories:  lc.Repositories,
-		Ports:         lc.Ports,
-		Registry:      lc.Registry,
-		Teardown:      lc.Teardown,
-		MCP:           lc.MCP,
+		SchemaVersion:  lc.SchemaVersion,
+		MonorepoRoot:   lc.MonorepoRoot,
+		Repositories:   lc.Repositories,
+		Engines:        lc.Engines,
+		Ports:          lc.Ports,
+		Registry:       lc.Registry,
+		Teardown:       lc.Teardown,
+		MCP:            lc.MCP,
+		Instinct:       lc.Instinct,
+		MemoryBackends: lc.MemoryBackends,
+		Export:         lc.Export,
 	}
 	if lc.SchemaVersion == 1 {
 		warnings = append(warnings,
