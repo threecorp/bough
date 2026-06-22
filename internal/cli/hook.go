@@ -95,13 +95,19 @@ func newHookListCmd() *cobra.Command {
 				return nil
 			}
 			for _, event := range hooks.AllEvents() {
-				entries, ok := set[event]
+				groups, ok := set[event]
 				if !ok {
 					continue
 				}
 				fmt.Fprintf(c.OutOrStdout(), "%s:\n", event)
-				for _, e := range entries {
-					fmt.Fprintf(c.OutOrStdout(), "  - %s %q (matcher=%q)\n", e.Type, e.Command, e.Matcher)
+				for _, g := range groups {
+					matcher := g.Matcher
+					if matcher == "" {
+						matcher = "*"
+					}
+					for _, e := range g.Hooks {
+						fmt.Fprintf(c.OutOrStdout(), "  - matcher=%s %s %q\n", matcher, e.Type, e.Command)
+					}
 				}
 			}
 			return nil
