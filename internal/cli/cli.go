@@ -42,6 +42,11 @@ func NewRootCmd(version string) *cobra.Command {
 		newMemoryCmd(),
 		// v0.6 capability compiler subsystem.
 		newCapabilityCmd(),
+		// v0.7 Bootstrap safety floor — hook install / replay /
+		// doctor. v0.7.0 first commit lands the cobra surface +
+		// the internal/hooks/ skeleton; the underlying Manager
+		// bodies fill in across the subsequent v0.7.0 sub-phases.
+		newHookCmd(),
 	)
 	return root
 }
