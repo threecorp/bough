@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.6.1
+
+Drop-in patch on top of v0.6.0 that absorbs three findings from the
+2026-06-22 dogfooding session. No schema, plugin contract, or
+binary-API breakage — existing plugins and `.bough.yaml` files
+upgrade unchanged. The v0.6.1 surface is a strict superset of
+v0.6.0 with three additions surfaced as opt-in switches.
+
+### Fixed
+
+- **`bough config validate` accepts the v0.5+ root sections**. The
+  internal `LegacyConfig` superset the strict first-pass YAML
+  decoder uses had been frozen at the v0.3+v0.4 field set, so any
+  `.bough.yaml` that wired `instinct:` / `memory_backends:` /
+  `engines:` / `export:` got rejected with `unknown field` even
+  though every other subcommand loaded the file cleanly through a
+  separate entry point. `LegacyConfig` now mirrors all four
+  sections; `migrateLegacy` passes them straight into the canonical
+  `Config`. Regression backstop: `TestLoad_acceptsV05Sections`.
+
+### Added
+
+- **`bough-mcp-server --allow-write`** unlocks the two state-
+  changing Tools (`memory.store`, `memory.forget`) so MCP clients
+  (Claude Desktop, Cursor, Aider) can persist or retire behavioural
+  rules from the same stdio surface that already served
+  `memory.query`. Off by default to keep v0.6.0 read-only-first
+  semantics intact. `memory.promote` stays refused even with the
+  flag because it needs the host coordinator (Store(target) +
+  Forget(source) pair), which the MCP server intentionally does not
+  embed — that lands in v0.7 alongside the Bootstrap layer.
+
+  The server stamps every store with the canonical dedupe key
+  (= sha256 of rule + scope, mirroring `internal/instinct.DedupeKey`)
+  and forces `state=candidate` so the host coordinator's
+  approval flow (`bough instinct approve <id>`) still gates the
+  active set. MCP cannot bypass approval. Every store / forget
+  writes a one-line stderr audit so an operator running the server
+  under `claude --worktree` sees who hit the write surface; the
+  coordinator-level `events.jsonl` audit integration follows in
+  v0.7.
+
+  Capability advertise mirrors the flag: with `--allow-write`,
+  `BoughMCPCapabilities.ReadOnly` flips to false and
+  `state_changing_tools` to true so an MCP client can probe the
+  writable surface programmatically from `initialize`.
+
+- **`require_signed: true` is enforced at spawn time for memory
+  plugins**. v0.6.0 shipped the flag as scaffolding only; v0.6.1
+  wires the spawn-time gate `internal/cli.enforceSigning` into
+  `discoverMemoryBackend` + `discoverFallbackSQLite` so an
+  unverified plugin actually refuses to spawn. Allowlisted plugins
+  pass through unchanged; missing verifier tooling (= cosign /
+  minisign not on `$PATH`) falls open with a `[NOTICE]` so an
+  operator flipping the flag without installing the tools sees what
+  is missing rather than tripping over a silent refusal. v0.7 adds
+  a `fail_close_on_missing_verifier` knob for enterprise deploys
+  and extends the gate to engine plugins. Three env variables wire
+  cosign keyless verification:
+  `BOUGH_SIGNING_CERT_IDENTITY_REGEXP`,
+  `BOUGH_SIGNING_CERT_OIDC_ISSUER`,
+  `BOUGH_SIGNING_PUBKEY` (minisign).
+
+### Notes
+
+- v0.6.0 → v0.6.1 is a drop-in upgrade; no migration steps. Existing
+  plugins keep working. Operators who flip `require_signed: true`
+  should run `bough plugins verify <binary>` against each memory
+  plugin in their install path first to confirm the verifier flow
+  matches the host's identity / issuer environment variables.
+- The MCP server's stderr audit lines start with
+  `bough-mcp-server: memory.store:` / `bough-mcp-server: memory.forget:`
+  so an operator wiring journald / Loki / CloudWatch ingestion can
+  route them deterministically.
+- v0.7 plan was reframed during the same dogfooding session. The
+  v0.6.x patch series stays focused on tightening v0.6.0 surfaces;
+  the Bootstrap layer (= hook-driven auto-generate, `bough init`,
+  ECC interop) ships in v0.7 per `docs/ROADMAP.md`.
+
 ## v0.6.0
 
 Round 4 external review (June 2026) scoped v0.6.0 to mem0 first-
