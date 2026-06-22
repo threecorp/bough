@@ -85,6 +85,43 @@ Graphiti is deferred to v0.6.x as a separate GoReleaser archive
   interface, OpenAI Function Calling emitter, MemoryBackend v2)
   are explicitly deferred — see docs/ROADMAP.md for the timing.
 
+### Post-ship findings (2026-06-22 dogfooding)
+
+These were surfaced after the v0.6.0 tag and Release publish. They
+do not invalidate the release; the listed items are tracked for the
+v0.6.x patch release.
+
+- **`bough config validate` reports `unknown field` on the v0.5+
+  root sections** (`instinct`, `engines`, `memory_backends`,
+  `export`). The validator's first-pass decoder uses
+  `internal/config.LegacyConfig` as a v0.3-and-v0.4 field-name
+  superset; the v0.5 schema bump did not mirror the new sections
+  into that struct, so `validate` rejects a file every other
+  subcommand loads cleanly. v0.6.x: extend `LegacyConfig` to mirror
+  the v0.5 additions, then keep `migrateLegacy` honest about which
+  fields it actually migrates.
+- **Layer-confusion clarification in the docs**. v0.6 dogfooding
+  uncovered that reviewers (and the maintainers) were conflating
+  the 2026 anti-pattern literature on memory CRUD workflows /
+  flat-skill libraries with bough's parallel compile target chain.
+  `docs/CONCEPTS.md` lands alongside this entry to pin the three
+  layers (memory architecture / skill execution orchestration /
+  artifact compile chain); `docs/INSTINCTS.md` adds a Related
+  projects table that maps each external system to its layer.
+- **v0.7 scope reframed to `Bootstrap layer`**. The user-facing
+  intent — `claude --worktree X` not only materialises an isolated
+  dev environment but also generates the artifacts the next session
+  will need — needs a dedicated trigger model above the existing
+  CapabilityCompiler. ROADMAP v0.7 entry rewritten accordingly.
+- **GoReleaser release pipeline regression**. The v0.6.0 tag's
+  first two `release.yml` runs failed because (a) `.goreleaser.
+  yaml` carried an unsupported `signs.if` field (removed in
+  GoReleaser v2), and (b) the workflow neither installed cosign
+  nor granted `id-token: write` for the keyless flow. Fixed in
+  e4e1e59 and 6e14237 respectively; the tag was force-moved twice
+  to land on the corrected commits before the final
+  GoReleaser run succeeded.
+
 ## v0.5.1
 
 Drop-in patch on top of v0.5.0 — no schema, plugin contract, or

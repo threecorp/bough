@@ -61,25 +61,70 @@ Graphiti is deferred to v0.6.x as a separate GoReleaser archive.
 - ✅ docs/CAPABILITY_COMPILER.md, docs/MCP_SERVER.md,
   docs/SIGNING.md ship alongside the binaries
 
-## v0.6.x — Experimental compilers
+## v0.6.x — Patch + experimental compilers
 
+Dogfooding the v0.6.0 ship surfaced one false-negative in the host
+config validator and re-framed the v0.7 Bootstrap design. v0.6.x
+absorbs both before the next minor.
+
+- `bough config validate` accepts v0.5+ root sections (`instinct`,
+  `engines`, `memory_backends`, `export`) — the v0.5 schema bump
+  forgot to mirror the new fields into the LegacyConfig superset the
+  validator's first-pass decoder uses, so `validate` reports
+  `unknown field` while every other subcommand loads the file
+  cleanly. (Post-ship finding, 2026-06-22.)
+- `bough memory reconcile --from sqlite --to mem0` materialises the
+  split-brain recovery story the v0.6 mem0 plugin promised in
+  `docs/EXTERNAL_MEMORY_BACKENDS.md`.
+- `bough-mcp-server --allow-write` and the three state-changing
+  Tools (`memory.store`, `memory.forget`, `memory.promote`), all
+  routed through the same audit log the v0.5 coordinator writes.
+- Plugin signing strict mode (`require_signed: true` actually
+  refuses to spawn unverified plugins; v0.6.0 only exposes the
+  verify CLI).
 - SkillX adapter (round 3 AI #3: zjunlp/SkillX research repo)
 - Anything2Skill-style compiler
 - Alita-G MCP tool compiler
-- All ship as community / experimental plugins under `examples/`
+- Experimental compilers ship as community / experimental plugins
+  under `examples/`.
 
-## v0.7+ — Evaluator-driven evolution
+## v0.7 — Bootstrap layer
 
-- `SkillEvaluator` materialised
-- GEPA reflective prompt optimiser adapter
-- TextGrad gradient evaluator adapter
-- MUSE-Autoskill lifecycle evaluator adapter
-- SkillAudit paired-trajectory auditor adapter (round 3 AI #3)
+The v0.6 retrospective (2026-06-22) clarified that the user-facing
+intent — "`claude --worktree X` materialises an isolated dev
+environment **and** generates the artifacts the next session will
+need" — needs a dedicated layer above the existing CapabilityCompiler.
+The Layer C compile path is correct as-is; what's missing is a
+trigger model that fires *on first worktree open* and a Bootstrap
+Agent specification that picks which of the seven artifact kinds to
+materialise from the materialised sub-repos.
+
+Concretely:
+
+- `bough init` CLI (manual trigger; the same code path the hook fires)
+- `WorktreeCreate`-time invocation of a configured Bootstrap Agent
+  (opt-in; off by default per existing safety posture)
+- Bootstrap Agent specification: input sources (repo tree, git log,
+  `CLAUDE.md`, `tasks/lessons.md`, prior `.bough/memory/`), output
+  contract (artifact kind × candidate state), guardrails (rate limit,
+  artifact cap per scope, hard token budget)
+- Artifact persistence layer formalised (where each kind lands; how
+  the lifecycle interacts with `bough instinct promote` / `forget`)
+- ECC interop: when ECC's hook pipeline is already installed in a
+  monorepo, bough's Bootstrap Agent stays out of its way (config flag
+  `bootstrap.deferred_to_ecc: true`).
+- Letta Context Repositories interop: optionally treat the bough
+  memory filesystem as a Letta `memfs`-compatible projection so
+  Letta-native tools can read bough state without translation.
+- `SkillEvaluator` first materialisation so generated artifacts get
+  measured against the trajectories that produced them.
+- GEPA / TextGrad / MUSE-Autoskill / SkillAudit adapters as
+  plug-in evaluator backends.
 
 ## What bough deliberately does NOT do
 
 - weight updates (SEAL / SFT / RLHF) — model-tier concern, not orchestration
-- `instinct → skill → command → agent` as a forced single chain — round 1 rejected the rigid hierarchy in favour of a parallel compile target set
+- `instinct → skill → command → agent` as a forced single chain — round 1 rejected the **chain** in favour of a parallel compile target set. This rejection is a Layer C decision and is **orthogonal** to the 2026 Layer A (memory CRUD) and Layer B (skill execution) anti-pattern literature; see `docs/CONCEPTS.md` for the three-layer split. The seven parallel targets (memory, rule, skill, command, tool, agent, evaluator) all remain valid sinks; the InstinctCandidate metadata picks which subset to materialise.
 - proprietary vendor memory (OpenAI Memory, Anthropic Memory) — vendor lock-in
 - GPL/AGPL backends — license drift for downstream MIT/Apache users
 

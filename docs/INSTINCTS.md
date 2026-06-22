@@ -132,9 +132,29 @@ memory_backends:
     events_log: ".bough/memory/events.jsonl" # same — or supply an absolute path
 ```
 
+## Related projects
+
+bough's instinct subsystem sits in **Layer C (artifact compile chain)**;
+the projects below cover Layer A (memory architecture) and Layer B
+(skill execution orchestration) and either complement bough or solve
+a different layer entirely. See [CONCEPTS.md](CONCEPTS.md) for the
+three-layer split.
+
+| Project | Layer | Relation to bough |
+|---|---|---|
+| [affaan-m/everything-claude-code (ECC)](https://github.com/affaan-m/everything-claude-code) + [affaan-m/ECC](https://github.com/affaan-m/ECC) | C (and a touch of B via hooks) | Same Layer C answer (parallel compile target via `skill / command / agent` slash branching), but ECC fires from Claude Code's `PreToolUse` / `PostToolUse` / `SessionEnd` / `PreCompact` hooks. bough's `instinct ingest` is the explicit-CLI counterpart. v0.7 Bootstrap layer is where the two trigger models meet. |
+| [Letta Context Repositories](https://www.letta.com/blog/context-repositories/) + [Letta memfs](https://docs.letta.com/letta-code/memfs) | A | Git-backed memory filesystem with worktree-isolated subagents and sleep-time defragmentation. A `MemoryBackend` plugin candidate for v0.7. |
+| [mem0](https://mem0.ai/) | A | Shipped as a first-class plugin in v0.6 (`bough-plugin-memory-mem0`). |
+| [Graphiti (getzep)](https://help.getzep.com/graphiti/) | A | Skeleton + docker-compose snippet ship in v0.6; binary plugin lands in v0.6.x. |
+| [Anthropic Claude Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) + [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills) | B (the runtime that reads `claude-skill` emitter output) | bough emits SKILL.md via `bough capability compile --to claude-skill`; the Skills runtime decides when to load it. |
+| [Model Context Protocol (spec 2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25) | B (transport) | bough emits MCP tool / resource / prompt bundles via `--to mcp`; `bough-mcp-server` speaks the protocol. |
+| [SkillX (zjunlp)](https://github.com/zjunlp/SkillX) / [SkillRT](https://arxiv.org/html/2604.03088v1) / [GraSP](https://arxiv.org/html/2604.17870v1) / [AgentSkillOS](https://arxiv.org/html/2603.02176v1) | B (skill execution critique) | 2026 anti-pattern papers on flat / sequential skill libraries. Their critique targets Layer B, not bough's Layer C compile dispatch — but the alternative shapes they propose (typed DAG, direct-sum tier, parallel compile target) inform bough's `CapabilityArtifactKind` set. |
+| [AtomMem](https://arxiv.org/abs/2601.08323) | A (memory CRUD critique) | Argues that static hand-crafted memory workflows are anti-pattern. Useful background for plugin authors choosing between mem0 / Letta / Graphiti / SQLite. |
+
 ## See also
 
+- [CONCEPTS.md](CONCEPTS.md) — the three-layer model (memory architecture / skill execution / artifact compile chain).
 - [BACKENDS.md](BACKENDS.md) — choosing a memory backend.
 - [EXTERNAL_MEMORY_BACKENDS.md](EXTERNAL_MEMORY_BACKENDS.md) — wiring mem0 / Graphiti adapters.
 - [SECURITY.md](SECURITY.md) — third-party plugin trust + SKILL.md supply-chain risk.
-- [ROADMAP.md](ROADMAP.md) — v0.5 → v0.6 → v0.7+ plan.
+- [ROADMAP.md](ROADMAP.md) — v0.5 → v0.6 → v0.7 plan.

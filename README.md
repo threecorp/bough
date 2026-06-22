@@ -238,6 +238,17 @@ schemas, scope model, safety pipeline (redaction, poisoning
 guard, dedupe, decay), and the conformance contract every backend
 honours.
 
+bough operates in **Layer C (artifact compile chain)**. Layer A
+(memory architecture: short / long / archival hierarchy, CRUD
+policy) is delegated to the chosen `MemoryBackend` plugin. Layer B
+(runtime skill invocation) is the host AI's job. The seven Layer C
+compile targets — memory, rule, skill, command, tool, agent,
+evaluator — are **parallel** sinks, not a chain; `instinct → skill
+→ command → agent` as a forced sequence was rejected in round 1.
+See [docs/CONCEPTS.md](docs/CONCEPTS.md) for the three-layer split
+and how bough relates to ECC, Letta, Anthropic Skills, mem0, and
+the 2026 anti-pattern literature.
+
 The subsystem is **off by default**. Enable it by setting
 `instinct.enabled: true` in `.bough.yaml`:
 
