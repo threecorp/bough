@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -318,8 +319,16 @@ func keysOfPortRanges(m map[string]engineapi.PortRange) []string {
 // The role-port assignment is the Low end of each role's range. The
 // host's production allocator does deterministic crc32(name|role)
 // hashing, but the conformance suite is a single per-process test —
-// taking Low keeps the test reproducible without dragging the
-// allocator into the picture.
+// scanning from Low keeps the test reproducible most of the time
+// without dragging the allocator into the picture.
+//
+// CI runners occasionally have another process bound to Low (= the
+// 50000-postgres-collision recurrence on GHA ubuntu-24.04 runners
+// where another postgres instance happens to be on 50000). To make
+// the suite stable against that, allocateRoles scans Low → High and
+// uses the first port that binds. Empty range or all-busy range
+// returns Low to preserve the v0.7 error path (= "port already in
+// use" surfaces from Up rather than from the allocator).
 //
 // `mainRole` is assumed to exist in ranges; the caller guards that
 // invariant before this is reached.
@@ -328,13 +337,42 @@ func allocateRoles(ranges map[string]engineapi.PortRange, mainRole string) ([]en
 	portInts := make([]int, 0, len(ranges))
 	mainPort := 0
 	for role, pr := range ranges {
-		ports = append(ports, engineapi.PortSpec{Role: role, Port: pr.Low})
-		portInts = append(portInts, pr.Low)
+		port := pickFreePort(pr.Low, pr.High)
+		ports = append(ports, engineapi.PortSpec{Role: role, Port: port})
+		portInts = append(portInts, port)
 		if role == mainRole {
-			mainPort = pr.Low
+			mainPort = port
 		}
 	}
 	return ports, portInts, mainPort
+}
+
+// pickFreePort scans [low, high] for the first port that can be
+// momentarily bound on 127.0.0.1. The bind is released before
+// return so the engine container can claim it. The scan is bounded
+// at 64 attempts because conformance ranges are wide enough that
+// > 64 consecutive busy ports indicates something else is wrong.
+//
+// Falls back to low when no free port is found so the caller still
+// surfaces the (deterministic) failure path through the engine
+// rather than swallowing the contention here.
+func pickFreePort(low, high int) int {
+	if high <= low {
+		return low
+	}
+	limit := low + 64
+	if limit > high {
+		limit = high
+	}
+	for p := low; p <= limit; p++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
+		if err != nil {
+			continue
+		}
+		_ = ln.Close()
+		return p
+	}
+	return low
 }
 
 // isPermissionDeniedFromContainerUID recognises the
