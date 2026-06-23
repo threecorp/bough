@@ -146,21 +146,21 @@ func parseInstinct(raw []byte) (*Instinct, error) {
 	}
 	frontBytes := rest[:end]
 	body := bytes.TrimLeft(rest[end+len("\n---"):], "\n\r-")
-	raw_ := map[string]any{}
-	if err := yaml.Unmarshal(frontBytes, &raw_); err != nil {
+	rawMap := map[string]any{}
+	if err := yaml.Unmarshal(frontBytes, &rawMap); err != nil {
 		return nil, fmt.Errorf("yaml: %w", err)
 	}
 	in := &Instinct{
-		ID:         stringField(raw_, "id"),
-		Trigger:    stringField(raw_, "trigger"),
-		Confidence: floatField(raw_, "confidence"),
-		Domain:     stringField(raw_, "domain"),
-		Scope:      stringField(raw_, "scope"),
-		Observed:   intField(raw_, "observed"),
-		FirstSeen:  timeField(raw_, "first_seen"),
-		LastSeen:   timeField(raw_, "last_seen"),
+		ID:         stringField(rawMap, "id"),
+		Trigger:    stringField(rawMap, "trigger"),
+		Confidence: floatField(rawMap, "confidence"),
+		Domain:     stringField(rawMap, "domain"),
+		Scope:      stringField(rawMap, "scope"),
+		Observed:   intField(rawMap, "observed"),
+		FirstSeen:  timeField(rawMap, "first_seen"),
+		LastSeen:   timeField(rawMap, "last_seen"),
 		Body:       string(body),
-		Raw:        raw_,
+		Raw:        rawMap,
 	}
 	return in, nil
 }
