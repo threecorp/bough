@@ -17,7 +17,7 @@ func newPluginsCmd() *cobra.Command {
 		Use:   "plugins",
 		Short: "List and verify bough plugin binaries",
 	}
-	cmd.AddCommand(newPluginsListCmd(), newPluginsVerifyCmd())
+	cmd.AddCommand(newPluginsListCmd())
 	return cmd
 }
 
