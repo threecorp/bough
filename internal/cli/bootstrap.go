@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,48 +11,76 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ikeikeikeike/bough/internal/bootstrap"
+	"github.com/ikeikeikeike/bough/internal/evolve"
+	"github.com/ikeikeikeike/bough/internal/judge"
+	"github.com/ikeikeikeike/bough/pkg/schema"
+	capapi "github.com/ikeikeikeike/bough/plugins/capability/api"
 )
 
-// newBootstrapCmd wires `bough bootstrap` — the v0.7.0 Bootstrap
-// safety floor's user-facing entry point.
+// newBootstrapCmd wires `bough bootstrap` — the v0.7.0 safety floor
+// gains the v0.7.1 --apply path. Default is still dry-run (= round
+// 5 reviewer non-negotiable: silent CLAUDE.md overwrite is the
+// highest blast-radius failure mode); --apply opts into the
+// pipeline that runs the 4-gate Go port + LLM judge and writes
+// PASS candidates into .claude/skills/<label>.md.
 //
-// Round 5 review insisted (AI A Alternative 2 = Dry-run First) that
-// Bootstrap Agent output land as Markdown proposals under
-// `.bough/proposals/<ts>/` first, so the operator can `git diff`
-// the candidates and approve them through `bough instinct approve`
-// rather than the agent reaching directly into SQLite. v0.7.0
-// implements only the `--dry-run` path; the active path that
-// promotes candidates into the memory backend lands in v0.7.1
-// alongside the evolve-v3 + LLM-judge integration.
+// Backend defaults:
+//
+//	--judge=heuristic   (= LLM-free, deterministic, zero per-call cost)
+//	--judge=replay      (= fixture playback from .evolve/judgements/)
+//	--judge=claude      (= stub in v0.7.1; live in v0.7.2)
+//
+// The --force flag bypasses both the verdict gate (= DOUBT promotes
+// alongside PASS) and the git-clean check on .claude/. FAIL stays
+// skipped even with --force.
 //
 // The v0.7.0 dry-run reads raw observations from
 // `.bough/observations.jsonl` (= the file `bough hook handle`
-// writes from O-1.6), groups them by (event, tool), and writes
-// one Markdown file per group plus a `_manifest.md` index. With
-// no observations yet, the dry-run still produces the manifest
-// + an empty group summary so the operator sees the shape the
-// approval flow will consume.
+// writes from O-1.6), groups them by event + tool, and writes one
+// Markdown file per group plus a _manifest.md index. v0.7.1 reuses
+// the same observation log for --apply.
 func newBootstrapCmd() *cobra.Command {
 	var (
-		dryRun bool
-		outDir string
-		obsLog string
+		dryRun        bool
+		apply         bool
+		force         bool
+		judgeBackend  string
+		promptVersion string
+		modelID       string
+		outDir        string
+		obsLog        string
+		auditDir      string
 	)
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "Generate candidate artifacts (memory / rule / skill / command / tool / agent / evaluator) from observations",
 		Long: `bough bootstrap synthesises CapabilityArtifact candidates
-from the raw event log Claude Code hooks produce. v0.7.0 ships
-only the --dry-run path: candidates land as Markdown proposals
-under .bough/proposals/<timestamp>/ so the operator can git-diff
-the output before any row reaches the memory backend.
+from the raw event log Claude Code hooks produce.
 
-The live path (= candidates auto-stored as state="candidate" with
-the LLM judge ranking + the evolve-v3 cluster framework) ships in
-v0.7.1.`,
+Default (= no flag): the dry-run path writes Markdown proposals
+under .bough/proposals/<timestamp>/ so the operator can git-diff
+the output before any row reaches the memory backend or the
+.claude/ tree.
+
+--apply (= v0.7.1): runs the 4-gate Go port + JudgeClient pipeline
+and writes PASS candidates into .claude/skills/<label>.md atomically.
+The git status check refuses to overwrite uncommitted .claude/
+edits; --force overrides.`,
 		RunE: func(c *cobra.Command, _ []string) error {
-			if !dryRun {
-				return fmt.Errorf("bough bootstrap requires --dry-run in v0.7.0 (= the live ingest path lands in v0.7.1 with evolve-v3 + LLM judge)")
+			if apply && dryRun {
+				return fmt.Errorf("--apply and --dry-run are mutually exclusive")
+			}
+			if apply {
+				return runApply(c.Context(), c.OutOrStdout(), applyConfig{
+					Backend:       judgeBackend,
+					PromptVersion: promptVersion,
+					ModelID:       modelID,
+					ObsLog:        obsLog,
+					AuditDir:      auditDir,
+					Force:         force,
+				})
 			}
 			ts := time.Now().UTC().Format("20060102T150405Z")
 			target := filepath.Join(outDir, ts)
@@ -85,10 +114,146 @@ v0.7.1.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "write candidate artifacts to .bough/proposals/<ts>/*.md instead of the memory backend (REQUIRED in v0.7.0)")
-	cmd.Flags().StringVar(&outDir, "out-dir", ".bough/proposals", "parent directory for the per-run proposals subdirectory")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "write candidate artifacts to .bough/proposals/<ts>/*.md instead of the memory backend (v0.7.0 default; v0.7.1 keeps the path for back-compat)")
+	cmd.Flags().BoolVar(&apply, "apply", false, "v0.7.1: run the 4-gate + judge pipeline and write PASS candidates into .claude/skills/<label>.md")
+	cmd.Flags().BoolVar(&force, "force", false, "with --apply: promote DOUBT verdicts + bypass the .claude/ git-clean check (FAIL stays skipped)")
+	cmd.Flags().StringVar(&judgeBackend, "judge", "heuristic", "JudgeClient backend: heuristic (default, LLM-free) | replay (.evolve fixtures) | claude (v0.7.2)")
+	cmd.Flags().StringVar(&promptVersion, "prompt-version", "v3-2026-06-23", "prompt template version key — bump on prompt change")
+	cmd.Flags().StringVar(&modelID, "model", "claude-opus-4-7", "model id stamped into the audit record (= reproducibility key)")
+	cmd.Flags().StringVar(&outDir, "out-dir", ".bough/proposals", "parent directory for the per-run proposals subdirectory (dry-run only)")
 	cmd.Flags().StringVar(&obsLog, "observations", ".bough/observations.jsonl", "raw observation log path (= the file `bough hook handle` writes; defaults to .bough/observations.jsonl)")
+	cmd.Flags().StringVar(&auditDir, "audit-dir", ".evolve", "root for audit records + judge replay fixtures (cache_key.json under judgements/)")
 	return cmd
+}
+
+// applyConfig pins the flag set runApply consumes.
+type applyConfig struct {
+	Backend       string
+	PromptVersion string
+	ModelID       string
+	ObsLog        string
+	AuditDir      string
+	Force         bool
+}
+
+// runApply is the v0.7.1 --apply path. The implementation lives
+// here (not in internal/bootstrap/) so the CLI surface stays the
+// single source of truth for flags + defaults.
+func runApply(ctx context.Context, stdout interface{ Write(p []byte) (n int, err error) }, cfg applyConfig) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bundles, err := loadObservationsAsBundles(cfg.ObsLog)
+	if err != nil {
+		return err
+	}
+	if len(bundles) == 0 {
+		fmt.Fprintln(stdout, "no observations to apply (run `bough hook install` and exercise the worktree first)")
+		return nil
+	}
+	inner, err := selectJudge(cfg.Backend, cfg.ModelID, cfg.AuditDir)
+	if err != nil {
+		return err
+	}
+	audit := evolve.NewAuditDir(cfg.AuditDir)
+	cached := evolve.NewCachedJudge(inner, audit)
+	pipe := evolve.Pipeline{
+		Judge:         cached,
+		PromptVersion: cfg.PromptVersion,
+		ModelID:       cfg.ModelID,
+	}
+	res, err := pipe.Run(ctx, bundles)
+	if err != nil {
+		return fmt.Errorf("evolve pipeline: %w", err)
+	}
+	monorepoRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	appliedRes, err := bootstrap.Apply(ctx, res, bootstrap.ApplyOptions{
+		MonorepoRoot: monorepoRoot,
+		Force:        cfg.Force,
+		Stdout:       stdout,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "promoted=%d demoted=%d skipped=%d\n", appliedRes.Promoted, appliedRes.Demoted, len(appliedRes.Skipped))
+	for _, f := range appliedRes.WrittenFiles {
+		fmt.Fprintf(stdout, "  wrote %s\n", f)
+	}
+	if appliedRes.Diff != "" {
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "Diff summary:")
+		fmt.Fprintln(stdout, appliedRes.Diff)
+	}
+	return nil
+}
+
+// selectJudge wires the requested backend behind the JudgeClient
+// interface. Replay defaults to non-strict so a cache miss falls
+// through to the inner pipeline behaviour, not a hard error.
+func selectJudge(backend, modelID, auditRoot string) (capapi.JudgeClient, error) {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "", "heuristic":
+		return judge.NewHeuristicJudgeClient(), nil
+	case "replay":
+		return judge.NewReplayJudgeClient(filepath.Join(auditRoot, "judgements"), false), nil
+	case "claude":
+		return judge.NewClaudeJudgeClient(modelID), nil
+	default:
+		return nil, fmt.Errorf("--judge %q: unknown backend (use heuristic / replay / claude)", backend)
+	}
+}
+
+// loadObservationsAsBundles reads .bough/observations.jsonl and
+// projects each row into a TraceBundle. The schema matches the
+// shape `bough hook handle` writes: {ts, event, payload}. Empty
+// content rows are dropped on Gate 1 anyway, but the projection
+// preserves them so the audit log records the drop reason.
+func loadObservationsAsBundles(path string) ([]schema.TraceBundle, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	out := []schema.TraceBundle{}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	i := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			TS      string          `json:"ts"`
+			Event   string          `json:"event"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		ts, _ := time.Parse(time.RFC3339Nano, rec.TS)
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		i++
+		out = append(out, schema.TraceBundle{
+			ID:         fmt.Sprintf("obs-%d", i),
+			Source:     schema.TraceSourceSessionLog,
+			Scope:      schema.Scope{Level: schema.ScopeWorktree},
+			Content:    string(rec.Payload),
+			CapturedAt: ts,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan %s: %w", path, err)
+	}
+	return out, nil
 }
 
 // observationSummary aggregates the raw observations.jsonl file
