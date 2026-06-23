@@ -86,10 +86,10 @@ func (s SkillAudit) Evaluate(_ context.Context, req *api.EvaluateReq) (*api.Eval
 	}
 	delta := currConf - peerConf
 
-	outcome := api.OutcomeKeep
+	var outcome api.EvaluationOutcome
+	var utility float64
+	var expl string
 	prune := false
-	utility := 0.6
-	expl := ""
 	switch {
 	case delta > 0.05:
 		outcome = api.OutcomeKeep
