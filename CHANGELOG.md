@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.9.3
+
+The "make the loop actually run" patch. Dogfooding v0.9.2 against a real
+1090-instinct corpus surfaced two defects that left the continuous-
+learning loop inert end-to-end: the ECC importer migrated zero instincts,
+and neither the observer nor the GATE 5 judge could read `claude --print`'s
+output. Both are the same class of bug — a mock/fixture that never matched
+the real shape — and both are fixed here.
 
 ### Fixed
 
