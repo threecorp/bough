@@ -30,7 +30,7 @@ func TestBuild_ConfidenceSort(t *testing.T) {
 	hi := strings.Index(block, "do high")
 	mi := strings.Index(block, "do mid")
 	lo := strings.Index(block, "do low")
-	if !(hi < mi && mi < lo) {
+	if hi >= mi || mi >= lo {
 		t.Errorf("not confidence-sorted: hi=%d mi=%d lo=%d\n%s", hi, mi, lo, block)
 	}
 }

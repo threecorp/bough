@@ -51,6 +51,8 @@ func NewRootCmd(version string) *cobra.Command {
 		newInstinctCmd(),
 		newEvolveCmd(),
 		newInjectContextCmd(),
+		newSessionEndCmd(),
+		newPreserveInstinctsCmd(),
 	)
 	return root
 }
