@@ -2,6 +2,30 @@
 
 Round 3 external review (June 2026) settled the v0.5 → v0.6 → v0.7+ shape. This document is the canonical reference; the release CHANGELOG ties specific commits back to each item.
 
+## v0.9.1 — Evolve pipeline (shipped 2026-06-25)
+
+The evolve half of the ECC port. v0.9.0 shipped the observer (=
+instinct extraction); v0.9.1 ships the five-gate clustering pipeline
+that turns instincts into skills / agents / commands.
+
+- ✅ `bough evolve` (preview, no LLM) / `bough evolve --generate`
+  (GATE 5 + emit). The ECC `/evolve-skill-manual-v3` UX.
+- ✅ `internal/evolve/` — tokenize / Jaccard / coverage, connected-
+  component clustering, the four mechanical gates (ECC v3 verbatim:
+  MEMBER_MIN=2 / COH_MIN=0.20 / LEXICON_COVERAGE_MAX=0.55 /
+  REL_ISOLATION_MIN=0.40), GATE 5 LLM judge via `claude --print`,
+  cluster-labels.json with the sacred-string rule + backup, and the
+  SKILL.md / agent / command emitters.
+- ✅ GATE 5 verdict routing: PASS mints a fresh label, DOUBT reuses
+  the nearest prior label, FAIL rejects.
+- ✅ Agent eligibility (cluster >= 3 + avg conf >= 0.75) + command
+  eligibility (workflow domain + conf >= 0.70), ECC thresholds.
+- ✅ `claudecli.Provider.GenerateRaw` for pre-rendered prompts.
+
+v0.9.2 (= upcoming): `bough inject-context` UserPromptSubmit hook +
+SessionEnd handlers + PreCompact + optional observer daemon +
+`bough ecc import`.
+
 ## v0.9.0 — ECC verbatim port (shipped 2026-06-23)
 
 The "reset to the operator's vision" release. v0.5-v0.8 accreted

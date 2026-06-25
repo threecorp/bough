@@ -168,6 +168,36 @@ func (p *Provider) Generate(ctx context.Context, req GenerateRequest) (*Generate
 	}, nil
 }
 
+// GenerateRaw spawns the Claude CLI against an already-rendered
+// prompt body, skipping the text/template pass Generate runs. The
+// evolve judge uses this because its prompt has already been
+// rendered against the cluster data — re-rendering would choke on
+// any literal `{{` an instinct body contains (= e.g. an instinct
+// about Go templates). Returns the raw stdout bytes + the limiter
+// snapshot for the audit log.
+func (p *Provider) GenerateRaw(ctx context.Context, promptBody string) ([]byte, Snapshot, error) {
+	if p.Limiter == nil {
+		return nil, Snapshot{}, errors.New("claudecli.GenerateRaw: Limiter is nil")
+	}
+	if err := p.Limiter.Acquire(); err != nil {
+		return nil, p.Limiter.Snapshot(), err
+	}
+	args := p.buildArgs()
+	env := observe.SanitizeAnthropicEnv(os.Environ())
+	raw, err := p.invoke(ctx, args, env, promptBody)
+	if err != nil {
+		if DefaultRetryOnce && isTransient(err) {
+			raw, err = p.invoke(ctx, args, env, promptBody)
+		}
+		if err != nil {
+			p.Limiter.RecordFailure()
+			return nil, p.Limiter.Snapshot(), err
+		}
+	}
+	p.Limiter.RecordSuccess()
+	return raw, p.Limiter.Snapshot(), nil
+}
+
 func (p *Provider) buildArgs() []string {
 	args := []string{
 		// Prompt is passed via -p<prompt> after sub.Run binds; we

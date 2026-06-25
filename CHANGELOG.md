@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.9.1
+
+The "Evolve pipeline" release. v0.9.0 shipped the observer half (=
+`claude --print` extracts instincts from session observations);
+v0.9.1 ships the evolve half — the ECC v3 five-gate clustering
+pipeline that turns the accumulated instinct corpus into Claude
+Code skills / agents / commands.
+
+All GATE 5 LLM work runs through `claude --print` inside the
+operator's subscription. GATE 1-4 are pure-Go mechanical filters
+that run with no LLM call, so `bough evolve` (preview) costs
+nothing; only `bough evolve --generate` spends subscription tokens
+— one `claude --print` call per gate-passing cluster, hard-capped
+by the v0.9.0 self-DoS limiter.
+
+### Added
+
+- **`bough evolve`** (preview) / **`bough evolve --generate`** —
+  the ECC `/evolve-skill-manual-v3` UX. Preview runs GATE 1-4
+  mechanically and lists the gate-passing clusters + the exact
+  number of `claude --print` calls `--generate` would make.
+  `--generate` runs GATE 5 + writes the artifacts.
+- **`internal/evolve/`** — the pipeline:
+  - tokenize.go — Tokenize / Jaccard / coverage with the ECC
+    stopword list (function words + high-frequency tooling verbs).
+  - cluster.go — Discover: weak-attachment seed filter +
+    connected-component clustering over the cohesion graph.
+  - gates.go — the four mechanical gates, ECC v3 verbatim
+    thresholds: MEMBER_MIN=2, COH_MIN=0.20,
+    LEXICON_COVERAGE_MAX=0.55, REL_ISOLATION_MIN=0.40. Short-
+    circuits at the first failure so a 1k-instinct pass stays cheap.
+  - judge.go / judge_claude.go — GATE 5. Verdict {PASS / DOUBT /
+    FAIL}. PASS mints a fresh label, DOUBT reuses the nearest prior
+    label, FAIL rejects. The evolve package declares RenderFunc +
+    GenerateFunc so it has no import edge to claudecli and stays
+    unit-testable.
+  - labels.go — cluster-labels.json atomic R/W with the "sacred
+    string" rule (= published labels are never renamed) + backup-
+    before-edit.
+  - emit.go — SKILL.md (+ ~/.claude/skills symlink) / agent
+    (cluster >= 3 + avg conf >= 0.75) / command (workflow domain +
+    conf >= 0.70) renderers + atomic writers. Refuses to clobber a
+    non-symlink at the skill link path.
+  - pipeline.go — Run orchestrates discovery → gates → judge →
+    eligibility into one Outcome the CLI persists (or previews).
+- **`prompts/defaults/evolve_judge.md`** — the GATE 5 prompt.
+  Renders the cluster members + the four gate metrics so the LLM
+  sees the same numbers the mechanical gates did; returns
+  structured JSON.
+- **`claudecli.Provider.GenerateRaw`** — spawn against an already-
+  rendered prompt body, skipping the template pass Generate runs.
+  The evolve judge uses this because re-rendering would choke on a
+  literal `{{` an instinct body might contain.
+
+### Deferred to v0.9.2
+
+- `bough inject-context` UserPromptSubmit hook (9.5KB cap +
+  confidence-sorted LRU), SessionEnd handlers (summary / evaluate /
+  evolve-claudemd), PreCompact, optional observer daemon,
+  `bough ecc import` migration.
+
 ## v0.9.0
 
 The "ECC verbatim port" release. v0.5-v0.8 accreted memory backends,

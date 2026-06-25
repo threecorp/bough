@@ -49,6 +49,7 @@ func NewRootCmd(version string) *cobra.Command {
 		// Continuous learning surface (v0.9+).
 		newObserverCmd(),
 		newInstinctCmd(),
+		newEvolveCmd(),
 	)
 	return root
 }
