@@ -2,6 +2,29 @@
 
 Round 3 external review (June 2026) settled the v0.5 → v0.6 → v0.7+ shape. This document is the canonical reference; the release CHANGELOG ties specific commits back to each item.
 
+## v0.9.2 — Full loop (shipped 2026-06-25)
+
+Closes the continuous-learning loop. v0.9.0 observed, v0.9.1
+evolved; v0.9.2 injects what was learned into the next session,
+reinforces useful instincts at session end, and migrates existing
+ECC corpora.
+
+- ✅ `bough inject-context` — UserPromptSubmit hook, confidence-
+  ranked instinct block (~9.5 KB cap), pure filesystem. Wired into
+  `bough hook handle --event UserPromptSubmit` so one entry records
+  + injects.
+- ✅ `bough session-end` — SessionEnd hook, reinforces exercised
+  instincts one confidence band up + appends eval/scores.jsonl.
+- ✅ `bough preserve-instincts` — PreCompact hook, MEMORY.md top-5
+  snapshot.
+- ✅ `bough observer start/stop/status` — opt-in background daemon
+  (PID-file lifecycle, Setsid detach, no systemd/launchd).
+- ✅ `bough ecc import` — migrate an existing ECC corpus into
+  bough's namespace (dry-run default; --apply copies).
+
+The `claude --worktree X` → observe → evolve → inject loop is now
+end-to-end. The v0.9 ECC port is complete.
+
 ## v0.9.1 — Evolve pipeline (shipped 2026-06-25)
 
 The evolve half of the ECC port. v0.9.0 shipped the observer (=

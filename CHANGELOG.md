@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.9.2
+
+The "full loop" release. v0.9.0 shipped the observer (instinct
+extraction), v0.9.1 the evolve pipeline (skill/agent/command
+generation); v0.9.2 closes the loop — the next session's context is
+seeded with what the last session learned, session-end reinforces
+the instincts that proved useful, and an existing ECC corpus can be
+migrated in.
+
+The `claude --worktree X` → observe → generate → inject-into-next-
+session cycle is now complete. Every LLM touch still runs through
+`claude --print` inside the operator's subscription.
+
+### Added
+
+- **`bough inject-context`** — the UserPromptSubmit hook handler.
+  Prints the confidence-ranked instinct block (project + global,
+  ~9.5 KB cap) so Claude Code folds the most-reliable learned
+  patterns into the next turn's context. Confidence-sorted (the
+  threecorp improvement over ECC's filename-alphabetical order that
+  truncated mid-corpus). Pure filesystem — no claude --print on the
+  prompt hot path. `bough hook handle --event UserPromptSubmit` now
+  both records the observation AND injects, so one hook entry does
+  both.
+- **`bough session-end`** — the SessionEnd hook handler. Reinforces
+  the confidence of instincts the session exercised (signal = token
+  overlap with the observation stream), moving them one band up the
+  ECC ladder (0.50 / 0.60 / 0.65 / 0.70 / 0.75 / 0.80 / 0.85), and
+  appends the evaluation to eval/scores.jsonl. Pure filesystem.
+- **`bough preserve-instincts`** — the PreCompact hook handler.
+  Snapshots the top-5 confidence instincts to MEMORY.md so a context
+  compaction does not lose them. MEMORY.md is a ScanInstincts
+  catalog-skip filename so the snapshot is never re-ingested.
+- **`bough observer start / stop / status`** — opt-in background
+  daemon that runs `observer run-once` every --interval seconds
+  (default 600). PID-file lifecycle under the project's homunculus
+  dir; Setsid detach (no systemd / launchd). Nothing auto-starts it.
+- **`bough ecc import`** — migrates an existing affaan-m/
+  everything-claude-code corpus into bough's separate namespace.
+  Default --dry-run reports per-project counts; --apply copies. The
+  ECC corpus is never modified.
+
+### Notes
+
+- v0.9.2 completes the v0.9 ECC port. The continuous-learning loop
+  (`claude --worktree` → observe → evolve → inject) is end-to-end.
+- All hook handlers no-op cleanly on a non-git directory or empty
+  corpus so a wired hook never breaks the operator's session.
+
 ## v0.9.1
 
 The "Evolve pipeline" release. v0.9.0 shipped the observer half (=
