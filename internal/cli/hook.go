@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ikeikeikeike/bough/internal/config"
+	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/hooks"
+	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/qualitygate"
 )
 
@@ -303,12 +305,47 @@ func newHookHandleCmd() *cobra.Command {
 			// per-gate TimeoutSeconds cap (= default 60s) so a
 			// hanging gate cannot block the hook.
 			dispatchQualityGates(c, event, payload)
+
+			// v0.9.2: UserPromptSubmit also injects the confidence-
+			// ranked instinct block to stdout so Claude Code folds
+			// it into the next turn's context. The single
+			// `bough hook handle --event UserPromptSubmit` wiring
+			// therefore both records the observation AND injects —
+			// no separate hook entry needed. Pure filesystem; no
+			// claude --print call on the prompt-submit hot path.
+			if event == string(hooks.EventUserPromptSubmit) {
+				dispatchInjectContext(c)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&event, "event", "", "Claude Code hook event name (e.g. PreToolUse)")
 	cmd.Flags().StringVar(&outPath, "out", "", "observation log path (default: .bough/observations.jsonl)")
 	return cmd
+}
+
+// dispatchInjectContext prints the confidence-ranked instinct block
+// to the hook's stdout for the UserPromptSubmit event. Resolution +
+// selection errors are swallowed (= a non-git directory or empty
+// corpus must not break the operator's prompt); the block is only
+// emitted when there is something worth injecting.
+func dispatchInjectContext(c *cobra.Command) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	ident, err := homunculus.DetectIdentity(cwd)
+	if err != nil {
+		return
+	}
+	layout := homunculus.NewLayout()
+	project, _ := homunculus.ScanInstincts(layout.InstinctsDir(ident.ID))
+	global, _ := homunculus.ScanInstincts(layout.GlobalInstinctsDir())
+	block, n := inject.Build(project, global, inject.Options{})
+	if n == 0 {
+		return
+	}
+	fmt.Fprint(c.OutOrStdout(), block)
 }
 
 // dispatchQualityGates loads .bough.yaml's quality_gates: section
