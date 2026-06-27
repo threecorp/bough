@@ -104,6 +104,22 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// every started subprocess on the way out — even partial-start
 	// engines from a mid-loop error are caught because startEngines
 	// returns whatever it managed to bring up.
+	// 2. git worktree add + direnv + symlinks per repository — BEFORE
+	// engines. An engine-provider repo's worktree is the path
+	// startEngines hands the plugin's Up(), so spawning engines first
+	// made that directory exist and the later `git worktree add` failed
+	// (exit 128). Per-repo failures are collected so the env-render +
+	// post_create passes skip them and the call exits non-zero instead
+	// of silently swallowing the failure.
+	failed := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
+	skip := make(map[string]bool, len(failed))
+	for _, r := range failed {
+		skip[r] = true
+	}
+
+	// 3. Engine plugins: discover binaries, Up + ReadyCheck each, and
+	// capture their EnvVars for the env-render pass. The defer kills
+	// every started subprocess on the way out.
 	engines, err := startEngines(ctx, stderr, cfg, worktreeRoot, enginePorts)
 	defer func() {
 		for _, e := range engines {
@@ -114,27 +130,24 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		return err
 	}
 
-	// 3. git worktree add + direnv + symlinks per repository. We
-	// continue on per-repo failure because partial worktree
-	// materialisation is more useful than aborting on the first
-	// error — the operator can `bough remove` and retry.
-	materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
-
-	// 4. Render + write .env.local per repository.
-	if err := renderEnvLocals(stderr, cfg, worktreeRoot, name, engines, portsCtx); err != nil {
+	// 4. Render + write .env.local per repository (skip repos whose
+	// worktree never materialised).
+	if err := renderEnvLocals(stderr, cfg, worktreeRoot, name, engines, portsCtx, skip); err != nil {
 		return err
 	}
 
-	// 5. post_create hooks. Best-effort: a failing migration here is
-	// reported to stderr but does not unwind the entire create — the
-	// operator usually wants the worktree materialised even when seed
-	// data is missing.
-	runPostCreateHooks(ctx, stderr, cfg, worktreeRoot)
+	// 5. post_create hooks (skip failed repos — there is no worktree to
+	// run them in). Best-effort otherwise.
+	runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skip)
 
-	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
-	// the absolute worktree root path on stdout so Claude Code can
-	// cd into it. Everything else goes to stderr.
+	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly the
+	// absolute worktree root path on stdout. Print it even on partial
+	// failure so a caller can cd in, but exit non-zero so a failed repo
+	// is not silently swallowed.
 	fmt.Fprintln(stdout, worktreeRoot)
+	if len(failed) > 0 {
+		return fmt.Errorf("create %s: %d repository worktree(s) failed: %s", name, len(failed), strings.Join(failed, ", "))
+	}
 	return nil
 }
 
@@ -290,7 +303,8 @@ func materializeRepositories(
 	cfg *config.Config,
 	monorepoRoot, worktreeRoot, name string,
 	noFetch bool,
-) {
+) []string {
+	var failed []string
 	runner := gitwt.NewRunner()
 	runner.Fetch = !noFetch
 	for _, repo := range cfg.Repositories {
@@ -300,6 +314,7 @@ func materializeRepositories(
 		created, err := runner.AddOrAttach(ctx, repoSrc, repoDst, name, base)
 		if err != nil {
 			logf(stderr, "[bough] %s: worktree add FAILED: %v", repo.Name, err)
+			failed = append(failed, repo.Name)
 			continue
 		}
 		sha, _ := runner.HeadSHA(ctx, repoDst)
@@ -322,6 +337,7 @@ func materializeRepositories(
 			_ = os.Symlink(sl.Target, filepath.Join(repoDst, sl.Link)) // best-effort
 		}
 	}
+	return failed
 }
 
 // renderEnvLocals walks repositories that declare env_local templates
@@ -334,9 +350,10 @@ func renderEnvLocals(
 	worktreeRoot, name string,
 	engines []engineInstance,
 	portsCtx map[string]int,
+	skip map[string]bool,
 ) error {
 	for _, repo := range cfg.Repositories {
-		if len(repo.EnvLocal) == 0 {
+		if skip[repo.Name] || len(repo.EnvLocal) == 0 {
 			continue
 		}
 		repoDst := filepath.Join(worktreeRoot, repo.Name)
@@ -370,9 +387,9 @@ func renderEnvLocals(
 // declaration order. Failures log to stderr and the loop continues —
 // a failed migration should not unwind the entire create, since the
 // worktree materialisation itself is still valuable to the operator.
-func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string) {
+func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string, skip map[string]bool) {
 	for _, repo := range cfg.Repositories {
-		if len(repo.PostCreate) == 0 {
+		if skip[repo.Name] || len(repo.PostCreate) == 0 {
 			continue
 		}
 		repoDst := filepath.Join(worktreeRoot, repo.Name)
