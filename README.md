@@ -109,6 +109,13 @@ bough ships as 5 binaries (`bough` + 4 `bough-plugin-*`). Pick one:
 #    latest tagged release automatically.
 curl -fsSL https://github.com/ikeikeikeike/bough/releases/latest/download/bough_$(uname -s | tr A-Z a-z)_$(uname -m).tar.gz \
   | tar xz -C ~/.local/bin/  bough bough-plugin-mysql bough-plugin-postgres bough-plugin-redis bough-plugin-elasticsearch
+#
+# macOS (Apple Silicon) one-time step: the release binaries are not
+# notarized, so Gatekeeper kills them on first run ("zsh: killed").
+# Ad-hoc re-sign locally once after install (and clear quarantine if
+# you downloaded via a browser):
+#   xattr -dr com.apple.quarantine ~/.local/bin/bough ~/.local/bin/bough-plugin-* 2>/dev/null
+#   codesign --force --sign - ~/.local/bin/bough ~/.local/bin/bough-plugin-*
 
 # 2. go install (per-binary; requires Go toolchain on PATH)
 go install github.com/ikeikeikeike/bough/cmd/bough@latest

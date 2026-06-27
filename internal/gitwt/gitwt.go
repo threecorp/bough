@@ -77,10 +77,16 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 		return "", fmt.Errorf("gitwt: detect base for %s: %w", repoPath, err)
 	}
 	s := strings.TrimSpace(string(out))
-	// `refs/remotes/origin/develop` → `develop`. Splitting on the last
-	// slash also handles the edge case where the remote name itself
-	// contains a slash (rare but legal in git).
-	if idx := strings.LastIndex(s, "/"); idx >= 0 {
+	// s is `refs/remotes/<remote>/<branch>`, and <branch> may itself
+	// contain slashes (origin/HEAD → refs/remotes/origin/feature/x).
+	// Strip the `refs/remotes/` prefix, then the remote-name segment,
+	// keeping the full branch path. The previous code split on the
+	// *last* slash, which silently dropped the leading path of any
+	// slashed branch name — `feature/x` became `x`, an invalid ref that
+	// made the subsequent `git worktree add … <base>` fail with
+	// `fatal: invalid reference` (exit 128).
+	s = strings.TrimPrefix(s, "refs/remotes/")
+	if idx := strings.Index(s, "/"); idx >= 0 {
 		return s[idx+1:], nil
 	}
 	return s, nil
@@ -129,15 +135,21 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 		}
 	}
 
-	newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, effectiveBase).Run()
+	// Capture combined output so a git failure surfaces its actual
+	// message (e.g. `fatal: invalid reference: <base>`) instead of a
+	// bare "exit status 128" — create swallowing this is what made the
+	// DetectBase slash bug above so hard to diagnose in the field.
+	newOut, newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, effectiveBase).CombinedOutput()
 	if newErr == nil {
 		return true, nil
 	}
-	attachErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, branch).Run()
+	attachOut, attachErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, branch).CombinedOutput()
 	if attachErr == nil {
 		return false, nil
 	}
-	return false, fmt.Errorf("gitwt: add %s @ %s failed (new: %v; attach: %v)", branch, dst, newErr, attachErr)
+	return false, fmt.Errorf("gitwt: add %s @ %s failed (new: %v: %s; attach: %v: %s)",
+		branch, dst, newErr, strings.TrimSpace(string(newOut)),
+		attachErr, strings.TrimSpace(string(attachOut)))
 }
 
 // Remove tears down a worktree via `git worktree remove`. When that

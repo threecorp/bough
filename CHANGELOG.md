@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.9.7
+
+### Fixed
+
+- **`bough create` died with `exit 128` when a sub-repo's default branch
+  name contained a slash (`feature/…`, `release/…`).** `gitwt.DetectBase`
+  resolved the base branch from `origin/HEAD` by splitting on the *last*
+  slash of `refs/remotes/origin/<branch>`, so
+  `refs/remotes/origin/feature/x` became `x` — an invalid ref — and the
+  subsequent `git worktree add … x` failed with
+  `fatal: invalid reference: x`. DetectBase now strips the
+  `refs/remotes/<remote>/` prefix and keeps the full branch path
+  (`feature/x`). A repo whose `origin/HEAD` points at `develop` was
+  unaffected, which is why this surfaced only on a sub-repo whose origin
+  default was a feature branch. Earlier "engine-ordering" and
+  "argument-order" hypotheses were both wrong; the root cause was proved
+  by replaying git directly (mangled base → 128, full branch → 0). (#41)
+- **`gitwt` worktree-add failures now surface git's actual message.** The
+  add / attach calls used `.Run()`, which discarded stderr, so the
+  failure above reached the operator as a bare "exit status 128". They
+  now use `CombinedOutput()` and fold git's `fatal: …` line into the
+  wrapped error.
+
+### Changed
+
+- **README install: macOS (Apple Silicon) re-sign note.** The release
+  binaries are not notarized, so Gatekeeper kills them on first run
+  ("zsh: killed"). The Install section now documents the one-time
+  `codesign --force --sign -` (+ `xattr -dr com.apple.quarantine`)
+  step. (#42)
+
 ## v0.9.6
 
 ### Fixed

@@ -205,3 +205,52 @@ func TestRunner_List(t *testing.T) {
 		t.Errorf("List did not include the F-List worktree: %+v", wts)
 	}
 }
+
+// TestRunner_DetectBase_slashedBranchName is the regression for the
+// create exit-128: origin/HEAD pointing at a slashed branch
+// (refs/remotes/origin/feature/x) used to be mangled to "x" by the
+// last-slash split, an invalid ref. DetectBase must return the full
+// "feature/x".
+func TestRunner_DetectBase_slashedBranchName(t *testing.T) {
+	src := initBareRepo(t)
+	rev, err := exec.Command("git", "-C", src, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, ".git", "refs", "remotes", "origin", "feature"), 0o755); err != nil {
+		t.Fatalf("mkdir origin/feature: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, ".git", "refs", "remotes", "origin", "feature", "x"), rev, 0o644); err != nil {
+		t.Fatalf("write origin/feature/x: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", src, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("symbolic-ref: %v\n%s", err, out)
+	}
+
+	base, err := NewRunner().DetectBase(context.Background(), src, "")
+	if err != nil {
+		t.Fatalf("DetectBase: %v", err)
+	}
+	if base != "feature/x" {
+		t.Errorf("got %q want %q (a slashed default branch must keep its prefix)", base, "feature/x")
+	}
+}
+
+// TestRunner_AddOrAttach_slashedBase proves a worktree can be branched
+// off a base whose name contains a slash (feature/x). Before the
+// DetectBase fix the create flow passed the mangled "x" here and git
+// died with `fatal: invalid reference` (exit 128).
+func TestRunner_AddOrAttach_slashedBase(t *testing.T) {
+	src := initBareRepo(t)
+	if out, err := exec.Command("git", "-C", src, "branch", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("create feature/x: %v\n%s", err, out)
+	}
+	dst := filepath.Join(t.TempDir(), "wt")
+	created, err := NewRunner().AddOrAttach(context.Background(), src, dst, "F-Slash", "feature/x")
+	if err != nil {
+		t.Fatalf("AddOrAttach off slashed base: %v", err)
+	}
+	if !created {
+		t.Errorf("expected created=true off slashed base")
+	}
+}
