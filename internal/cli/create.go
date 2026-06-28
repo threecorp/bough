@@ -318,7 +318,16 @@ func materializeRepositories(
 	for _, repo := range cfg.Repositories {
 		repoSrc := filepath.Join(monorepoRoot, repo.Name)
 		repoDst := filepath.Join(worktreeRoot, repo.Name)
-		base, _ := runner.DetectBase(ctx, repoSrc, repo.BranchStrategy)
+		// The declared branch_strategy is authoritative — it is a required
+		// field stating which branch the operator wants worktrees based on.
+		// origin/HEAD auto-detection is only a fallback for when it is
+		// somehow empty. (Previously branch_strategy was passed as
+		// DetectBase's OWN fallback, and DetectBase reads origin/HEAD first,
+		// so a `git clone --local` whose origin/HEAD mirrored the source's
+		// checked-out feature branch silently overrode an explicit
+		// `branch_strategy: develop`.)
+		detected, _ := runner.DetectBase(ctx, repoSrc, "")
+		base := chooseBase(repo.BranchStrategy, detected)
 		created, err := runner.AddOrAttach(ctx, repoSrc, repoDst, name, base)
 		if err != nil {
 			logf(stderr, "[bough] %s: worktree add FAILED: %v", repo.Name, err)
@@ -346,6 +355,20 @@ func materializeRepositories(
 		}
 	}
 	return failed
+}
+
+// chooseBase decides which branch a new worktree is cut from. The
+// explicitly-declared branch_strategy wins; the origin/HEAD-detected
+// branch is used only when branch_strategy is empty. This keeps an
+// operator's `.bough.yaml` authoritative over a clone's recorded
+// origin/HEAD — which, for a `git clone --local`, mirrors whatever the
+// source happened to have checked out and is not necessarily the
+// intended base.
+func chooseBase(branchStrategy, detected string) string {
+	if strings.TrimSpace(branchStrategy) != "" {
+		return branchStrategy
+	}
+	return detected
 }
 
 // renderEnvLocals walks repositories that declare env_local templates
