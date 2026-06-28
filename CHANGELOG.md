@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.15
+
+### Fixed
+
+- **`bough create` now honors the declared `branch_strategy` over a clone's
+  `origin/HEAD` when choosing a worktree's base branch.** Previously
+  `branch_strategy` was passed as `DetectBase`'s *fallback*, and
+  `DetectBase` returns `origin/HEAD` first — so a `git clone --local` whose
+  `origin/HEAD` mirrored the source's checked-out feature branch silently
+  cut the new worktree off that feature branch instead of the declared
+  base. Found via dogfood: a monorepo declaring `branch_strategy: develop`
+  got one sub-repo's worktree based on `feature/issue-1394-…` (because the
+  source happened to be on that branch at `--local` clone time) while a
+  sibling sub-repo on `develop` was unaffected — exposing the
+  inconsistency. The explicit, required `branch_strategy` is now
+  authoritative; `origin/HEAD` auto-detection is used only when
+  `branch_strategy` is empty (`chooseBase` in `internal/cli/create.go`).
+
 ## v0.9.14
 
 ### Added
