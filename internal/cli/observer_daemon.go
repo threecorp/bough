@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,6 +105,16 @@ func newObserverStopCmd() *cobra.Command {
 			pidPath := observerPidFile(layout, ident.ID)
 			running, pid := daemonRunning(pidPath)
 			if !running {
+				// The pid file is stale or missing, but a daemon may
+				// still be alive with a pid the file never captured (a
+				// spawn race, or one started out-of-band). Discover it
+				// by command line before giving up, so a live daemon is
+				// never orphaned by a bad pid file.
+				if dpid, ok := findDaemonByRoot(ident.Root); ok {
+					running, pid = true, dpid
+				}
+			}
+			if !running {
 				fmt.Fprintln(cmd.OutOrStdout(), "observer not running")
 				_ = os.Remove(pidPath)
 				return nil
@@ -132,6 +143,11 @@ func newObserverStatusCmd() *cobra.Command {
 			}
 			pidPath := observerPidFile(layout, ident.ID)
 			running, pid := daemonRunning(pidPath)
+			if !running {
+				if dpid, ok := findDaemonByRoot(ident.Root); ok {
+					running, pid = true, dpid
+				}
+			}
 			if running {
 				fmt.Fprintf(cmd.OutOrStdout(), "observer running (pid %d)\nlog: %s\n", pid, layout.ObserverLog(ident.ID))
 			} else {
@@ -160,6 +176,11 @@ func newObserverRunDaemonCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Own the pid file: record our REAL pid so `observer stop`
+			// / `status` always target the live daemon even if `start`
+			// captured a different pid (a spawn race) or the daemon was
+			// launched out-of-band. This is the authoritative writer.
+			_ = os.WriteFile(observerPidFile(layout, ident.ID), []byte(strconv.Itoa(os.Getpid())), 0o644)
 			logPath := layout.ObserverLog(ident.ID)
 			if interval < 60 {
 				interval = 60
@@ -212,6 +233,50 @@ func daemonRunning(pidPath string) (bool, int) {
 		return false, pid
 	}
 	return true, pid
+}
+
+// findDaemonByRoot discovers a live `observer _run-daemon --root <root>`
+// process by scanning the process table. It is the fallback path when
+// the pid file is stale or missing — a daemon started out-of-band, or
+// one whose `start` recorded the wrong pid, must still be stoppable so
+// it cannot be orphaned and keep ticking against a project the operator
+// believes is idle.
+func findDaemonByRoot(root string) (int, bool) {
+	out, err := exec.Command("ps", "-axo", "pid=,command=").Output()
+	if err != nil {
+		return 0, false
+	}
+	return parseDaemonPID(string(out), root, os.Getpid(), func(pid int) bool {
+		return syscall.Kill(pid, 0) == nil
+	})
+}
+
+// parseDaemonPID is the pure, testable core of findDaemonByRoot. Given
+// `ps -axo pid=,command=` output it returns the pid of the first live
+// `observer _run-daemon` line bound to root, skipping self. The root is
+// matched as `--root <root> ` (trailing space) so a path that is a
+// prefix of another root cannot match by mistake (the daemon always has
+// ` --interval` after --root, so a trailing space is always present).
+func parseDaemonPID(psOutput, root string, self int, alive func(int) bool) (int, bool) {
+	marker := "--root " + root + " "
+	for _, line := range strings.Split(psOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "observer _run-daemon") || !strings.Contains(line, marker) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		if alive(pid) {
+			return pid, true
+		}
+	}
+	return 0, false
 }
 
 func appendDaemonLog(path, msg string) {
