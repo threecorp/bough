@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.9.9
+
+### Fixed
+
+- **The observer daemon survived `SIGTERM`, so `observer stop` could not
+  actually stop it (completes #45).** `cmd/bough/main.go` installs
+  `signal.NotifyContext` for SIGTERM/SIGINT, which makes those signals
+  *cancel the root context* rather than terminate the process — but the
+  `_run-daemon` loop ran a bare `for { … time.Sleep }` that never watched
+  `ctx.Done()`, so a SIGTERM'd daemon kept ticking and only SIGKILL could
+  end it (exactly why the v0.9.8 stale-pid incident's leftover daemon
+  needed a manual SIGKILL). The loop now `select`s on `ctx.Done()` and
+  exits cleanly (dropping its pid file); `runObserverOnceQuiet` uses
+  `CommandContext` so a mid-pass SIGTERM interrupts the `claude --print`
+  call; and `observer stop` escalates to SIGKILL if the process is still
+  alive after a 3s grace, so it never reports success on a still-live
+  daemon. Verified by dogfooding: `observer stop` against a daemon with a
+  deliberately-corrupted pid file now finds it (the v0.9.8 fallback) AND
+  the daemon dies "via SIGTERM".
+
 ## v0.9.8
 
 ### Fixed

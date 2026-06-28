@@ -1,11 +1,10 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"syscall"
-
-	"github.com/spf13/cobra"
 )
 
 // makeDetachedCmd builds an exec.Cmd that, when Started, becomes a
@@ -29,12 +28,12 @@ func makeDetachedCmd(exe string, args []string) *exec.Cmd {
 // rather than call in-process so each tick gets a fresh provider /
 // limiter lifecycle identical to a manual run, and a panic in one
 // pass cannot kill the daemon loop.
-func runObserverOnceQuiet(_ *cobra.Command, root string) {
+func runObserverOnceQuiet(ctx context.Context, root string) {
 	exe, err := os.Executable()
 	if err != nil {
 		return
 	}
-	c := exec.Command(exe, "observer", "run-once", "--root", root)
+	c := exec.CommandContext(ctx, exe, "observer", "run-once", "--root", root)
 	c.Stdin = nil
 	c.Stdout = nil
 	c.Stderr = nil

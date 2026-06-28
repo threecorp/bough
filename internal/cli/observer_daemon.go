@@ -122,8 +122,19 @@ func newObserverStopCmd() *cobra.Command {
 			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 				return fmt.Errorf("observer stop: signal pid %d: %w", pid, err)
 			}
+			// Escalate to SIGKILL if the daemon does not exit promptly.
+			// The daemon now shuts down on context-cancel (v0.9.9), but
+			// a pass wedged in a long claude --print call — or any future
+			// hang — must not leave a daemon ticking after stop reports
+			// success.
+			via := "SIGTERM"
+			if !waitGone(pid, 3*time.Second) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				waitGone(pid, 2*time.Second)
+				via = "SIGKILL"
+			}
 			_ = os.Remove(pidPath)
-			fmt.Fprintf(cmd.OutOrStdout(), "observer stopped (pid %d)\n", pid)
+			fmt.Fprintf(cmd.OutOrStdout(), "observer stopped (pid %d, via %s)\n", pid, via)
 			return nil
 		},
 	}
@@ -185,14 +196,29 @@ func newObserverRunDaemonCmd() *cobra.Command {
 			if interval < 60 {
 				interval = 60
 			}
+			// The root command installs signal.NotifyContext for
+			// SIGTERM/SIGINT (cmd/bough/main.go), so those signals
+			// CANCEL this context instead of terminating the process by
+			// default. The loop therefore MUST watch ctx.Done() — before
+			// v0.9.9 it looped on a bare time.Sleep and ignored the
+			// cancelled context, so the daemon survived SIGTERM and only
+			// SIGKILL could stop it.
+			ctx := commandCtx(cmd)
 			for {
 				appendDaemonLog(logPath, fmt.Sprintf("tick: observer run-once (interval %ds)", interval))
 				// run the extraction pass in-process by invoking the
 				// run-once command path. We shell out to keep the
 				// limiter / provider lifecycle identical to a manual
-				// run.
-				runObserverOnceQuiet(cmd, ident.Root)
-				time.Sleep(time.Duration(interval) * time.Second)
+				// run; CommandContext lets a mid-pass SIGTERM interrupt
+				// the claude --print call instead of waiting it out.
+				runObserverOnceQuiet(ctx, ident.Root)
+				select {
+				case <-ctx.Done():
+					appendDaemonLog(logPath, "shutdown: context cancelled, daemon exiting")
+					_ = os.Remove(observerPidFile(layout, ident.ID))
+					return nil
+				case <-time.After(time.Duration(interval) * time.Second):
+				}
 			}
 		},
 	}
@@ -233,6 +259,21 @@ func daemonRunning(pidPath string) (bool, int) {
 		return false, pid
 	}
 	return true, pid
+}
+
+// waitGone polls until pid is no longer signalable (= the process is
+// gone) or timeout elapses, returning true once it is gone. stop uses
+// it to confirm SIGTERM actually took effect before reporting success,
+// and to gate the SIGKILL escalation.
+func waitGone(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return syscall.Kill(pid, 0) != nil
 }
 
 // findDaemonByRoot discovers a live `observer _run-daemon --root <root>`

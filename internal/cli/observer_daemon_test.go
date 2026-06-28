@@ -1,9 +1,25 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestWaitGone covers the SIGTERM→SIGKILL escalation gate added in
+// v0.9.9: stop must be able to tell whether a signalled daemon has
+// actually exited before it reports success.
+func TestWaitGone(t *testing.T) {
+	// our own process is alive → waitGone must report not-gone
+	if waitGone(os.Getpid(), 200*time.Millisecond) {
+		t.Errorf("waitGone(self) = true, want false (this process is alive)")
+	}
+	// an almost-certainly-absent pid → gone
+	if !waitGone(2147483646, 200*time.Millisecond) {
+		t.Errorf("waitGone(absent pid) = false, want true")
+	}
+}
 
 // TestParseDaemonPID covers the fallback that lets `observer stop` /
 // `status` find a live daemon when the pid file is stale or missing —
