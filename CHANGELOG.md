@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.9.13
+
+### Added
+
+- **`bough instinct promote` — project → global instinct promotion (ECC parity, #5).**
+  Scans every registered project's instincts and copies the ids that
+  independently reached >= 2 projects with mean confidence >= 0.8 into the
+  global corpus (`~/.local/share/bough-homunculus/instincts/personal`),
+  which `inject` layers into every project — closing the loop that read the
+  global corpus but never wrote it. Faithful port of ECC
+  continuous-learning-v2's auto-promotion (`PROMOTE_MIN_PROJECTS=2`,
+  `PROMOTE_CONFIDENCE_THRESHOLD=0.8`, arithmetic-mean confidence,
+  highest-confidence body on conflict, idempotent skip of already-global
+  ids, source instincts left untouched). bough adds `.md` storage (so
+  `inject` reads it), provenance frontmatter (`source` / `promoted_date` /
+  `seen_in_projects` / `promoted_from`), `--dry-run`, and
+  `--min-projects` / `--min-confidence` overrides.
+- **`bough session-evolve-claudemd` — CLAUDE.md evolution proposals (ECC parity, #10).**
+  Scans the project's instincts and proposes the high-confidence ones as
+  CLAUDE.md additions + the decayed, aged ones as removals, for human
+  review. Mirrors ECC's `evolve-claudemd.sh`, which — contrary to the
+  earlier design note — is **pure filesystem, not an LLM call**: the
+  instinct trigger/body already reads as a candidate rule, so neither ECC
+  nor bough needs a model to phrase it. No `claude --print`, no billing,
+  and CLAUDE.md is never edited automatically. Preview to stdout by
+  default; `--write` saves `.claude/claudemd-proposals.md`. Confidence
+  gates are calibrated to bough's 0.30-0.85 ladder (ECC's 0.9 ADD gate
+  would be inert against the 0.85 cap): ADD at >= 0.80 (top two bands),
+  REMOVE at <= 0.30 aged > 30 days.
+
+### Security
+
+- **Observations are secret-scrubbed + per-field-truncated at write (ECC parity, #7).**
+  `hook handle` now redacts secret tokens (verbatim port of ECC
+  observe.sh's `api_key|token|secret|password|authorization|credentials|auth`
+  regex) and caps each string field at 5000 chars before appending to
+  `observations.jsonl`. The scrub runs at the string level, so secrets
+  embedded in command values (e.g. `export API_KEY=...`) are caught, not
+  just JSON keys; only the persisted copy is sanitized — quality-gate
+  matching still sees the real command. Defense-in-depth (the homunculus
+  already lives outside any repo) plus smaller rendered prompts.
+
+### Removed
+
+- Dropped the unused `session_evolve_claudemd` prompt template stub — #10
+  is pure-filesystem, so no LLM prompt is needed.
+
 ## v0.9.12
 
 ### Changed

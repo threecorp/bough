@@ -281,6 +281,9 @@ func newHookHandleCmd() *cobra.Command {
 			}
 			if outPath != "" {
 				rotateIfLarge(outPath)
+				// #7: sanitize only the persisted copy — redact secrets +
+				// bound per-field length. The raw `payload` below still
+				// feeds quality-gate matching with the real command.
 				record := struct {
 					TS      string          `json:"ts"`
 					Event   string          `json:"event"`
@@ -288,7 +291,7 @@ func newHookHandleCmd() *cobra.Command {
 				}{
 					TS:      time.Now().UTC().Format(time.RFC3339Nano),
 					Event:   event,
-					Payload: json.RawMessage(payload),
+					Payload: json.RawMessage(sanitizeObservation(payload)),
 				}
 				if len(record.Payload) == 0 {
 					record.Payload = json.RawMessage(`null`)

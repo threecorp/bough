@@ -30,12 +30,11 @@ var defaultsFS embed.FS
 // here keeps the lookup table in one place; the constants are also
 // used to build the override search paths.
 const (
-	TemplateObserver  = "observer"
-	TemplateJudge     = "evolve_judge"
-	TemplateLabel     = "evolve_label"
-	TemplateAgent     = "evolve_agent"
-	TemplateCommand   = "evolve_command"
-	TemplateClaudeMD  = "session_evolve_claudemd"
+	TemplateObserver = "observer"
+	TemplateJudge    = "evolve_judge"
+	TemplateLabel    = "evolve_label"
+	TemplateAgent    = "evolve_agent"
+	TemplateCommand  = "evolve_command"
 )
 
 // Template holds one resolved prompt body plus the metadata bough
@@ -119,7 +118,7 @@ func readFile(path string) (string, string, bool) {
 func isKnownTemplate(name string) bool {
 	switch name {
 	case TemplateObserver, TemplateJudge, TemplateLabel,
-		TemplateAgent, TemplateCommand, TemplateClaudeMD:
+		TemplateAgent, TemplateCommand:
 		return true
 	}
 	return false

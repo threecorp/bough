@@ -96,7 +96,7 @@ func TestResolver_AllKnownTemplatesEmbeddedExist(t *testing.T) {
 	r := Resolver{}
 	for _, name := range []string{
 		TemplateObserver, TemplateJudge, TemplateLabel,
-		TemplateAgent, TemplateCommand, TemplateClaudeMD,
+		TemplateAgent, TemplateCommand,
 	} {
 		if _, err := r.Get(name); err != nil {
 			t.Errorf("known template %q missing embedded default: %v", name, err)

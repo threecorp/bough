@@ -17,8 +17,8 @@ import (
 // newInstinctCmd wires `bough instinct` — the read-side counterpart
 // to `bough observer run-once`. v0.9.0 ships status / list / show so
 // an operator can see what the observer wrote without grepping the
-// homunculus tree directly. promote / approve land alongside the
-// v0.9.1 evolve pipeline; mint stays out of v0.9.0 because the
+// homunculus tree directly. v0.9.13 adds promote (project → global
+// corpus, ECC auto-promotion parity); mint stays out because the
 // canonical mint path is via `bough observer run-once`.
 func newInstinctCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -30,7 +30,7 @@ operator can audit what the observer extracted without digging into
 status prints the per-project totals, list enumerates ids /
 triggers / confidence, show prints one file verbatim.`,
 	}
-	cmd.AddCommand(newInstinctStatusCmd(), newInstinctListCmd(), newInstinctShowCmd())
+	cmd.AddCommand(newInstinctStatusCmd(), newInstinctListCmd(), newInstinctShowCmd(), newInstinctPromoteCmd())
 	return cmd
 }
 
