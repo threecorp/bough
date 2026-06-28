@@ -280,6 +280,7 @@ func newHookHandleCmd() *cobra.Command {
 				outPath = resolveHomunculusObsPath()
 			}
 			if outPath != "" {
+				rotateIfLarge(outPath)
 				record := struct {
 					TS      string          `json:"ts"`
 					Event   string          `json:"event"`
@@ -382,6 +383,28 @@ func resolveMonorepoRoot(cwd string) string {
 		}
 		dir = parent
 	}
+}
+
+// maxObsBytes bounds the live observations file before it is archived,
+// matching ECC observe.sh's 10 MiB threshold.
+const maxObsBytes = 10 << 20
+
+// rotateIfLarge archives the observations file when it exceeds
+// maxObsBytes (ECC observe.sh:236-243): the live file the observer
+// tails stays bounded, and older observations move to
+// observations.archive/ rather than growing one file without limit.
+// Best-effort — any error just means the file keeps growing a little.
+func rotateIfLarge(obsPath string) {
+	fi, err := os.Stat(obsPath)
+	if err != nil || fi.Size() < maxObsBytes {
+		return
+	}
+	archiveDir := filepath.Join(filepath.Dir(obsPath), "observations.archive")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return
+	}
+	dst := filepath.Join(archiveDir, fmt.Sprintf("observations-%d.jsonl", time.Now().UTC().UnixNano()))
+	_ = os.Rename(obsPath, dst)
 }
 
 // dispatchInjectContext prints the confidence-ranked instinct block

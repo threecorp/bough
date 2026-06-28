@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.9.12
+
+### Changed
+
+- **Instinct confidence can now DECREASE on a correction (ECC parity, #4).**
+  `session-end` previously only ever reinforced (token overlap → +1 band),
+  so a wrong instinct never decayed. It now detects ECC's correction
+  markers (`error|mistake|wrong|fix|correct|undo`) in the session's tool
+  outputs + prompts and DEMOTES the instincts the session exercised (−1
+  band) instead of reinforcing them. The band ladder extends down to
+  0.30 / 0.40 (below inject's 0.50 floor) so a repeatedly-contradicted
+  instinct decays out of the injected set — bough's analogue of ECC's
+  demotion-toward-removal. Targeting stays per-instinct (token overlap),
+  which is more precise than ECC's session-global hurt/helped flag.
+- **GATE 5 evolve judge defaults to a Sonnet-class model (#8).** The
+  high-frequency observer extraction stays on haiku (matching ECC's Haiku
+  observer), but the low-frequency, high-stakes skill accept/reject now
+  defaults to `sonnet` (ECC runs its semantic work on Sonnet). `--model`
+  still overrides. bough evolve already mirrors `/evolve-skill-manual-v3`.
+- **Observations are archived past 10 MiB (#9).** `hook handle` rotates a
+  project's `observations.jsonl` into `observations.archive/` once it
+  exceeds 10 MiB (ECC observe.sh's threshold), so the live file the
+  observer tails stays bounded instead of growing without limit.
+
 ## v0.9.11
 
 ### Changed

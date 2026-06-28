@@ -23,12 +23,19 @@ import (
 	"github.com/ikeikeikeike/bough/internal/observe"
 )
 
-// Confidence band steps, ECC verbatim. An instinct that the session
-// reinforced (= its trigger tokens appeared in the observations)
-// climbs one band; a contradicted instinct drops one. The bands are
-// the same discrete values the observer mints at, so confidence
-// stays on a stable ladder rather than drifting to arbitrary floats.
-var confidenceBands = []float64{0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85}
+// Confidence band ladder. An instinct the session reinforced (= its
+// trigger tokens appeared in the observations) climbs one band; an
+// instinct exercised during a session that showed a correction marker
+// drops one. The low bands (0.30 / 0.40) sit BELOW inject's
+// MinConfidence (0.50), so a repeatedly-contradicted instinct decays
+// out of the injected set entirely — bough's analogue of ECC's
+// demotion toward removal (ECC clamps to [0.1, 0.95]).
+var confidenceBands = []float64{0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85}
+
+// correctionMarkers signal the session hit a mistake / correction.
+// ECC's evaluate-session.sh greps the same set over the session
+// observations to decide "hurt" vs "helped".
+var correctionMarkers = []string{"error", "mistake", "wrong", "fix", "correct", "undo"}
 
 // ReinforceDelta / ContradictDelta are how many bands an instinct
 // moves on a reinforcement / contradiction. ECC moves one band each
@@ -72,27 +79,37 @@ func Evaluate(layout homunculus.Layout, projectID, sessionID string, observation
 	}
 
 	obsTokens := tokenizeObservations(observations)
+	correction := sessionHadCorrection(observations)
 	dir := layout.InstinctsDir(projectID)
 
 	for _, in := range instincts {
-		overlap := instinctOverlap(in, obsTokens)
-		switch {
-		case overlap >= 0.15:
-			// session exercised this instinct → reinforce
-			newConf := stepBand(in.Confidence, reinforceSteps)
-			if newConf != in.Confidence {
-				in.Confidence = newConf
-				in.LastSeen = now.UTC()
-				in.Observed++
-				if _, err := homunculus.WriteInstinctFile(dir, in); err != nil {
-					return res, err
-				}
-				res.Reinforced++
-			} else {
-				res.Unchanged++
-			}
-		default:
+		if instinctOverlap(in, obsTokens) < 0.15 {
+			res.Unchanged++ // not exercised this session
+			continue
+		}
+		// Exercised. Reinforce by default; demote if the session showed
+		// a correction marker (the instinct was active while something
+		// went wrong) — ECC's hurt/helped split, targeted to the
+		// instincts the session actually used.
+		steps := reinforceSteps
+		if correction {
+			steps = -contradictSteps
+		}
+		newConf := stepBand(in.Confidence, steps)
+		if newConf == in.Confidence {
 			res.Unchanged++
+			continue
+		}
+		in.Confidence = newConf
+		in.LastSeen = now.UTC()
+		in.Observed++
+		if _, err := homunculus.WriteInstinctFile(dir, in); err != nil {
+			return res, err
+		}
+		if correction {
+			res.Contradicted++
+		} else {
+			res.Reinforced++
 		}
 	}
 	return res, nil
@@ -179,6 +196,23 @@ func instinctOverlap(in *homunculus.Instinct, obsTokens map[string]struct{}) flo
 	return float64(hit) / float64(len(itoks))
 }
 
+// sessionHadCorrection reports whether the session's tool outputs or
+// the user's prompts contain a correction marker — ECC's signal to
+// demote (rather than reinforce) the instincts the session exercised.
+// It scans outputs + prompts, not tool inputs, so benign "fix" /
+// "correct" tokens in commands or paths do not trigger a demotion.
+func sessionHadCorrection(obs []observe.Observation) bool {
+	for _, o := range obs {
+		hay := strings.ToLower(string(o.ToolOutput) + " " + o.Prompt)
+		for _, m := range correctionMarkers {
+			if strings.Contains(hay, m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // addTokens lower-cases + splits on non-alphanumeric, dropping tokens
 // under 3 chars (= shorter tokens are mostly noise in tool I/O JSON).
 func addTokens(set map[string]struct{}, s string) {
@@ -218,6 +252,6 @@ func Summary(res EvalResult, observations []observe.Observation) string {
 	for _, e := range events {
 		fmt.Fprintf(&b, "  %-16s %d\n", e, byEvent[e])
 	}
-	fmt.Fprintf(&b, "instincts: reinforced=%d unchanged=%d\n", res.Reinforced, res.Unchanged)
+	fmt.Fprintf(&b, "instincts: reinforced=%d contradicted=%d unchanged=%d\n", res.Reinforced, res.Contradicted, res.Unchanged)
 	return b.String()
 }

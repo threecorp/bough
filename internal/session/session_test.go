@@ -25,9 +25,14 @@ func TestStepBand(t *testing.T) {
 	if got := stepBand(0.85, 1); got != 0.85 {
 		t.Errorf("stepBand(0.85,+1) = %v, want 0.85 (clamp)", got)
 	}
-	// clamp at bottom
-	if got := stepBand(0.50, -1); got != 0.50 {
-		t.Errorf("stepBand(0.50,-1) = %v, want 0.50 (clamp)", got)
+	// down from 0.50 → 0.40 (v0.9.12 extended the ladder below inject's
+	// 0.50 floor so contradicted instincts can decay out of the set)
+	if got := stepBand(0.50, -1); got != 0.40 {
+		t.Errorf("stepBand(0.50,-1) = %v, want 0.40", got)
+	}
+	// clamp at the new bottom (0.30)
+	if got := stepBand(0.30, -1); got != 0.30 {
+		t.Errorf("stepBand(0.30,-1) = %v, want 0.30 (clamp)", got)
 	}
 	// off-ladder 0.73 snaps to nearest (0.75) then... up = 0.80
 	if got := stepBand(0.73, 1); got != 0.80 {
@@ -76,6 +81,38 @@ func TestEvaluate_ReinforcesExercisedInstinct(t *testing.T) {
 	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
 	if reloaded.Confidence != 0.75 {
 		t.Errorf("confidence = %v, want 0.75 after reinforce", reloaded.Confidence)
+	}
+}
+
+// TestEvaluate_DemotesExercisedInstinctOnCorrection is the v0.9.12 #4
+// regression: an instinct the session exercised is DEMOTED (not
+// reinforced) when the session shows a correction marker — before this,
+// confidence could only ever increase.
+func TestEvaluate_DemotesExercisedInstinctOnCorrection(t *testing.T) {
+	root := t.TempDir()
+	layout := homunculus.FromRoot(root)
+	pid := "abc123"
+	dir := layout.InstinctsDir(pid)
+	_ = os.MkdirAll(dir, 0o755)
+	writeInstinct(t, dir, "migration-discipline", 0.70, "Run migration after schema change to keep database models in sync")
+
+	// the session exercised the instinct (overlap) AND hit an error in
+	// a tool output → correction → demote.
+	obs := []observe.Observation{
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"make migration database schema sync models"}`)},
+		{Event: "PostToolUse", Tool: "Bash", ToolOutput: json.RawMessage(`{"stderr":"Error 1265: data truncated; migration wrong"}`)},
+	}
+	now := time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
+	res, err := Evaluate(layout, pid, "sess-1", obs, now)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if res.Contradicted != 1 || res.Reinforced != 0 {
+		t.Errorf("want Contradicted=1 Reinforced=0, got %+v", res)
+	}
+	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
+	if reloaded.Confidence != 0.65 {
+		t.Errorf("confidence = %v, want 0.65 after demotion", reloaded.Confidence)
 	}
 }
 

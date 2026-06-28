@@ -124,7 +124,7 @@ evolved/commands/<slug>.md.`,
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
 	cmd.Flags().BoolVar(&generate, "generate", false, "run GATE 5 (claude --print) + write artifacts (default: preview only)")
 	cmd.Flags().StringVar(&judge, "judge", "claude", "GATE 5 backend: claude (= claude --print)")
-	cmd.Flags().StringVar(&model, "model", "", "override the claude model for GATE 5 (default: provider default)")
+	cmd.Flags().StringVar(&model, "model", "", "override the claude model for GATE 5 (default: sonnet — a stronger judge than the observer's haiku)")
 	cmd.Flags().BoolVar(&noSymlink, "no-symlink", false, "do not create ~/.claude/skills symlinks for generated skills")
 	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "override the per-session GATE 5 call cap")
 	return cmd
@@ -212,6 +212,13 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	return nil
 }
 
+// evolveJudgeDefaultModel is the GATE 5 judge model when --model is not
+// given. Sonnet-class (vs the observer's Haiku) because accept/reject of
+// a skill candidate is low-frequency + high-stakes — matching ECC's
+// Sonnet semantic pipeline rather than the Haiku the high-frequency
+// observer extraction uses. The claude CLI resolves the "sonnet" alias.
+const evolveJudgeDefaultModel = "sonnet"
+
 // buildEvolveJudge wires the GATE 5 backend. Only "claude" is
 // supported in v0.9.1; the flag exists so v0.9.x can add a replay /
 // heuristic backend without a breaking change.
@@ -227,6 +234,7 @@ func buildEvolveJudge(backend, model string, maxCalls int) (evolve.Judge, *claud
 		return nil, nil, err
 	}
 	prov := claudecli.NewProvider()
+	prov.Model = evolveJudgeDefaultModel
 	if model != "" {
 		prov.Model = model
 	}
