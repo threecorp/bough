@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.9.8
+
+### Fixed
+
+- **`observer stop` / `status` could miss a live daemon and report it
+  "not running" (#45).** Both trusted `<project>/observer.pid`
+  exclusively; if that file was stale or held the wrong pid (a spawn
+  race, or a daemon launched out-of-band), `stop` signalled nothing and
+  orphaned a daemon that kept ticking against a project the operator
+  believed was idle. The `_run-daemon` loop now writes its OWN pid on
+  startup (the authoritative record), and `stop` / `status` fall back to
+  discovering a live `observer _run-daemon --root <root>` process by
+  command line when the pid file is stale or missing. Found by
+  dogfooding: a leftover daemon (pid 49920) survived `observer stop`
+  because the pid file held a dead pid (85654).
+
+### Changed
+
+- **`bough create` surfaces post-setup failures loudly and gains
+  `--strict`.** A failed `git worktree add` for one repo, or a failed
+  `post_create` hook (e.g. a migration), was logged mid-stream but
+  create still exited 0 — so a WorktreeCreate hook looked fully
+  successful when the environment was half-built. create now prints a
+  prominent final WARNING summarising every worktree-add / post_create
+  failure (the worktree path is still emitted so Claude Code can cd in),
+  and `--strict` turns any such failure into a non-zero exit for CI /
+  scripted callers. The default stays best-effort (exit 0 once the
+  worktree exists) to preserve the hook's cd contract.
+
 ## v0.9.7
 
 ### Fixed

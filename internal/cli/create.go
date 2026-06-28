@@ -28,6 +28,7 @@ func newCreateCmd() *cobra.Command {
 		cwd       string
 		stdinJSON bool
 		noFetch   bool
+		strict    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -47,13 +48,14 @@ func newCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch)
+			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (mutually exclusive with --stdin-json)")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "monorepo root (defaults to current working dir; overridden by --stdin-json)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists)")
 	return cmd
 }
 
@@ -83,7 +85,7 @@ type engineInstance struct {
 // Each numbered phase below is a self-contained helper so this body
 // reads as the contract: load → allocate → start engines → materialise
 // repos → render env → run hooks → emit the worktree path.
-func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch bool) error {
+func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch, strict bool) error {
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
 	worktreeRoot := filepath.Join(monorepoRoot, ".worktrees", name)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
@@ -118,7 +120,7 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// continue on per-repo failure because partial worktree
 	// materialisation is more useful than aborting on the first
 	// error — the operator can `bough remove` and retry.
-	materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
+	failedRepos := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
 
 	// 4. Render + write .env.local per repository.
 	if err := renderEnvLocals(stderr, cfg, worktreeRoot, name, engines, portsCtx); err != nil {
@@ -129,12 +131,31 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// reported to stderr but does not unwind the entire create — the
 	// operator usually wants the worktree materialised even when seed
 	// data is missing.
-	runPostCreateHooks(ctx, stderr, cfg, worktreeRoot)
+	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot)
 
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can
-	// cd into it. Everything else goes to stderr.
+	// cd into it. Everything else goes to stderr. Emit it even on
+	// partial failure so the operator still lands in the worktree.
 	fmt.Fprintln(stdout, worktreeRoot)
+
+	// 7. Surface partial failures loudly. By default create still
+	// returns success once the worktree exists (the hook's cd
+	// contract); --strict turns any worktree-add or post_create
+	// failure into a non-zero exit for CI / scripted callers.
+	if n := len(failedRepos) + len(failedHooks); n > 0 {
+		logf(stderr, "[bough] WARNING: create finished with %d problem(s); the worktree exists but its environment may be incomplete:", n)
+		for _, r := range failedRepos {
+			logf(stderr, "[bough]   - worktree add failed: %s", r)
+		}
+		for _, h := range failedHooks {
+			logf(stderr, "[bough]   - post_create failed: %s", h)
+		}
+		if strict {
+			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, post_create: %d) with --strict",
+				name, n, len(failedRepos), len(failedHooks))
+		}
+	}
 	return nil
 }
 
@@ -290,7 +311,8 @@ func materializeRepositories(
 	cfg *config.Config,
 	monorepoRoot, worktreeRoot, name string,
 	noFetch bool,
-) {
+) []string {
+	var failed []string
 	runner := gitwt.NewRunner()
 	runner.Fetch = !noFetch
 	for _, repo := range cfg.Repositories {
@@ -300,6 +322,7 @@ func materializeRepositories(
 		created, err := runner.AddOrAttach(ctx, repoSrc, repoDst, name, base)
 		if err != nil {
 			logf(stderr, "[bough] %s: worktree add FAILED: %v", repo.Name, err)
+			failed = append(failed, repo.Name)
 			continue
 		}
 		sha, _ := runner.HeadSHA(ctx, repoDst)
@@ -322,6 +345,7 @@ func materializeRepositories(
 			_ = os.Symlink(sl.Target, filepath.Join(repoDst, sl.Link)) // best-effort
 		}
 	}
+	return failed
 }
 
 // renderEnvLocals walks repositories that declare env_local templates
@@ -370,7 +394,8 @@ func renderEnvLocals(
 // declaration order. Failures log to stderr and the loop continues —
 // a failed migration should not unwind the entire create, since the
 // worktree materialisation itself is still valuable to the operator.
-func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string) {
+func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string) []string {
+	var failed []string
 	for _, repo := range cfg.Repositories {
 		if len(repo.PostCreate) == 0 {
 			continue
@@ -386,9 +411,11 @@ func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Confi
 			c.Stderr = stderr
 			if err := c.Run(); err != nil {
 				logf(stderr, "[bough] %s post_create FAILED: %v", repo.Name, err)
+				failed = append(failed, fmt.Sprintf("%s: %s", repo.Name, line))
 			}
 		}
 	}
+	return failed
 }
 
 // allocateEngines walks every engine and writes the chosen port
