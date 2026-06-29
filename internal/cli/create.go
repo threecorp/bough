@@ -122,8 +122,17 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// error — the operator can `bough remove` and retry.
 	failedRepos := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
 
+	// Repos that failed to materialise (clone / worktree-add) are skipped
+	// in the env_local + post_create passes below: their worktree dir does
+	// not exist, so rendering a `.env.local` there would only MkdirAll a
+	// bogus directory and run post_create hooks against empty content.
+	skipRepo := make(map[string]bool, len(failedRepos))
+	for _, r := range failedRepos {
+		skipRepo[r] = true
+	}
+
 	// 4. Render + write .env.local per repository.
-	if err := renderEnvLocals(stderr, cfg, worktreeRoot, name, engines, portsCtx); err != nil {
+	if err := renderEnvLocals(stderr, cfg, worktreeRoot, name, engines, portsCtx, skipRepo); err != nil {
 		return err
 	}
 
@@ -131,7 +140,7 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// reported to stderr but does not unwind the entire create — the
 	// operator usually wants the worktree materialised even when seed
 	// data is missing.
-	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot)
+	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can
@@ -404,8 +413,12 @@ func renderEnvLocals(
 	worktreeRoot, name string,
 	engines []engineInstance,
 	portsCtx map[string]int,
+	skip map[string]bool,
 ) error {
 	for _, repo := range cfg.Repositories {
+		if skip[repo.Name] {
+			continue // repo did not materialise; no worktree to write into
+		}
 		if len(repo.EnvLocal) == 0 {
 			continue
 		}
@@ -440,9 +453,12 @@ func renderEnvLocals(
 // declaration order. Failures log to stderr and the loop continues —
 // a failed migration should not unwind the entire create, since the
 // worktree materialisation itself is still valuable to the operator.
-func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string) []string {
+func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string, skip map[string]bool) []string {
 	var failed []string
 	for _, repo := range cfg.Repositories {
+		if skip[repo.Name] {
+			continue // repo did not materialise; nothing to run hooks against
+		}
 		if len(repo.PostCreate) == 0 {
 			continue
 		}
