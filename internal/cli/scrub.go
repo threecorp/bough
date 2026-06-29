@@ -123,15 +123,67 @@ func walkTruncate(v any) (any, bool) {
 // *unquoted* scalar under a secret-named key — `{"token":12345678}` →
 // `{"token":[REDACTED]}` — becomes INVALID JSON. The caller hands the result
 // to json.Marshal as a RawMessage, which would reject it and silently drop
-// the entire observation, starving the corpus. So if redaction turned a
-// payload that parsed cleanly going in into one that no longer parses, fall
-// back to truncation alone and keep the (still-valid) observation. Such
-// numeric-valued secrets are rare, and the homunculus is a private,
-// out-of-repo store, so preserving the record beats redacting that one field.
+// the entire observation, starving the corpus.
+//
+// When that happens we must NOT fall back to the raw payload — that would
+// persist any *sibling* secrets (which scrubbing redacted perfectly in
+// isolation) in clear. Instead redact structurally over the parsed JSON
+// (structuredScrub): every secret-named key's value becomes "[REDACTED]" and
+// every string value is re-scrubbed, which is valid by construction and never
+// leaks a cleanly-redactable secret. The structured path slightly over-redacts
+// (it drops a scheme word like "Bearer"), but it only runs on the rare
+// unquoted-scalar payload; the common path keeps the precise byte-level scrub.
 func sanitizeObservation(b []byte) []byte {
 	scrubbed := truncateLongStrings(scrubSecrets(b))
 	if len(b) > 0 && json.Valid(b) && !json.Valid(scrubbed) {
-		return truncateLongStrings(b)
+		if repaired, ok := structuredScrub(b); ok {
+			return truncateLongStrings(repaired)
+		}
+		return truncateLongStrings(b) // unreachable for valid b; keep the record
 	}
 	return scrubbed
+}
+
+// secretKeyRE matches a JSON KEY that names a secret — the same vocabulary as
+// secretPattern, anchored as a whole key.
+var secretKeyRE = regexp.MustCompile(`(?i)^(api[_-]?key|token|secret|password|authorization|credentials?|auth)$`)
+
+// structuredScrub redacts secrets over the PARSED JSON so the result is valid
+// by construction: any value under a secret-named key becomes "[REDACTED]", and
+// every string value is run through the byte-level scrub (json.Marshal then
+// re-quotes it safely). Used only as the sanitizeObservation fallback when the
+// byte-level scrub broke an otherwise-valid payload. ok=false if b is not JSON.
+func structuredScrub(b []byte) ([]byte, bool) {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, false
+	}
+	out, err := json.Marshal(walkScrub(v))
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func walkScrub(v any) any {
+	switch t := v.(type) {
+	case string:
+		return string(scrubSecrets([]byte(t)))
+	case map[string]any:
+		for k, val := range t {
+			if secretKeyRE.MatchString(k) {
+				t[k] = "[REDACTED]"
+			} else {
+				t[k] = walkScrub(val)
+			}
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = walkScrub(val)
+		}
+		return t
+	default:
+		return v
+	}
 }

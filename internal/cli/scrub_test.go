@@ -137,6 +137,21 @@ func TestSanitizeObservation_NeverDropsValidPayload(t *testing.T) {
 	}
 }
 
+// TestSanitizeObservation_NoSiblingLeakOnFallback is the v0.9.18 self-review
+// fix: when an unquoted secret-keyed scalar forces the structured fallback, a
+// SIBLING string secret must still be redacted. The first guard fell back to
+// the whole raw payload, persisting the sibling secret in clear.
+func TestSanitizeObservation_NoSiblingLeakOnFallback(t *testing.T) {
+	in := `{"token":12345678,"api_key":"AKIAVALIDSECRET123"}`
+	out := sanitizeObservation([]byte(in))
+	if !json.Valid(out) {
+		t.Fatalf("sanitize produced invalid JSON: %s", out)
+	}
+	if strings.Contains(string(out), "AKIAVALIDSECRET123") {
+		t.Errorf("sibling secret leaked on the structured fallback: %s", out)
+	}
+}
+
 // TestScrubSecrets_EscapedJSONStringValue is the v0.9.18 regression for the
 // recall gap: a secret inside an ESCAPED JSON string value (a tool whose
 // stdout is itself a JSON body) used to slip past redaction because the `\"`
