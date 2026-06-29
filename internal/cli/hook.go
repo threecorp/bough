@@ -211,7 +211,7 @@ func runDoctor(c *cobra.Command) error {
 		return err
 	}
 	m := hooks.New(settingsPath)
-	report, err := m.Doctor(commandCtx(c))
+	report, err := m.Doctor(commandCtx(c), resolveObserverObsPath())
 	if err != nil {
 		return err
 	}
@@ -219,6 +219,25 @@ func runDoctor(c *cobra.Command) error {
 	report.Render(w)
 	renderContinuousLearningPosture(w)
 	return nil
+}
+
+// resolveObserverObsPath returns the central homunculus observations.jsonl
+// for the resolved monorepo project so `bough doctor` probes the path the
+// hook actually writes to (since v0.9.10) instead of the dead working-tree
+// .bough/observations.jsonl. Read-only by design: unlike
+// resolveHomunculusObsPath it does NOT EnsureProjectDirs — a diagnostic must
+// not create directories. Returns "" when no project identity resolves
+// (non-git dir, no .bough.yaml), and doctor then reports not-yet-capturing.
+func resolveObserverObsPath() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
+	if err != nil {
+		return ""
+	}
+	return homunculus.NewLayout().ObservationsFile(ident.ID)
 }
 
 // newHookHandleCmd wires `bough hook handle`, the v0.7.0 O-1.6
@@ -373,12 +392,19 @@ func resolveHomunculusObsPath() string {
 // before /.worktrees/); otherwise it walks up to the nearest ancestor
 // holding the monorepo marker (.bough.yaml); else it falls back to cwd.
 func resolveMonorepoRoot(cwd string) string {
+	// Prefer the prefix before /.worktrees/ — but only when it actually holds
+	// the .bough.yaml marker, so a path that legitimately contains a
+	// /.worktrees/ segment that is not bough's does not resolve to a bogus
+	// root. Otherwise fall through to the ancestor walk (which would also find
+	// the monorepo root for a real worktree, since it holds the marker).
 	if i := strings.Index(cwd, "/.worktrees/"); i >= 0 {
-		return cwd[:i]
+		if cand := cwd[:i]; hasMonorepoMarker(cand) {
+			return cand
+		}
 	}
 	dir := cwd
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".bough.yaml")); err == nil {
+		if hasMonorepoMarker(dir) {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -387,6 +413,12 @@ func resolveMonorepoRoot(cwd string) string {
 		}
 		dir = parent
 	}
+}
+
+// hasMonorepoMarker reports whether dir holds the .bough.yaml monorepo marker.
+func hasMonorepoMarker(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".bough.yaml"))
+	return err == nil
 }
 
 // maxObsBytes bounds the live observations file before it is archived,
@@ -421,7 +453,11 @@ func dispatchInjectContext(c *cobra.Command) {
 	if err != nil {
 		return
 	}
-	ident, err := homunculus.DetectIdentity(cwd)
+	// Resolve from the monorepo root so this injector reads the SAME project
+	// the writer/observer/session-end pool into (DetectIdentity(
+	// resolveMonorepoRoot(cwd))). On a raw cwd in a sub-repo / worktree the id
+	// would diverge from the writer's and inject nothing — see inject.go.
+	ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
 	if err != nil {
 		return
 	}

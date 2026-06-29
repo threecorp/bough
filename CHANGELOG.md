@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.9.18
+
+Retrospective /review of the merged continuous-learning PRs #48–#54 (which shipped
+without a pre-merge review), batched into one fix release. One reviewer agent per PR;
+every finding verified against the live code before fixing.
+
+### Fixed
+
+- **Minted instincts are now injected in monorepo / worktree sessions (HIGH).**
+  The observation writer, observer daemon, session-end and preserve all key the project
+  on `DetectIdentity(resolveMonorepoRoot(cwd))`, but the two injectors
+  (`bough inject-context` and the inline UserPromptSubmit dispatch) keyed on the raw
+  `cwd`. In a multi-repo monorepo / worktree (the `.bough.yaml` root is not a git repo;
+  each sub-repo has its own origin) those resolve to different project ids, so the
+  injector read an empty project and surfaced nothing — the observe→mint→inject loop's
+  payoff was silently dead for the primary topology. Both injectors now resolve the
+  monorepo root.
+- **Confidence demotion no longer fires on tool-output noise (HIGH).**
+  The correction signal scanned tool OUTPUT with a naked substring match, so `"0 errors"`,
+  `"prefix"`/`"fixtures"`, `"correctly"` etc. — present in essentially every session —
+  demoted good instincts every session, the exact opposite of the intent. It now scans the
+  USER's prompts only, as whole words. (Residual, documented: a marker can still sit in an
+  opening task prompt; a precise correction-of-assistant signal is a future refinement.)
+- **Observations with a secret-keyed unquoted scalar are no longer dropped (HIGH).**
+  Redacting raw JSON bytes turned `{"token":12345678}` into `{"token":[REDACTED]}` —
+  invalid JSON — which `json.Marshal` then rejected, silently discarding the whole
+  observation. `sanitizeObservation` now guarantees it never turns a valid payload into
+  invalid JSON (falls back to truncation alone), so a record is never lost.
+- **Secrets inside escaped-JSON string values are now redacted (security).**
+  The redaction separator class gained a backslash, so a credential in a tool's JSON-body
+  stdout (`{"stdout":"{\"access_token\":\"…\"}"}`) is caught instead of leaking.
+- **`bough observer run-once` resolves the monorepo root** (was raw cwd), so it reads the
+  same archive the hook/daemon pool into; the stale `.bough/observations.jsonl` inbox is
+  documented as a legacy back-compat read, not a live path.
+- **`bough observer stop` no longer risks killing an unrelated process on SIGKILL
+  escalation.** The escalation path re-verifies the pid is still the observer daemon
+  before SIGKILL (the recycled-pid class closed for the SIGTERM target in v0.9.17, closed
+  here for escalation too), and the post-kill wait result is reported.
+- **`bough doctor` reports observer capture from the homunculus** observations.jsonl
+  (resolved read-only) instead of probing the dead working-tree `.bough/observations.jsonl`
+  — it no longer says "not yet capturing" while the loop is healthy.
+- **`bough instinct promote` previews by default.** It mutates the shared global corpus, so
+  a bare `promote` now reports what it would do; pass `--apply` (or `--dry-run=false`) to
+  write — matching `bough ecc import`.
+- **`bough create` returns a trimmed `branch_strategy`** so a quoted `"  develop  "` no
+  longer reaches `git worktree add -b` as an invalid ref.
+- **`session-evolve-claudemd --write` clears a stale proposals file** when nothing crosses
+  the gates, so operators do not review proposals that no longer hold.
+- **`resolveMonorepoRoot` verifies the `.bough.yaml` marker** before trusting a
+  `/.worktrees/` split, so a path that merely contains that segment does not resolve to a
+  bogus root.
+- **Docs corrected:** a PreCompact hook's plain stdout does not reach the post-compaction
+  model context (only SessionStart/Setup do); the durable MEMORY.md snapshot plus the
+  next UserPromptSubmit inject are what re-surface instincts. Comments overstating a
+  "fold into the compacted context" were fixed.
+
 ## v0.9.17
 
 Retrospective /review of merged PRs #44 / #46 / #47 (which shipped without a pre-merge review).

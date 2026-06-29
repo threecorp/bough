@@ -82,7 +82,13 @@ func newObserverRunOnceCmd() *cobra.Command {
 				}
 				cwd = w
 			}
-			ident, err := homunculus.DetectIdentity(cwd)
+			// Resolve identity from the MONOREPO ROOT, not raw cwd, so run-once
+			// reads the same archive the hook + observer daemon pool into
+			// (DetectIdentity(resolveMonorepoRoot(cwd))). Run from a sub-repo /
+			// worktree with the raw cwd, the id would diverge from the writer's
+			// and run-once would mint from an empty, un-pooled project.
+			root := resolveMonorepoRoot(cwd)
+			ident, err := homunculus.DetectIdentity(root)
 			if err != nil {
 				return err
 			}
@@ -103,14 +109,14 @@ func newObserverRunOnceCmd() *cobra.Command {
 				return err
 			}
 
-			// Read BOTH the hook inbox (<root>/.bough/observations.jsonl,
-			// where `bough hook handle` appends on every tool use) and the
-			// homunculus archive (where `bough ecc import` writes). Before
-			// v0.9.5 only the archive was read, so observations captured by
-			// the live hook were never minted (the loop's entry point was
-			// disconnected).
+			// Read the homunculus archive — where `bough hook handle` appends
+			// since v0.9.10 and `bough ecc import` writes — and ALSO a legacy
+			// hook inbox at <root>/.bough/observations.jsonl for back-compat:
+			// pre-v0.9.10 the hook wrote there, so a stale inbox may still hold
+			// un-minted observations. It is no longer written; TailNMerged
+			// skips it when absent (the normal case post-v0.9.10).
 			archivePath := layout.ObservationsFile(ident.ID)
-			inboxPath := filepath.Join(cwd, ".bough", "observations.jsonl")
+			inboxPath := filepath.Join(root, ".bough", "observations.jsonl")
 			observations, err := observe.TailNMerged(windowSize, archivePath, inboxPath)
 			if err != nil {
 				return fmt.Errorf("observer run-once: read observations: %w", err)

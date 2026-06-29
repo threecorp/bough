@@ -362,10 +362,10 @@ type EventStatus struct {
 	HandEntries    []HookEntry
 }
 
-// ObserverStatus tracks whether the v0.7.0 raw-event observer is
-// actually capturing into .bough/observations.jsonl. Configured =
-// false means the operator has not run any session yet (or has not
-// wired hook install).
+// ObserverStatus tracks whether the raw-event observer is actually
+// capturing into the central homunculus observations.jsonl (since v0.9.10;
+// pre-v0.9.10 this was a working-tree .bough/ file). Configured = false means
+// the operator has not run any session yet (or has not wired hook install).
 type ObserverStatus struct {
 	Configured bool
 	Path       string
@@ -390,7 +390,7 @@ type CostStatus struct {
 // hook auto-wire is the moment "silent" failure modes become
 // possible; doctor is the operator's first stop when something
 // feels off.
-func (m *Manager) Doctor(ctx context.Context) (*DoctorReport, error) {
+func (m *Manager) Doctor(ctx context.Context, obsPath string) (*DoctorReport, error) {
 	set, err := m.List(ctx)
 	if err != nil {
 		return nil, err
@@ -411,17 +411,19 @@ func (m *Manager) Doctor(ctx context.Context) (*DoctorReport, error) {
 		}
 		report.Events = append(report.Events, st)
 	}
-	// Observer status: v0.7.0 raw-event capture lands a JSONL file
-	// under .bough/observations.jsonl. The doctor probes the
-	// well-known cwd-relative path so the v0.7.0 sub-phases that
-	// configure a custom location (= .bough.yaml override) can
-	// surface the actual path here in a later patch.
-	obsPath := filepath.Join(".bough", "observations.jsonl")
-	if info, statErr := os.Stat(obsPath); statErr == nil && info.Mode().IsRegular() {
-		report.Observer.Configured = true
-		report.Observer.Path = obsPath
-		if data, readErr := os.ReadFile(obsPath); readErr == nil {
-			report.Observer.LineCount = bytes.Count(data, []byte("\n"))
+	// Observer status: since v0.9.10 raw-event capture lands in the central
+	// homunculus observations.jsonl for the resolved monorepo project (NOT a
+	// working-tree .bough/ file). The caller resolves that path read-only and
+	// passes it in; an empty obsPath means no project identity could be
+	// resolved (non-git dir, no .bough.yaml), so capture is reported as not
+	// yet configured rather than probing a dead, always-absent path.
+	if obsPath != "" {
+		if info, statErr := os.Stat(obsPath); statErr == nil && info.Mode().IsRegular() {
+			report.Observer.Configured = true
+			report.Observer.Path = obsPath
+			if data, readErr := os.ReadFile(obsPath); readErr == nil {
+				report.Observer.LineCount = bytes.Count(data, []byte("\n"))
+			}
 		}
 	}
 	// Cost meter: v0.7.0 ships the field shape; the actual counter
@@ -461,7 +463,7 @@ func (r *DoctorReport) Render(w io.Writer) {
 	if r.Observer.Configured {
 		fmt.Fprintf(w, "  observations: %s (%d lines)\n", r.Observer.Path, r.Observer.LineCount)
 	} else {
-		fmt.Fprintln(w, "  observations: not yet capturing (.bough/observations.jsonl absent)")
+		fmt.Fprintln(w, "  observations: not yet capturing (no observations.jsonl recorded yet for this project)")
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Cost meter:")

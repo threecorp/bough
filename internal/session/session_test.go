@@ -84,10 +84,11 @@ func TestEvaluate_ReinforcesExercisedInstinct(t *testing.T) {
 	}
 }
 
-// TestEvaluate_DemotesExercisedInstinctOnCorrection is the v0.9.12 #4
-// regression: an instinct the session exercised is DEMOTED (not
-// reinforced) when the session shows a correction marker — before this,
-// confidence could only ever increase.
+// TestEvaluate_DemotesExercisedInstinctOnCorrection is the #4 regression
+// (v0.9.12), updated for v0.9.18: an instinct the session exercised is DEMOTED
+// when the USER's prompt shows a whole-word correction marker. (Pre-v0.9.18
+// the scan also covered tool outputs, so build-log tokens demoted good
+// instincts every session — see TestEvaluate_ToolOutputMarkersDoNotDemote.)
 func TestEvaluate_DemotesExercisedInstinctOnCorrection(t *testing.T) {
 	root := t.TempDir()
 	layout := homunculus.FromRoot(root)
@@ -96,11 +97,11 @@ func TestEvaluate_DemotesExercisedInstinctOnCorrection(t *testing.T) {
 	_ = os.MkdirAll(dir, 0o755)
 	writeInstinct(t, dir, "migration-discipline", 0.70, "Run migration after schema change to keep database models in sync")
 
-	// the session exercised the instinct (overlap) AND hit an error in
-	// a tool output → correction → demote.
+	// the session exercised the instinct (overlap) AND the user corrected
+	// bough in a prompt ("wrong", "undo") → correction → demote.
 	obs := []observe.Observation{
 		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"make migration database schema sync models"}`)},
-		{Event: "PostToolUse", Tool: "Bash", ToolOutput: json.RawMessage(`{"stderr":"Error 1265: data truncated; migration wrong"}`)},
+		{Event: "UserPromptSubmit", Prompt: "no, that migration is wrong — undo it"},
 	}
 	now := time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
 	res, err := Evaluate(layout, pid, "sess-1", obs, now)
@@ -113,6 +114,81 @@ func TestEvaluate_DemotesExercisedInstinctOnCorrection(t *testing.T) {
 	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
 	if reloaded.Confidence != 0.65 {
 		t.Errorf("confidence = %v, want 0.65 after demotion", reloaded.Confidence)
+	}
+}
+
+// TestEvaluate_ToolOutputMarkersDoNotDemote is the v0.9.18 regression for the
+// over-broad correction scan: marker SUBSTRINGS in TOOL OUTPUT ("0 errors",
+// "fixtures", "correctly") must NOT demote — only a whole-word marker in the
+// USER's prompt does. Before the fix these tokens (in essentially every
+// session) demoted good instincts out of the injected set.
+func TestEvaluate_ToolOutputMarkersDoNotDemote(t *testing.T) {
+	root := t.TempDir()
+	layout := homunculus.FromRoot(root)
+	pid := "abc123"
+	dir := layout.InstinctsDir(pid)
+	_ = os.MkdirAll(dir, 0o755)
+	writeInstinct(t, dir, "migration-discipline", 0.70, "Run migration after schema change to keep database models in sync")
+
+	obs := []observe.Observation{
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"make migration database schema sync models"}`)},
+		{Event: "PostToolUse", Tool: "Bash", ToolOutput: json.RawMessage(`{"stdout":"build ok, 0 errors; loaded test/fixtures; passed correctly"}`)},
+		{Event: "UserPromptSubmit", Prompt: "great, now add the prefix column too"},
+	}
+	now := time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
+	res, err := Evaluate(layout, pid, "sess-1", obs, now)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if res.Reinforced != 1 || res.Contradicted != 0 {
+		t.Errorf("tool-output markers must not demote: want Reinforced=1 Contradicted=0, got %+v", res)
+	}
+	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
+	if reloaded.Confidence != 0.75 {
+		t.Errorf("confidence = %v, want 0.75 (reinforced, not demoted)", reloaded.Confidence)
+	}
+}
+
+// TestSessionHadCorrection_PromptScopedWordBoundary locks the v0.9.18 signal:
+// scan user prompts only, as whole words.
+func TestSessionHadCorrection_PromptScopedWordBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		obs  []observe.Observation
+		want bool
+	}{
+		{
+			"tool output '0 errors' is not a correction",
+			[]observe.Observation{{Event: "PostToolUse", ToolOutput: json.RawMessage(`{"stdout":"build ok, 0 errors"}`)}},
+			false,
+		},
+		{
+			"tool output 'fixtures'/'correctly' substrings ignored",
+			[]observe.Observation{{Event: "PostToolUse", ToolOutput: json.RawMessage(`{"stdout":"loaded fixtures, passed correctly"}`)}},
+			false,
+		},
+		{
+			"prompt 'prefix' substring does not match fix",
+			[]observe.Observation{{Event: "UserPromptSubmit", Prompt: "add a prefix to the filename"}},
+			false,
+		},
+		{
+			"prompt 'that's wrong' is a correction",
+			[]observe.Observation{{Event: "UserPromptSubmit", Prompt: "no, that's wrong"}},
+			true,
+		},
+		{
+			"prompt 'undo that' is a correction",
+			[]observe.Observation{{Event: "UserPromptSubmit", Prompt: "undo that change"}},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sessionHadCorrection(tc.obs); got != tc.want {
+				t.Errorf("sessionHadCorrection = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -171,8 +247,9 @@ func TestPreserveInstincts(t *testing.T) {
 		t.Errorf("path = %q", path)
 	}
 	body, _ := os.ReadFile(path)
-	// v0.9.11: the returned block (printed to stdout so it folds into
-	// the compacted context) must equal the persisted MEMORY.md.
+	// v0.9.11: the returned block (printed to the transcript on PreCompact;
+	// re-surfacing into context is via the next UserPromptSubmit inject) must
+	// equal the persisted MEMORY.md.
 	if block != string(body) {
 		t.Errorf("returned block != MEMORY.md content")
 	}

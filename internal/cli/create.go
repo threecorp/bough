@@ -399,10 +399,13 @@ func materializeRepositories(
 // source happened to have checked out and is not necessarily the
 // intended base.
 func chooseBase(branchStrategy, detected string) string {
-	if strings.TrimSpace(branchStrategy) != "" {
-		return branchStrategy
+	if s := strings.TrimSpace(branchStrategy); s != "" {
+		// Return the TRIMMED value: deciding on TrimSpace but returning the
+		// raw string let a quoted `branch_strategy: "  develop  "` reach
+		// `git worktree add -b <name> "  develop  "` as an invalid ref.
+		return s
 	}
-	return detected
+	return strings.TrimSpace(detected)
 }
 
 // isDir reports whether p exists and is a directory — the "is this repo

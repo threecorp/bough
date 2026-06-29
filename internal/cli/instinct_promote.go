@@ -220,7 +220,8 @@ layers into every project. This mirrors ECC continuous-learning-v2's
 auto-promotion: an id seen in >= --min-projects projects with mean
 confidence >= --min-confidence is general enough to be global. Source
 project instincts are left untouched and ids already global are skipped
-(idempotent). Use --dry-run to preview without writing.`,
+(idempotent). Previews by default (--dry-run); pass --apply (or
+--dry-run=false) to write into the global corpus.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := promoteInstincts(homunculus.NewLayout(), opt, time.Now())
 			if err != nil {
@@ -235,7 +236,15 @@ project instincts are left untouched and ids already global are skipped
 	}
 	cmd.Flags().IntVar(&opt.minProjects, "min-projects", promoteMinProjects, "minimum projects an instinct must appear in")
 	cmd.Flags().Float64Var(&opt.minConfidence, "min-confidence", promoteMinConfidence, "minimum mean confidence to promote")
-	cmd.Flags().BoolVar(&opt.dryRun, "dry-run", false, "preview promotions without writing")
+	// Preview by default — promote mutates the shared global corpus, so a
+	// bare `bough instinct promote` must not write (ECC prompts [y/N]; bough
+	// is non-interactive, so it defaults to dry-run + an explicit --apply).
+	cmd.Flags().BoolVar(&opt.dryRun, "dry-run", true, "report what would be promoted without writing (default true)")
+	// --apply is the inverse of --dry-run for ergonomics, matching `ecc import`.
+	cmd.Flags().BoolFunc("apply", "perform the promotion (= --dry-run=false)", func(string) error {
+		opt.dryRun = false
+		return nil
+	})
 	return cmd
 }
 

@@ -56,10 +56,12 @@ func runSessionEnd(out io.Writer, root, sessionID string, window int) error {
 
 // runPreserveInstincts is the shared PreCompact body: snapshot the
 // top-confidence instincts to MEMORY.md (durable) AND print the block
-// to stdout so it folds back into Claude Code's compacted context —
-// the load-bearing ECC behavior bough was missing. Project resolution
-// matches the hook's write target via resolveMonorepoRoot. Pure
-// filesystem; no LLM.
+// to stdout for transcript visibility. NOTE: a PreCompact hook's stdout
+// does NOT reach the post-compaction model context (only SessionStart/
+// Setup inject via stdout); the durable MEMORY.md plus the UserPromptSubmit
+// inject on the next prompt are what actually re-surface the instincts.
+// Project resolution matches the hook's write target via
+// resolveMonorepoRoot. Pure filesystem; no LLM.
 func runPreserveInstincts(out io.Writer, root string) error {
 	cwd := root
 	if cwd == "" {
@@ -115,8 +117,10 @@ the evaluation to eval/scores.jsonl. No claude --print call.`,
 
 // newPreserveInstinctsCmd wires `bough preserve-instincts` — the
 // PreCompact hook handler (also dispatched inline by `bough hook
-// handle --event PreCompact`). Writes MEMORY.md and prints the top
-// instincts to stdout so they fold into the compacted context.
+// handle --event PreCompact`). Writes the durable MEMORY.md snapshot and
+// prints the top instincts to the transcript (PreCompact stdout is not
+// injected into the post-compaction context; re-surfacing is via the
+// UserPromptSubmit inject on the next prompt).
 func newPreserveInstinctsCmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{

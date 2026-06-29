@@ -49,7 +49,15 @@ is made — selection is pure filesystem.`,
 				}
 				cwd = w
 			}
-			ident, err := homunculus.DetectIdentity(cwd)
+			// Resolve identity from the MONOREPO ROOT, not the raw cwd: the
+			// observation writer (resolveHomunculusObsPath), the observer
+			// daemon that mints the instinct files, session-end, and preserve
+			// all pool to DetectIdentity(resolveMonorepoRoot(cwd)). In a
+			// multi-repo monorepo / worktree (the .bough.yaml root is not a
+			// git repo; each sub-repo has its own origin) the raw-cwd id would
+			// differ from the writer's id, so this injector would read an
+			// empty project and surface nothing — the loop's whole payoff.
+			ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
 			if err != nil {
 				// A non-git directory is not an error for a hook — just
 				// emit nothing so the prompt is unaffected.

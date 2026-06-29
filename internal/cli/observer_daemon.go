@@ -129,9 +129,21 @@ func newObserverStopCmd() *cobra.Command {
 			// success.
 			via := "SIGTERM"
 			if !waitGone(pid, 3*time.Second) {
-				_ = syscall.Kill(pid, syscall.SIGKILL)
-				waitGone(pid, 2*time.Second)
-				via = "SIGKILL"
+				// Re-verify identity before escalating: after SIGTERM the
+				// daemon may have exited and the OS recycled its pid to an
+				// unrelated process within the grace window. SIGKILLing a bare
+				// pid would then kill that innocent process — the recycled-pid
+				// class closed for the SIGTERM target in v0.9.17, closed here
+				// for the escalation path too. If the pid is gone or no longer
+				// our daemon, SIGTERM worked (or it was recycled) — don't kill.
+				if pidIsObserverDaemon(pid, ident.Root) {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+					if waitGone(pid, 2*time.Second) {
+						via = "SIGKILL"
+					} else {
+						via = "SIGKILL (still present)"
+					}
+				}
 			}
 			_ = os.Remove(pidPath)
 			fmt.Fprintf(cmd.OutOrStdout(), "observer stopped (pid %d, via %s)\n", pid, via)

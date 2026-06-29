@@ -19,6 +19,8 @@ func TestChooseBase(t *testing.T) {
 		{"whitespace strategy treated as empty", "   ", "develop", "develop"},
 		{"both equal", "develop", "develop", "develop"},
 		{"strategy wins even when detection failed (empty)", "develop", "", "develop"},
+		{"surrounding whitespace is trimmed off the returned ref", "  develop  ", "master", "develop"},
+		{"detected ref is also trimmed when used", "", "  master  ", "master"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

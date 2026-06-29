@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -32,17 +33,19 @@ import (
 // demotion toward removal (ECC clamps to [0.1, 0.95]).
 var confidenceBands = []float64{0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85}
 
-// correctionMarkers signal the session hit a mistake / correction.
-// ECC's evaluate-session.sh greps the same set over the session
-// observations to decide "hurt" vs "helped".
-var correctionMarkers = []string{"error", "mistake", "wrong", "fix", "correct", "undo"}
+// correctionMarkerRE matches ECC's correction markers as WHOLE WORDS
+// (case-insensitive). Whole-word anchoring is essential: a naked substring
+// scan flags "0 errors" (error), "prefix"/"suffix"/"fixture"/"fixed" (fix),
+// and "correctly"/"incorrect" (correct) — tokens that appear in nearly every
+// session — which demoted good instincts every session (v0.9.18 review).
+var correctionMarkerRE = regexp.MustCompile(`(?i)\b(error|mistake|wrong|fix|correct|undo)\b`)
 
 // ReinforceDelta / ContradictDelta are how many bands an instinct
 // moves on a reinforcement / contradiction. ECC moves one band each
 // way; bough keeps that so the evaluation is gentle (= a single
 // session never swings an instinct from 0.85 to 0.50).
 const (
-	reinforceSteps = 1
+	reinforceSteps  = 1
 	contradictSteps = 1
 )
 
@@ -196,18 +199,32 @@ func instinctOverlap(in *homunculus.Instinct, obsTokens map[string]struct{}) flo
 	return float64(hit) / float64(len(itoks))
 }
 
-// sessionHadCorrection reports whether the session's tool outputs or
-// the user's prompts contain a correction marker — ECC's signal to
-// demote (rather than reinforce) the instincts the session exercised.
-// It scans outputs + prompts, not tool inputs, so benign "fix" /
-// "correct" tokens in commands or paths do not trigger a demotion.
+// sessionHadCorrection reports whether the USER corrected bough during the
+// session — ECC's signal to demote (rather than reinforce) the instincts the
+// session exercised. It scans the user's PROMPTS only (a whole-word marker
+// match), never tool outputs.
+//
+// Scanning tool outputs (the pre-v0.9.18 behavior) was the bug: a build log
+// "0 errors", a file read containing "prefix", a lint summary saying "fix
+// by …", or JSON like `{"error":null}` are not corrections, yet they appear
+// in essentially every session — so the demotion branch fired constantly and
+// good instincts decayed out of the injected set. A correction is something
+// the user TYPED ("no, that's wrong" / "undo that" / "fix this"), which lives
+// in the prompt.
+//
+// Residual (documented, not yet addressed): a marker can still sit in an
+// opening TASK prompt ("fix the login bug") rather than a correction, so this
+// is conservative-but-imperfect. A precise "user is correcting the assistant"
+// signal (correction phrases, or markers only in 2nd+ prompts) is a candidate
+// refinement; demotion is one band, token-overlap-gated, and re-reinforced on
+// the next clean exercise, so the residual is bounded.
 func sessionHadCorrection(obs []observe.Observation) bool {
 	for _, o := range obs {
-		hay := strings.ToLower(string(o.ToolOutput) + " " + o.Prompt)
-		for _, m := range correctionMarkers {
-			if strings.Contains(hay, m) {
-				return true
-			}
+		if o.Prompt == "" {
+			continue
+		}
+		if correctionMarkerRE.MatchString(o.Prompt) {
+			return true
 		}
 	}
 	return false

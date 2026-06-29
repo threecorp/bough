@@ -303,7 +303,7 @@ func TestManager_List_MissingFile(t *testing.T) {
 // against a fresh repo (= no settings.json, no observations.jsonl).
 func TestManager_Doctor_FreshState(t *testing.T) {
 	m := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
-	report, err := m.Doctor(context.Background())
+	report, err := m.Doctor(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -321,6 +321,37 @@ func TestManager_Doctor_FreshState(t *testing.T) {
 	}
 }
 
+// TestManager_Doctor_ObserverFromPath is the v0.9.18 regression: doctor's
+// observer status comes from the obsPath the caller resolves (the homunculus
+// observations.jsonl), NOT a dead working-tree .bough/ probe. A real file with
+// N lines → Configured=true + LineCount=N; an empty path → not configured.
+func TestManager_Doctor_ObserverFromPath(t *testing.T) {
+	m := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
+
+	obs := filepath.Join(t.TempDir(), "observations.jsonl")
+	if err := os.WriteFile(obs, []byte("{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := m.Doctor(context.Background(), obs)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if !report.Observer.Configured {
+		t.Errorf("Observer.Configured = false, want true for an existing obs file")
+	}
+	if report.Observer.LineCount != 3 {
+		t.Errorf("Observer.LineCount = %d, want 3", report.Observer.LineCount)
+	}
+
+	empty, err := m.Doctor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Doctor(empty): %v", err)
+	}
+	if empty.Observer.Configured {
+		t.Errorf("Observer.Configured = true on empty path, want false")
+	}
+}
+
 // TestManager_Doctor_AfterInstall verifies every event flips to
 // BoughInstalled=true after Install, and BoughCommand surfaces the
 // canonical command string the render path prints.
@@ -331,7 +362,7 @@ func TestManager_Doctor_AfterInstall(t *testing.T) {
 	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	report, err := m.Doctor(context.Background())
+	report, err := m.Doctor(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}

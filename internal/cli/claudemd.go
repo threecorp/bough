@@ -152,6 +152,16 @@ func runEvolveClaudeMD(out io.Writer, root, outPath string, write bool, now time
 	prop := collectClaudemdProposals(instincts, now)
 	if prop.empty() {
 		fmt.Fprintln(out, "(no CLAUDE.md proposals — no instinct crossed the add/remove gates)")
+		if write {
+			// Clear a stale proposals file from a prior session: with nothing
+			// crossing the gates now, leaving the old file would have the
+			// operator review proposals that no longer reflect current
+			// instinct confidence. Missing file is fine.
+			target := claudemdTargetPath(outPath, monorepoRoot)
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("session-evolve-claudemd: clear stale %s: %w", target, err)
+			}
+		}
 		return nil
 	}
 	doc := renderClaudemdProposals(prop, now)
@@ -160,10 +170,7 @@ func runEvolveClaudeMD(out io.Writer, root, outPath string, write bool, now time
 		fmt.Fprintf(out, "\n(preview: %d addition(s) + %d removal(s); pass --write to save the proposals file)\n", len(prop.add), len(prop.remove))
 		return nil
 	}
-	target := outPath
-	if target == "" {
-		target = filepath.Join(monorepoRoot, ".claude", claudemdProposalsRelName)
-	}
+	target := claudemdTargetPath(outPath, monorepoRoot)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("session-evolve-claudemd: mkdir %s: %w", filepath.Dir(target), err)
 	}
@@ -172,6 +179,15 @@ func runEvolveClaudeMD(out io.Writer, root, outPath string, write bool, now time
 	}
 	fmt.Fprintf(out, "wrote %d addition(s) + %d removal(s) to %s\n", len(prop.add), len(prop.remove), target)
 	return nil
+}
+
+// claudemdTargetPath resolves where the proposals file is written: the
+// explicit --out override, else <monorepoRoot>/.claude/<proposals-name>.
+func claudemdTargetPath(outPath, monorepoRoot string) string {
+	if outPath != "" {
+		return outPath
+	}
+	return filepath.Join(monorepoRoot, ".claude", claudemdProposalsRelName)
 }
 
 // newSessionEvolveClaudeMDCmd wires `bough session-evolve-claudemd` —

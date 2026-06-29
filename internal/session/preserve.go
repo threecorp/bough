@@ -21,9 +21,13 @@ const PreservedTopN = 5
 // compaction does not lose the operator's most-reliable learned
 // patterns. The PreCompact hook calls this; it is pure filesystem,
 // no LLM. Returns the snapshot path AND the rendered top-N block, so
-// the caller can also print the block to stdout — which is what folds
-// it back into Claude Code's compacted context (ECC's load-bearing
-// behavior). bough additionally keeps the durable MEMORY.md file.
+// the caller can also print the block to stdout for operator visibility
+// in the transcript. NOTE: a PreCompact hook's plain stdout does NOT reach
+// the model's post-compaction context (only SessionStart/Setup inject via
+// stdout; PreCompact itself supports only blocking). The durable MEMORY.md
+// is the real artifact, and the top instincts re-surface into context on the
+// next prompt via the UserPromptSubmit inject — so nothing is lost. (ECC's
+// preserve-instincts.sh assumes the stdout fold; that assumption is stale.)
 //
 // MEMORY.md is one of the catalog filenames ScanInstincts skips, so
 // the snapshot never gets re-ingested as an instinct.
