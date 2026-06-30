@@ -36,10 +36,35 @@ func TestRenderSkill_Frontmatter(t *testing.T) {
 		"generated_by: bough-evolve@v0.9.1",
 		"Evolved from 3 instincts.",
 		"## Actions",
+		"## Source instincts",
+		"- `member-a`", // mkCluster members have no Path → degrade to id only
 	} {
 		if !strings.Contains(art.Body, want) {
 			t.Errorf("SKILL.md missing %q:\n%s", want, art.Body)
 		}
+	}
+}
+
+func TestSourceInstinctsBlock_PathsDegradeAndSorted(t *testing.T) {
+	// input order is b-then-a; output must be id-sorted (a before b),
+	// path members render "- `id` — <path>", path-less members degrade.
+	withPath := &homunculus.Instinct{ID: "member-b", Path: "/abs/instincts/member-b.md"}
+	noPath := &homunculus.Instinct{ID: "member-a"} // Path == ""
+	blk := sourceInstinctsBlock([]*homunculus.Instinct{withPath, noPath})
+
+	if !strings.Contains(blk, "## Source instincts") {
+		t.Errorf("missing heading:\n%s", blk)
+	}
+	if !strings.Contains(blk, "- `member-b` — /abs/instincts/member-b.md") {
+		t.Errorf("path member should render its absolute path:\n%s", blk)
+	}
+	// degrade: id only, no em-dash for the path-less member
+	if !strings.Contains(blk, "- `member-a`\n") || strings.Contains(blk, "member-a` —") {
+		t.Errorf("path-less member must degrade to id only:\n%s", blk)
+	}
+	// determinism: sorted by id regardless of input order
+	if strings.Index(blk, "member-a") > strings.Index(blk, "member-b") {
+		t.Errorf("block not id-sorted:\n%s", blk)
 	}
 }
 
@@ -89,6 +114,7 @@ func TestRenderAgent(t *testing.T) {
 		"model: sonnet",
 		"tools: Read, Grep, Glob",
 		"avg confidence: 80%",
+		"## Source instincts",
 	} {
 		if !strings.Contains(art.Body, want) {
 			t.Errorf("agent missing %q:\n%s", want, art.Body)
@@ -132,6 +158,16 @@ func TestRenderCommand(t *testing.T) {
 	}
 	if !strings.Contains(art.Body, "Structure issues with Symptom") {
 		t.Errorf("command missing action: %s", art.Body)
+	}
+	// no Path → no "Source instinct:" line
+	if strings.Contains(art.Body, "Source instinct:") {
+		t.Errorf("command without Path should not emit a Source instinct line: %s", art.Body)
+	}
+	// with Path → emits the resolvable line
+	in.Path = "/abs/instincts/github-issue-structure.md"
+	art2 := RenderCommand(in, time.Now())
+	if !strings.Contains(art2.Body, "Source instinct: /abs/instincts/github-issue-structure.md") {
+		t.Errorf("command with Path missing Source instinct line: %s", art2.Body)
 	}
 }
 

@@ -61,6 +61,8 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 	for _, m := range c.Members {
 		fmt.Fprintf(&b, "- %s\n", firstActionLine(m.Body))
 	}
+	b.WriteString("\n")
+	b.WriteString(sourceInstinctsBlock(c.Members))
 	return SkillArtifact{
 		Slug:        label,
 		Description: description,
@@ -122,10 +124,7 @@ func RenderAgent(label, description string, c Cluster, now time.Time) SkillArtif
 	b.WriteString("---\n\n")
 	fmt.Fprintf(&b, "# %s\n\n", label)
 	fmt.Fprintf(&b, "Evolved from %d instincts (avg confidence: %.0f%%).\n\n", len(c.Members), avgConfidence(c.Members)*100)
-	b.WriteString("## Source Instincts\n\n")
-	for _, id := range ids {
-		fmt.Fprintf(&b, "- %s\n", id)
-	}
+	b.WriteString(sourceInstinctsBlock(c.Members))
 	return SkillArtifact{Slug: label, Description: desc, Body: b.String(), Members: ids}
 }
 
@@ -162,6 +161,9 @@ func RenderCommand(in *homunculus.Instinct, now time.Time) SkillArtifact {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", slug)
 	fmt.Fprintf(&b, "Evolved from instinct: %s\n", in.ID)
+	if in.Path != "" {
+		fmt.Fprintf(&b, "Source instinct: %s\n", in.Path)
+	}
 	fmt.Fprintf(&b, "Confidence: %.0f%%\n\n", in.Confidence*100)
 	fmt.Fprintf(&b, "Trigger: %s\n\n", oneLine(in.Trigger))
 	b.WriteString("## Action\n\n")
@@ -193,6 +195,29 @@ func memberIDs(c Cluster) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// sourceInstinctsBlock renders a "## Source instincts" provenance block:
+// one "- `<id>` — <path>" line per member, sorted by id so a re-emit is
+// byte-stable (and matches the evolved_from frontmatter order). The path
+// is the member's absolute on-disk location (ReadInstinctFile enforces
+// filename == id), so a reader of a generated artifact — even through a
+// worktree symlink, hops away from the homunculus store — can open the
+// originating instinct. A member with no Path (an in-memory / test
+// instinct) degrades to "- `<id>`".
+func sourceInstinctsBlock(members []*homunculus.Instinct) string {
+	sorted := append([]*homunculus.Instinct(nil), members...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	var b strings.Builder
+	b.WriteString("## Source instincts\n\n")
+	for _, m := range sorted {
+		if m.Path != "" {
+			fmt.Fprintf(&b, "- `%s` — %s\n", m.ID, m.Path)
+		} else {
+			fmt.Fprintf(&b, "- `%s`\n", m.ID)
+		}
+	}
+	return b.String()
 }
 
 func avgConfidence(members []*homunculus.Instinct) float64 {
