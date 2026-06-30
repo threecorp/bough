@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.22
+
+### Added
+
+- **Evolved artifacts now cite a resolvable source-instinct path.** `bough evolve --generate` adds a
+  `## Source instincts` block to each generated skill + agent (and a `Source instinct:` line to each
+  command) listing `` - `<id>` — <absolute path> `` per source instinct — so a reader of a `SKILL.md`,
+  even through a worktree symlink hops away from the homunculus store, can open the originating instinct.
+  Body only; the frontmatter (the skill-load contract) is unchanged. Path-less (in-memory) instincts
+  degrade to id-only, and the block is id-sorted so a re-emit is byte-stable (matching the `evolved_from`
+  order).
+
 ## v0.9.21
 
 Retrospective `/review` follow-ups — bug fixes found by sweeping previously-merged PRs.
