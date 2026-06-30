@@ -142,6 +142,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// data is missing.
 	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
+	// 5b. Expose the monorepo's project-scoped evolved skills to the worktree
+	// session. `claude --worktree` cd's into <worktreeRoot> — a non-git
+	// container whose git walk-up cannot reach the monorepo root's
+	// .claude/skills — so without an explicit symlink the worktree session
+	// would load no project skills. Best-effort.
+	linkWorktreeSkills(stderr, monorepoRoot, worktreeRoot)
+
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can
 	// cd into it. Everything else goes to stderr. Emit it even on
@@ -416,6 +423,55 @@ func chooseBase(branchStrategy, detected string) string {
 func isDir(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
+}
+
+// ensureSymlink makes linkPath an absolute symlink to target, idempotently. An
+// already-correct symlink is a no-op; a stale symlink is repointed; a real
+// (non-symlink) file/dir is refused so a hand-authored path is never clobbered.
+func ensureSymlink(target, linkPath string) error {
+	// Guarantee an absolute target so the link resolves the same regardless of
+	// the reader's CWD (the contract above). Evolved-skill sources can be
+	// relative when BOUGH_HOMUNCULUS_DIR is set to a relative path; a raw
+	// os.Symlink of a relative target would resolve against linkPath's dir and
+	// dangle.
+	if abs, err := filepath.Abs(target); err == nil {
+		target = abs
+	}
+	if info, err := os.Lstat(linkPath); err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("%s exists and is not a symlink", linkPath)
+		}
+		if cur, _ := os.Readlink(linkPath); cur == target {
+			return nil // already correct
+		}
+		if err := os.Remove(linkPath); err != nil {
+			return fmt.Errorf("remove stale link: %w", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	return os.Symlink(target, linkPath)
+}
+
+// linkWorktreeSkills symlinks <worktreeRoot>/.claude/skills ->
+// <monorepoRoot>/.claude/skills so the worktree's Claude session loads the
+// project-scoped evolved skills. The session cd's into the worktree (a non-git
+// container whose git walk-up can't reach the monorepo root), so the symlink is
+// required for project-scoped skills to be visible. Best-effort; a real
+// .claude/skills dir already in the worktree is left untouched.
+func linkWorktreeSkills(stderr io.Writer, monorepoRoot, worktreeRoot string) {
+	src := filepath.Join(monorepoRoot, ".claude", "skills")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		logf(stderr, "[bough] .claude/skills: mkdir %s failed: %v", src, err)
+		return
+	}
+	dst := filepath.Join(worktreeRoot, ".claude", "skills")
+	if err := ensureSymlink(src, dst); err != nil {
+		logf(stderr, "[bough] .claude/skills: %v", err)
+		return
+	}
+	logf(stderr, "[bough] .claude/skills → %s", src)
 }
 
 // renderEnvLocals walks repositories that declare env_local templates

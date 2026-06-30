@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.9.20
+
+### Changed
+
+- **Evolved skills are now PROJECT-scoped, not global.** `bough evolve --generate` symlinks generated
+  skills into the monorepo's `<repo>/.claude/skills/` (and `bough create` symlinks
+  `<worktree>/.claude/skills → <repo>/.claude/skills`) instead of the global `~/.claude/skills/`. A
+  bough-evolved skill is specific to the repo it was learned from, so global linking polluted every repo
+  and let a generic slug from one project silently clobber another's same-named skill. The per-worktree
+  symlink is required because `claude --worktree` cd's into the worktree — a non-git container whose git
+  walk-up cannot reach the monorepo root's `.claude/skills`. The homunculus stays the single source of
+  truth (symlinks, no copies). `--no-symlink` still opts out.
+
+### Fixed
+
+- **`bough evolve` reads the monorepo-root instinct corpus.** It resolved identity from the raw cwd, so
+  running `bough evolve` from a sub-repo / worktree read a different (usually empty) project than the
+  observer / writer pool into. It now uses `resolveMonorepoRoot(cwd)`, consistent with inject / session-end
+  / observer.
+
+### Internal
+
+- Dropped `WriteSkill`'s now-dead `symlinkDir` parameter and the `refreshSymlink` helper from
+  `internal/evolve`. Project-scope symlinking moved to `cli.ensureSymlink` / `cli.deployProjectSkills`,
+  so the in-emitter symlink path was unreachable. `ensureSymlink` now also resolves its target to an
+  absolute path so a relative `BOUGH_HOMUNCULUS_DIR` cannot produce a dangling link.
+
+### Notes
+
+- The project `<repo>/.claude/skills/<slug>` entries are symlinks into your per-user homunculus
+  (`~/.local/share/bough-homunculus/...`), so their targets are **machine- and user-specific**. If your
+  monorepo root is under version control, do not commit them — add `.claude/skills/` to `.gitignore` (or
+  keep the bough root out of git, as the auba monorepo does). `bough evolve` regenerates them.
+
 ## v0.9.19
 
 Follow-up to v0.9.18: the three items deferred from the #48–#54 review are now fixed

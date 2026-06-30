@@ -43,26 +43,16 @@ func TestRenderSkill_Frontmatter(t *testing.T) {
 	}
 }
 
-func TestWriteSkill_AtomicAndSymlink(t *testing.T) {
+func TestWriteSkill_Atomic(t *testing.T) {
 	dir := t.TempDir()
 	skillsDir := filepath.Join(dir, "skills")
-	symlinkDir := filepath.Join(dir, "claude-skills")
 	art := SkillArtifact{Slug: "io-data-layer", Body: "---\nname: io-data-layer\n---\n# x\n"}
-	path, err := WriteSkill(skillsDir, symlinkDir, art)
+	path, err := WriteSkill(skillsDir, art)
 	if err != nil {
 		t.Fatalf("WriteSkill: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("SKILL.md not written: %v", err)
-	}
-	// symlink resolves to the skill dir
-	link := filepath.Join(symlinkDir, "io-data-layer")
-	resolved, err := os.Readlink(link)
-	if err != nil {
-		t.Fatalf("symlink not created: %v", err)
-	}
-	if resolved != filepath.Join(skillsDir, "io-data-layer") {
-		t.Errorf("symlink points at %q", resolved)
 	}
 	// no .tmp leftover
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
@@ -72,25 +62,9 @@ func TestWriteSkill_AtomicAndSymlink(t *testing.T) {
 
 func TestWriteSkill_RejectsBadSlug(t *testing.T) {
 	dir := t.TempDir()
-	_, err := WriteSkill(dir, "", SkillArtifact{Slug: "Bad Slug"})
+	_, err := WriteSkill(dir, SkillArtifact{Slug: "Bad Slug"})
 	if err == nil {
 		t.Errorf("expected error for bad slug")
-	}
-}
-
-func TestWriteSkill_RefusesToClobberRealFile(t *testing.T) {
-	dir := t.TempDir()
-	skillsDir := filepath.Join(dir, "skills")
-	symlinkDir := filepath.Join(dir, "claude-skills")
-	// place a real file where the symlink would go
-	_ = os.MkdirAll(symlinkDir, 0o755)
-	realFile := filepath.Join(symlinkDir, "io-data-layer")
-	_ = os.WriteFile(realFile, []byte("operator's hand-written skill"), 0o644)
-
-	art := SkillArtifact{Slug: "io-data-layer", Body: "x"}
-	_, err := WriteSkill(skillsDir, symlinkDir, art)
-	if err == nil || !strings.Contains(err.Error(), "not a symlink") {
-		t.Errorf("expected refusal to clobber real file, got %v", err)
 	}
 }
 

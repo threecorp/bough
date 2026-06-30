@@ -70,12 +70,11 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 }
 
 // WriteSkill persists a SkillArtifact to
-// <skillsDir>/<slug>/SKILL.md atomically and, when symlinkDir is
-// non-empty, creates / refreshes the ~/.claude/skills/<slug>
-// symlink pointing at the skill directory. Returns the SKILL.md
+// <skillsDir>/<slug>/SKILL.md atomically and returns the SKILL.md
 // path. Existing skill dirs are overwritten (= re-running evolve
-// refreshes the body without minting a new label).
-func WriteSkill(skillsDir, symlinkDir string, art SkillArtifact) (string, error) {
+// refreshes the body without minting a new label). Symlinking the
+// result into project scope is done by cli.deployProjectSkills.
+func WriteSkill(skillsDir string, art SkillArtifact) (string, error) {
 	if !labelPattern.MatchString(art.Slug) {
 		return "", fmt.Errorf("evolve.WriteSkill: invalid slug %q", art.Slug)
 	}
@@ -86,11 +85,6 @@ func WriteSkill(skillsDir, symlinkDir string, art SkillArtifact) (string, error)
 	path := filepath.Join(dir, "SKILL.md")
 	if err := atomicWriteFile(path, []byte(art.Body)); err != nil {
 		return "", err
-	}
-	if symlinkDir != "" {
-		if err := refreshSymlink(dir, filepath.Join(symlinkDir, art.Slug)); err != nil {
-			return path, err
-		}
 	}
 	return path, nil
 }
@@ -211,28 +205,6 @@ func atomicWriteFile(path string, data []byte) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("evolve: rename %s: %w", path, err)
-	}
-	return nil
-}
-
-// refreshSymlink (re)points linkPath at target. An existing symlink
-// is removed first so a re-run does not error on EEXIST. A non-
-// symlink at linkPath is left alone + reported so we never clobber a
-// real file the operator put there by hand.
-func refreshSymlink(target, linkPath string) error {
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		return fmt.Errorf("evolve.refreshSymlink: mkdir: %w", err)
-	}
-	if fi, err := os.Lstat(linkPath); err == nil {
-		if fi.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("evolve.refreshSymlink: %s exists and is not a symlink; refusing to clobber", linkPath)
-		}
-		if err := os.Remove(linkPath); err != nil {
-			return fmt.Errorf("evolve.refreshSymlink: remove stale link: %w", err)
-		}
-	}
-	if err := os.Symlink(target, linkPath); err != nil {
-		return fmt.Errorf("evolve.refreshSymlink: symlink %s → %s: %w", linkPath, target, err)
 	}
 	return nil
 }
