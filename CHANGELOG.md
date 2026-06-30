@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.9.21
+
+Retrospective `/review` follow-ups — bug fixes found by sweeping previously-merged PRs.
+
+### Fixed
+
+- **`repositories[].source` name validation (review #55).** A `source:` that derives an empty or
+  traversing repo name (`.git` / `/` / `"   "` → `""`; `..` / `.` kept verbatim) passed validation,
+  collapsing `filepath.Join(monorepoRoot, name)` onto the monorepo root (or, for `..`, its parent) — so
+  worktree-add and `bough remove`'s `branch -D` could run against the operator's **primary checkout**. The
+  name must now be a single, non-traversing path segment after normalization.
+- **`source:` remote detection (review #55).** `isRemoteURL` required a `user@`, so git's userless scp
+  syntax (`host:org/repo`) and ssh-config aliases (`gh:org/repo`) were misrouted to `git clone --local
+  <nonexistent>` and the repo was silently skipped. Any `:` before the first `/` (no `://`) is now treated
+  as remote, matching git's grammar.
+- **Clone presence check (review #55).** `bough create` treated any directory at `<root>/<name>` as "repo
+  present", so a stray / partial-clone leftover dir permanently shadowed the `source:` clone → opaque
+  exit-128 on every later create. Presence now requires a real `.git` entry.
+- **Observation window ordering (review #40).** `TailNMerged` returned the tail of the concatenated files,
+  favoring the last-listed one; a stale pre-v0.9.10 legacy inbox ≥ the window starved the live archive. The
+  merge is now ordered by capture time, so the window is the genuinely most-recent observations.
+- **Confidence clamp (review #28).** A hallucinated observer confidence (e.g. `5.0`) flowed unclamped into
+  the instinct, monopolizing the injection ranking / rendering as `[500%]`. Clamped to `[0,1]` at the entry.
+- **Deterministic clusters (review #29).** Equal-size clusters kept Go's random map-iteration order, so
+  under the GATE-5 per-session call cap which clusters got judged (vs defaulted to DOUBT) changed per run.
+  Cluster members and the cluster list now have a total, deterministic order.
+- **No skill from an unreached judge (review #29).** A GATE-5 judge that errored (rate-limit / cap /
+  transport) still minted a placeholder skill, permanently polluting the catalog. Such clusters are now
+  recorded as rejected, not minted.
+- **Loadable evolved agents (review #29).** `RenderAgent` omitted `name` + `description` from the
+  frontmatter, so every generated `evolved/agents/<slug>.md` was unloadable by Claude Code. Both are now
+  emitted, reusing the skill's resolved label + description (which also fixes a skill/agent slug divergence
+  on DOUBT-with-prior clusters).
+- **ecc import robustness (review #33).** A deep / cyclic directory symlink aborted the whole import; it now
+  skips just that link, consistent with the existing dangling-link tolerance.
+- Minor: the GATE-5 progress line surfaces the real judge error instead of always "rate-limit/parse" (#37);
+  removed a dead truncated-stream salvage branch in the claude-cli result extractor (#36).
+
 ## v0.9.20
 
 ### Changed
