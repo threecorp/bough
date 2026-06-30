@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -226,13 +227,16 @@ func TailN(path string, n int) ([]Observation, error) {
 	return all[len(all)-n:], nil
 }
 
-// TailNMerged returns the last n observations across several files,
-// concatenated in the order given. One observer pass can therefore
-// consume both the hook's project-local inbox
-// (<root>/.bough/observations.jsonl, where `bough hook handle` appends
-// on every tool use) and the homunculus archive (where `bough ecc
-// import` writes). A missing file is skipped — either producer may
-// legitimately not have run yet — so only a real read error aborts.
+// TailNMerged returns the n most-recent observations (by TS) across
+// several files. It reads each path, merges the records, orders them by
+// capture time, and returns the last n — so the result is the genuinely
+// most-recent window regardless of which file a record came from or the
+// order the files were listed in. One observer pass therefore consumes
+// both the live homunculus archive (where `bough hook handle` appends
+// since v0.9.10 and `bough ecc import` writes) and a stale pre-v0.9.10
+// legacy inbox without the larger file starving the other. A missing
+// file is skipped — either producer may legitimately not have run yet —
+// so only a real read error aborts.
 func TailNMerged(n int, paths ...string) ([]Observation, error) {
 	if n <= 0 {
 		return nil, nil
@@ -248,6 +252,12 @@ func TailNMerged(n int, paths ...string) ([]Observation, error) {
 		}
 		all = append(all, obs...)
 	}
+	// Order by capture time so "the last n" is the n most-RECENT records
+	// across ALL files, not the tail of whichever file was concatenated
+	// last. Without this a large stale legacy inbox would starve the live
+	// archive (file order is not a recency order). Stable so equal-TS
+	// records keep their within-file append order.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].TS.Before(all[j].TS) })
 	if len(all) <= n {
 		return all, nil
 	}
