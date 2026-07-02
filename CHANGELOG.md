@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.9.23
+
+The dogfood-hardening release: `claude --worktree` now works end-to-end, plus a
+retrospective review sweep of the merged infra PRs (#13 / #15) and two review
+rounds (high, then xhigh) over this release's own changes.
+
+### Fixed
+
+- **`claude --worktree` was broken by `bough hook install`.** `bough hook install`
+  wires every event — including WorktreeCreate / WorktreeRemove — to `bough hook
+  handle`, but the handler's switch had no case for them, so the hook returned exit
+  0 with an empty stdout and Claude Code aborted with "hook succeeded but returned
+  no worktree path" (and never created the worktree). `hook handle` now dispatches
+  WorktreeCreate → the create pipeline (emitting the worktree root path Claude Code
+  cd's into) and WorktreeRemove → teardown, via shared helpers. Existing
+  `.claude/settings.json` wiring works unchanged after upgrade.
+- **`AddOrAttach` reports the ref it actually branched from** (`origin/<base>` only
+  after a live fetch, else the local `<base>`) instead of inferring it from
+  `runner.Fetch`, so `bough create` logs the true source; `--no-track` keeps the
+  new feature branch's upstream clean for a bare `git push` (review #13).
+- **`bough ecc import` heals single-line-escaped instincts** — un-escapes a foreign
+  instinct serialized as one physical line with literal `\n`, rewriting only when
+  the repair re-parses and its id matches the filename (else verbatim). Skips
+  NUL-containing files; streams the large catalog files.
+- WorktreeRemove no longer trusts the hook payload's `cwd` on its name-only path (a
+  hook can fire from inside the worktree, doubling the path and leaking engine
+  subprocesses); the target resolution is now shared with `bough remove`.
+- Restored the `EnvVars` phase's error-context wrapper in `bough create`; the
+  spinner's `Stop()` is idempotent (`sync.Once`).
+
+### Added
+
+- **`bough create` progress spinner** across engine boot and the first-time repo
+  clone (TTY-gated; inert on the hook's piped stderr), plus a quieter default
+  go-plugin log level (Warn — `BOUGH_PLUGIN_LOG=debug` restores verbose, and an
+  engine-start failure now signposts it).
+- Coverage: `pickHeap` extras override (review #15), and all 8 hook events
+  end-to-end (observation table + WorktreeCreate/Remove lifecycle).
+
+### Changed
+
+- README synced to the v0.9 continuous-learning loop — dropped the v0.5-v0.8
+  capability compiler / MCP server / memory backends that v0.9.0 removed; the
+  worktree-hook wiring example now uses `bough hook handle` (matching `bough hook
+  install`) so keeping a manual `bough create --stdin-json` entry can't double-run
+  the create pipeline.
+
 ## v0.9.22
 
 ### Added
