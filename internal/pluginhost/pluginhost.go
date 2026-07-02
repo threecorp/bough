@@ -103,8 +103,12 @@ func pluginLogger() hclog.Logger {
 	})
 }
 
+// EnvPluginLog is the env var operators set to restore go-plugin's
+// verbose handshake/trace logs (suppressed by default at hclog.Warn).
+const EnvPluginLog = "BOUGH_PLUGIN_LOG"
+
 func pluginLogLevel() hclog.Level {
-	if lvl := hclog.LevelFromString(os.Getenv("BOUGH_PLUGIN_LOG")); lvl != hclog.NoLevel {
+	if lvl := hclog.LevelFromString(os.Getenv(EnvPluginLog)); lvl != hclog.NoLevel {
 		return lvl
 	}
 	return hclog.Warn

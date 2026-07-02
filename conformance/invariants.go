@@ -76,7 +76,7 @@ func AssertShellSafe(t Reporter, env map[string]string, allow bool) {
 		return
 	}
 	for k, v := range env {
-		if strings.ContainsAny(v, "()&;<>|`$") {
+		if strings.ContainsAny(v, "()&;<>|`$'\"\\ \t") {
 			t.Errorf("env %s=%q contains a shell metacharacter — "+
 				"declare Config.AllowShellMetachars=true if this is intentional "+
 				"(see v0.2.5 — bash `source .env.local` aborts on the first "+

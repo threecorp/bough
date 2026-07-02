@@ -116,8 +116,8 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		// The plugin subprocess's own logs are suppressed at the default
 		// Warn level, so an engine-start failure is otherwise opaque —
 		// signpost the escape hatch unless the operator already enabled it.
-		if os.Getenv("BOUGH_PLUGIN_LOG") == "" {
-			err = fmt.Errorf("%w (re-run with BOUGH_PLUGIN_LOG=debug for the plugin's own logs)", err)
+		if os.Getenv(pluginhost.EnvPluginLog) == "" {
+			err = fmt.Errorf("%w (re-run with %s=debug for the plugin's own logs)", err, pluginhost.EnvPluginLog)
 		}
 		return err
 	}

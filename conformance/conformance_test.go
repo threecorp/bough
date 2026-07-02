@@ -157,6 +157,30 @@ func TestAssertShellSafe_DetectsMetachar(t *testing.T) {
 	}
 }
 
+// TestAssertShellSafe_DetectsWhitespaceQuoteBackslash extends the
+// v0.2.5 guard to the character classes it originally missed: an
+// unquoted space/tab splits a plain `KEY=value` line into extra
+// shell words on source, and an unescaped quote or backslash breaks
+// out of (or corrupts) any quoting a downstream consumer adds.
+func TestAssertShellSafe_DetectsWhitespaceQuoteBackslash(t *testing.T) {
+	cases := map[string]string{
+		"space":     "foo bar",
+		"tab":       "foo\tbar",
+		"squote":    "foo'bar",
+		"dquote":    `foo"bar`,
+		"backslash": `foo\bar`,
+	}
+	for name, v := range cases {
+		t.Run(name, func(t *testing.T) {
+			rep := &recordingReporter{}
+			conformance.AssertShellSafe(rep, map[string]string{"BOUGH_MOCK_VAL": v}, false)
+			if len(rep.errs) == 0 {
+				t.Errorf("AssertShellSafe did not flag %s in %q", name, v)
+			}
+		})
+	}
+}
+
 // TestAssertShellSafe_AllowFlagSkips asserts the escape hatch: a
 // plugin that legitimately needs metachars (the mysql go-sql-driver
 // DSN is the canonical case) can pass allow=true and the helper
