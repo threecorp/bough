@@ -94,4 +94,3 @@ func TestHasDocker_pathPresence(t *testing.T) {
 	// (daemon may not be running on every CI host).
 	_ = hasDocker(context.Background())
 }
-
