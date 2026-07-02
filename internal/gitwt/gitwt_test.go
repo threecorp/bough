@@ -87,7 +87,7 @@ func TestRunner_AddOrAttach_createsNewBranch(t *testing.T) {
 	src := initBareRepo(t)
 	dst := filepath.Join(t.TempDir(), "wt")
 	r := NewRunner()
-	created, err := r.AddOrAttach(context.Background(), src, dst, "F-Feat", "main")
+	created, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Feat", "main")
 	if err != nil {
 		t.Fatalf("AddOrAttach: %v", err)
 	}
@@ -109,16 +109,29 @@ func TestRunner_AddOrAttach_fetchUsesOriginBase(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "wt")
 	r := NewRunner()
 	r.Fetch = true
-	created, err := r.AddOrAttach(context.Background(), src, dst, "F-Fetch", "main")
+	created, effBase, err := r.AddOrAttach(context.Background(), src, dst, "F-Fetch", "main")
 	if err != nil {
 		t.Fatalf("AddOrAttach with Fetch=true: %v", err)
 	}
 	if !created {
 		t.Errorf("expected created=true on fresh branch")
 	}
+	// The fetch against self (origin=src) succeeds, so the worktree must be
+	// seeded from origin/main and AddOrAttach must report that exact ref back
+	// (not the local "main") — the caller logs this verbatim.
+	if effBase != "origin/main" {
+		t.Errorf("effectiveBase = %q, want %q", effBase, "origin/main")
+	}
 	sha, err := r.HeadSHA(context.Background(), dst)
 	if err != nil || sha == "" {
 		t.Errorf("HeadSHA after fetched create: sha=%q err=%v", sha, err)
+	}
+	// --no-track guard: branching off remote-tracking origin/main must NOT
+	// set the new branch's upstream, or auba's bare `git push`
+	// (push.default=simple) would refuse (upstream=origin/main != origin/F-Fetch).
+	up, _ := exec.Command("git", "-C", dst, "config", "--get", "branch.F-Fetch.merge").CombinedOutput()
+	if strings.TrimSpace(string(up)) != "" {
+		t.Errorf("new branch upstream = %q; --no-track should leave it empty", strings.TrimSpace(string(up)))
 	}
 }
 
@@ -130,7 +143,7 @@ func TestRunner_AddOrAttach_attachExistingBranch(t *testing.T) {
 		t.Fatalf("pre-create branch: %v\n%s", err, out)
 	}
 	dst := filepath.Join(t.TempDir(), "wt")
-	created, err := r.AddOrAttach(context.Background(), src, dst, "F-Existing", "main")
+	created, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Existing", "main")
 	if err != nil {
 		t.Fatalf("AddOrAttach: %v", err)
 	}
@@ -143,7 +156,7 @@ func TestRunner_RemoveAndDeleteBranch(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()
 	dst := filepath.Join(t.TempDir(), "wt")
-	if _, err := r.AddOrAttach(context.Background(), src, dst, "F-Rm", "main"); err != nil {
+	if _, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Rm", "main"); err != nil {
 		t.Fatalf("setup AddOrAttach: %v", err)
 	}
 	if err := r.Remove(context.Background(), src, dst, true); err != nil {
@@ -168,7 +181,7 @@ func TestRunner_Remove_fallbackOnPartial(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()
 	dst := filepath.Join(t.TempDir(), "wt-partial")
-	if _, err := r.AddOrAttach(context.Background(), src, dst, "F-P", "main"); err != nil {
+	if _, _, err := r.AddOrAttach(context.Background(), src, dst, "F-P", "main"); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	// Out-of-band nuke before Remove runs.
@@ -184,7 +197,7 @@ func TestRunner_List(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()
 	dst := filepath.Join(t.TempDir(), "wt-list")
-	if _, err := r.AddOrAttach(context.Background(), src, dst, "F-List", "main"); err != nil {
+	if _, _, err := r.AddOrAttach(context.Background(), src, dst, "F-List", "main"); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	wts, err := r.List(context.Background(), src)
@@ -246,7 +259,7 @@ func TestRunner_AddOrAttach_slashedBase(t *testing.T) {
 		t.Fatalf("create feature/x: %v\n%s", err, out)
 	}
 	dst := filepath.Join(t.TempDir(), "wt")
-	created, err := NewRunner().AddOrAttach(context.Background(), src, dst, "F-Slash", "feature/x")
+	created, _, err := NewRunner().AddOrAttach(context.Background(), src, dst, "F-Slash", "feature/x")
 	if err != nil {
 		t.Fatalf("AddOrAttach off slashed base: %v", err)
 	}

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,33 +38,21 @@ func newRemoveCmd() *cobra.Command {
 					name = in.Name
 				}
 			}
-			var (
-				monorepoRoot string
-				wtName       string
-			)
-			switch {
-			case path != "":
-				wtName = filepath.Base(path)
-				monorepoRoot = filepath.Dir(filepath.Dir(path))
-			case name != "":
-				cwd, _ := os.Getwd()
-				monorepoRoot = cwd
-				path = filepath.Join(cwd, ".worktrees", name)
-				wtName = name
-			default:
-				return errors.New("--name or --path is required (or pass --stdin-json with a worktree_path payload)")
+			monorepoRoot, wtName, resolvedPath, err := resolveRemoveTarget(name, path)
+			if err != nil {
+				return err
 			}
 			abs, cfg, err := loadConfigAndRoot(cmd, monorepoRoot)
 			if err != nil {
 				return err
 			}
-			return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, path, gracefulSecs)
+			return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, resolvedPath, gracefulSecs)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (when --path is not provided)")
 	cmd.Flags().StringVar(&path, "path", "", "absolute worktree path (typical Claude Code stdin payload)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {worktree_path} from stdin")
-	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", 10, "seconds to wait for plugin Down() before SIGKILL fallback")
+	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback")
 	return cmd
 }
 

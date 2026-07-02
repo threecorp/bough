@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 // TestBuildDockerEnv_PublishHostAndPort is the regression guard for
@@ -59,5 +61,27 @@ func TestBuildDockerEnv_HeapOverride(t *testing.T) {
 	if !slices.Contains(got, want) {
 		t.Errorf("buildDockerEnv heap override = absent, want %q\nfull env:\n%s",
 			want, strings.Join(got, "\n  "))
+	}
+}
+
+// TestPickHeap exercises pickHeap directly — the extras["es.heap"]
+// override + the "1g" default. TestBuildDockerEnv_HeapOverride's docstring
+// advertises this extras path but never invokes pickHeap (it calls
+// buildDockerEnv("512m", …) directly), so the actual extraction was
+// untested; a mistyped key or broken default would have stayed green.
+func TestPickHeap(t *testing.T) {
+	cases := []struct {
+		name string
+		req  *api.UpReq
+		want string
+	}{
+		{"override via extras", &api.UpReq{Extras: map[string]string{"es.heap": "512m"}}, "512m"},
+		{"empty extras value → 1g default", &api.UpReq{Extras: map[string]string{"es.heap": ""}}, "1g"},
+		{"nil extras → 1g default", &api.UpReq{}, "1g"},
+	}
+	for _, c := range cases {
+		if got := pickHeap(c.req); got != c.want {
+			t.Errorf("%s: pickHeap = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

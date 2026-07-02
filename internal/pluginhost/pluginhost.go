@@ -19,8 +19,10 @@ package pluginhost
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 
 	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -66,6 +68,7 @@ func DiscoverFromBinary(binPath string) (engineapi.EngineProvider, func(), error
 		Plugins:          engineapi.PluginMap,
 		Cmd:              exec.Command(binPath),
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           pluginLogger(),
 	})
 	rpc, err := client.Client()
 	if err != nil {
@@ -83,4 +86,26 @@ func DiscoverFromBinary(binPath string) (engineapi.EngineProvider, func(), error
 		return nil, nil, fmt.Errorf("pluginhost: %s did not return an EngineProvider (got %T)", binPath, raw)
 	}
 	return prov, func() { client.Kill() }, nil
+}
+
+// pluginLogger builds the hclog logger go-plugin uses for the spawned
+// plugin subprocess. go-plugin's default managed logger is Trace, which
+// floods `bough create` stderr with "waiting for RPC address" / "plugin
+// address" DEBUG/TRACE lines that bury bough's own [bough] progress
+// lines and make a slow step look hung. Default Warn keeps the output
+// clean; set BOUGH_PLUGIN_LOG=trace|debug|info|warn|error to restore the
+// verbose go-plugin logs when debugging a plugin handshake.
+func pluginLogger() hclog.Logger {
+	return hclog.New(&hclog.LoggerOptions{
+		Name:   "plugin",
+		Output: os.Stderr,
+		Level:  pluginLogLevel(),
+	})
+}
+
+func pluginLogLevel() hclog.Level {
+	if lvl := hclog.LevelFromString(os.Getenv("BOUGH_PLUGIN_LOG")); lvl != hclog.NoLevel {
+		return lvl
+	}
+	return hclog.Warn
 }

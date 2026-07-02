@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/internal/homunculus"
 )
 
 // TestEccImport_WarnsOnOrphanProjectDir covers the #32 follow-up: a
@@ -106,6 +108,44 @@ func TestCopyProject_CopiesRegularFilesAndToleratesDangling(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "broken")); !os.IsNotExist(err) {
 		t.Errorf("dangling symlink should be skipped, got err=%v", err)
+	}
+}
+
+// TestCopyProject_NormalizesCorruptInstinct is the import-boundary heal
+// for the ECC single-line corruption (handover: bough-instinct-
+// corruption). An instinct written as one physical line with literal \n
+// escapes must be un-escaped on import so bough's strict reader loads it
+// instead of silently dropping it.
+func TestCopyProject_NormalizesCorruptInstinct(t *testing.T) {
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "project.json"), "{}")
+	// One physical line, literal \n throughout (backtick keeps them raw).
+	corrupt := `---\nid: heal-me\nconfidence: 0.8\ndomain: workflow\n---\n\n## Action\nStay parseable.\n`
+	writeFile(t, filepath.Join(src, "instincts", "personal", "heal-me.md"), corrupt)
+
+	dst := filepath.Join(t.TempDir(), "out")
+	if err := copyProject(src, dst); err != nil {
+		t.Fatalf("copyProject: %v", err)
+	}
+
+	healed := filepath.Join(dst, "instincts", "personal", "heal-me.md")
+	got, err := os.ReadFile(healed)
+	if err != nil {
+		t.Fatalf("read healed file: %v", err)
+	}
+	if bytes.Contains(got, []byte(`\nid:`)) {
+		t.Errorf("import left the file corrupt (literal \\n):\n%s", got)
+	}
+	// The healed file must load through bough's strict reader.
+	in, err := homunculus.ReadInstinctFile(healed)
+	if err != nil {
+		t.Fatalf("healed instinct does not load: %v", err)
+	}
+	if in.ID != "heal-me" {
+		t.Errorf("healed id = %q, want heal-me", in.ID)
+	}
+	if !strings.Contains(in.Body, "Stay parseable.") {
+		t.Errorf("healed body lost content:\n%s", in.Body)
 	}
 }
 

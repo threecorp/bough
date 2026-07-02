@@ -355,6 +355,15 @@ func newHookHandleCmd() *cobra.Command {
 				dispatchEvolveClaudeMD(c)
 			case string(hooks.EventPreCompact):
 				_ = runPreserveInstincts(c.OutOrStdout(), "")
+			case string(hooks.EventWorktreeCreate):
+				// The unified wiring `bough hook install` writes routes
+				// WorktreeCreate here; run the create pipeline and emit the
+				// worktree path to stdout (the hook contract Claude Code
+				// reads to cd into the new tree). Returning the error makes a
+				// create failure surface as a hook failure.
+				return dispatchWorktreeCreate(c, payload)
+			case string(hooks.EventWorktreeRemove):
+				return dispatchWorktreeRemove(c, payload)
 			}
 			return nil
 		},

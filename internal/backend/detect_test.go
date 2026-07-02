@@ -22,8 +22,10 @@ func TestDetect_returnsSomethingOrError(t *testing.T) {
 		}
 		// On a CI host with neither nix nor docker the error message
 		// must name the YAML escape hatch so an operator can unblock
-		// themselves without reading source.
-		if msg := err.Error(); !strings.Contains(msg, "databases[].backend") {
+		// themselves without reading source. (The knob was renamed
+		// databases[].backend -> engines[].backend in the v0.4 schema
+		// rename; this assertion tracks the current name.)
+		if msg := err.Error(); !strings.Contains(msg, "engines[].backend") {
 			t.Errorf("Detect error must mention the YAML knob, got: %s", msg)
 		}
 		return
@@ -92,4 +94,3 @@ func TestHasDocker_pathPresence(t *testing.T) {
 	// (daemon may not be running on every CI host).
 	_ = hasDocker(context.Background())
 }
-

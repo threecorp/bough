@@ -237,6 +237,18 @@ func copyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
+	// An instinct .md can arrive from a foreign ECC corpus serialized as
+	// a single physical line with literal \n escapes (the observer model
+	// wrote it via its Write tool + JSON-escaped the body). Heal that at
+	// the import boundary so bough's strict reader does not silently drop
+	// it. Catalog files (INSTINCTS.md / MEMORY.md / README.md) are never
+	// instincts and can grow large over months of logging, so they skip
+	// the read-whole-file normalize path and stream like any other file
+	// below — matching the same trio ScanInstincts ignores.
+	base := filepath.Base(src)
+	if strings.HasSuffix(src, ".md") && base != "INSTINCTS.md" && base != "MEMORY.md" && base != "README.md" {
+		return copyInstinctFile(src, dst)
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -252,6 +264,26 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// copyInstinctFile copies a .md file, un-escaping a single-line
+// corrupted instinct back into real newlines before writing so bough's
+// homunculus receives a parseable file. wantID is the filename minus
+// .md (bough enforces filename ↔ frontmatter id); NormalizeInstinct
+// only rewrites when the repair re-parses and its id matches wantID,
+// otherwise the bytes are copied verbatim.
+func copyInstinctFile(src, dst string) error {
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	wantID := strings.TrimSuffix(filepath.Base(src), ".md")
+	out, _ := homunculus.NormalizeInstinct(raw, wantID)
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, dst)

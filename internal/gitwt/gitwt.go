@@ -98,10 +98,12 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 // exist (e.g. the user previously ran `bough remove F-X` but kept the
 // branch, or another orchestrator pushed it), the worktree is attached
 // to the existing branch. Returns `created=true` for the first path
-// and false for the attach path so the caller can log accordingly.
+// and false for the attach path, plus `effectiveBase` — the ref the
+// worktree was actually branched from (origin/<base> after a live
+// fetch, else the local <base>) — so the caller logs the true source.
 //
 // Idempotency: if `dst` is already a registered worktree, the call
-// returns `(false, nil)` immediately. This makes the hook safe to
+// returns `(false, base, nil)` immediately. This makes the hook safe to
 // re-invoke — Claude Code re-fires WorktreeCreate every time the user
 // runs `claude --worktree F-X --resume <session>`, so a "second call
 // is a no-op" contract is required (cf. threecorp's
@@ -111,11 +113,16 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 // orphan from an interrupted prior run), Prune is invoked first so
 // the subsequent `worktree add` is not blocked by leftover git admin
 // state.
-func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base string) (created bool, err error) {
+func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base string) (created bool, effectiveBase string, err error) {
+	// effectiveBase is the ref the worktree was actually branched from,
+	// returned so the caller logs what seeded it (origin/<base> vs the
+	// local <base>) instead of inferring from r.Fetch — a fetch can be
+	// enabled yet fail, in which case the branch is cut from the local base.
+	effectiveBase = base
 	if wts, listErr := r.List(ctx, repoPath); listErr == nil {
 		for _, wt := range wts {
 			if wt.Path == dst {
-				return false, nil
+				return false, base, nil
 			}
 		}
 	}
@@ -129,26 +136,33 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 	// fetch fails (no network, no origin remote, base not on origin)
 	// we degrade to the local <base> so an operator working offline
 	// still gets a worktree.
-	effectiveBase := base
 	if r.Fetch {
 		if fetchErr := r.cmd(ctx, "git", "-C", repoPath, "fetch", "--quiet", "origin", base).Run(); fetchErr == nil {
 			effectiveBase = "origin/" + base
 		}
 	}
 
+	// --no-track: when effectiveBase is the remote-tracking origin/<base>,
+	// `git worktree add -b` would set the new branch's upstream to
+	// origin/<base>. auba publishes feature branches with a bare `git push`
+	// (push.default=simple), which then refuses because the upstream is
+	// origin/<base>, not origin/<branch>; --no-track leaves the branch
+	// upstream-less so the first `git push -u` wins. Harmless no-op when
+	// effectiveBase is a local branch.
+	//
 	// Capture combined output so a git failure surfaces its actual
 	// message (e.g. `fatal: invalid reference: <base>`) instead of a
 	// bare "exit status 128" — create swallowing this is what made the
 	// DetectBase slash bug above so hard to diagnose in the field.
-	newOut, newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, "-b", branch, effectiveBase).CombinedOutput()
+	newOut, newErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", "--no-track", dst, "-b", branch, effectiveBase).CombinedOutput()
 	if newErr == nil {
-		return true, nil
+		return true, effectiveBase, nil
 	}
 	attachOut, attachErr := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", dst, branch).CombinedOutput()
 	if attachErr == nil {
-		return false, nil
+		return false, base, nil
 	}
-	return false, fmt.Errorf("gitwt: add %s @ %s failed (new: %v: %s; attach: %v: %s)",
+	return false, base, fmt.Errorf("gitwt: add %s @ %s failed (new: %v: %s; attach: %v: %s)",
 		branch, dst, newErr, strings.TrimSpace(string(newOut)),
 		attachErr, strings.TrimSpace(string(attachOut)))
 }
