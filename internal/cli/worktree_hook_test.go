@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/internal/hooks"
 )
 
 // gitInitMain materialises a minimal git repo with a `main` branch and
@@ -89,5 +91,85 @@ func TestHookHandle_WorktreeCreateMissingName(t *testing.T) {
 	cmd.SetErr(&errBuf)
 	if err := cmd.Execute(); err == nil {
 		t.Errorf("expected error for WorktreeCreate payload with no name, got nil (stdout=%q)", out.String())
+	}
+}
+
+// TestHookHandle_AllEventsRecordObservation is the whole-surface check:
+// every event `bough hook install` wires must append exactly one
+// observation tagged with the event name and exit cleanly. WorktreeCreate
+// / WorktreeRemove are exercised separately below (they need a repo);
+// the remaining six carry no repo-mutating dispatch, so a bare .bough.yaml-
+// less run is safe.
+func TestHookHandle_AllEventsRecordObservation(t *testing.T) {
+	for _, ev := range []hooks.HookEvent{
+		hooks.EventPreToolUse,
+		hooks.EventPostToolUse,
+		hooks.EventUserPromptSubmit,
+		hooks.EventStop,
+		hooks.EventSessionEnd,
+		hooks.EventPreCompact,
+	} {
+		t.Run(string(ev), func(t *testing.T) {
+			obs := filepath.Join(t.TempDir(), "obs.jsonl")
+			cmd := newHookHandleCmd()
+			cmd.SetArgs([]string{"--event", string(ev), "--out", obs})
+			cmd.SetIn(strings.NewReader(`{"prompt":"x","tool_name":"Bash","session_id":"s"}`))
+			var out, errBuf bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errBuf)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("hook handle %s: %v\n%s", ev, err, errBuf.String())
+			}
+			data, err := os.ReadFile(obs)
+			if err != nil {
+				t.Fatalf("read obs: %v", err)
+			}
+			if !bytes.Contains(data, []byte(fmt.Sprintf(`"event":%q`, string(ev)))) {
+				t.Errorf("%s: no observation tagged with the event was recorded:\n%s", ev, data)
+			}
+		})
+	}
+}
+
+// TestHookHandle_WorktreeRemoveTearsDown is the WorktreeRemove twin of
+// the WorktreeCreate test: after a create, the WorktreeRemove hook must
+// tear the worktree tree back down.
+func TestHookHandle_WorktreeRemoveTearsDown(t *testing.T) {
+	root := t.TempDir()
+	gitInitMain(t, filepath.Join(root, "demo"))
+	yaml := "schema_version: 2\n" +
+		"monorepo_root: \".\"\n" +
+		"repositories:\n" +
+		"  - name: demo\n" +
+		"    branch_strategy: main\n" +
+		"registry:\n" +
+		"  path: \".bough-ports.json\"\n"
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write .bough.yaml: %v", err)
+	}
+	obs := filepath.Join(root, "obs.jsonl")
+
+	handle := func(event, payload string) {
+		t.Helper()
+		cmd := newHookHandleCmd()
+		cmd.SetArgs([]string{"--event", event, "--out", obs})
+		cmd.SetIn(strings.NewReader(payload))
+		var out, errBuf bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&errBuf)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("hook handle %s: %v\n%s", event, err, errBuf.String())
+		}
+	}
+
+	handle("WorktreeCreate", fmt.Sprintf(`{"name":"F-Rm","cwd":%q}`, root))
+	wt := filepath.Join(root, ".worktrees", "F-Rm")
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("worktree not created by WorktreeCreate: %v", err)
+	}
+
+	handle("WorktreeRemove", fmt.Sprintf(`{"worktree_path":%q}`, wt))
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree still present after WorktreeRemove: err=%v", err)
 	}
 }
