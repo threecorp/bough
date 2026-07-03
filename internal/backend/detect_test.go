@@ -77,20 +77,18 @@ func TestHasNixWithFlakes_requiresBothFeatures(t *testing.T) {
 	t.Logf("hasNixWithFlakes on this host: %v", got)
 }
 
-// TestHasDocker_pathPresence guards against a regression where the
-// helper would silently succeed when the docker binary is missing —
-// previous versions did not pre-check LookPath and would emit a
-// confusing "exec: not found" error inside Detect's wrapped message.
-func TestHasDocker_pathPresence(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		// Docker not installed — the helper should fail fast with a
-		// PATH error, not hang.
-		if err := hasDocker(context.Background()); err == nil {
-			t.Errorf("hasDocker: want error when docker missing from PATH, got nil")
-		}
-		return
+// TestHasDocker_probesViaSDKNotCLI documents the current contract:
+// hasDocker connects through the Docker SDK (client.FromEnv, the same
+// path pkg/dockerutil.NewClient and every docker-backend plugin use),
+// not the `docker` CLI binary. Pointing DOCKER_HOST at an address
+// nothing listens on forces the probe to fail via that SDK connection
+// regardless of whether the `docker` CLI happens to be on the test
+// host's PATH — the CLI-based false-negative (SDK-reachable daemon,
+// no CLI binary installed) this replaced could never be exercised
+// this deterministically.
+func TestHasDocker_probesViaSDKNotCLI(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+	if err := hasDocker(context.Background()); err == nil {
+		t.Error("hasDocker: want error when DOCKER_HOST points at an unreachable address, got nil")
 	}
-	// Docker is installed; nil OR non-nil are both acceptable
-	// (daemon may not be running on every CI host).
-	_ = hasDocker(context.Background())
 }

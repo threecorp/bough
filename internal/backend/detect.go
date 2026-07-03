@@ -24,6 +24,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 )
 
 // detectTimeout caps the time we spend probing each candidate backend.
@@ -43,11 +45,24 @@ var ErrNoBackend = errors.New("backend: no usable backend found")
 // stable across calls within a single process invocation (callers
 // should cache it themselves — this package does not memoise so unit
 // tests stay deterministic).
+//
+// The two probes run concurrently (each independently bounded by
+// detectTimeout) rather than sequentially: a caller-supplied ctx can
+// carry its own deadline (e.g. `bough status` caps the whole call at
+// 3s), and running the nix probe first would let it eat that budget
+// before the docker probe ever starts. Starting both at once also
+// bounds worst-case latency to max(nix, docker) instead of their sum
+// when nix is absent or slow (e.g. an NFS-mounted store).
 func Detect(ctx context.Context) (string, error) {
-	if hasNixWithFlakes(ctx) {
+	nixCh := make(chan bool, 1)
+	dockerCh := make(chan error, 1)
+	go func() { nixCh <- hasNixWithFlakes(ctx) }()
+	go func() { dockerCh <- hasDocker(ctx) }()
+
+	if <-nixCh {
 		return "nix", nil
 	}
-	if dockerErr := hasDocker(ctx); dockerErr == nil {
+	if dockerErr := <-dockerCh; dockerErr == nil {
 		return "docker", nil
 	} else {
 		return "", fmt.Errorf("%w: neither nix (with flakes) nor docker daemon is reachable; install one or set engines[].backend explicitly in .bough.yaml (docker probe: %v)", ErrNoBackend, dockerErr)
@@ -93,23 +108,28 @@ func hasNixWithFlakes(ctx context.Context) bool {
 	return hasNixCommand && hasFlakes
 }
 
-// hasDocker returns nil when `docker info` exits 0 within
-// detectTimeout, else the underlying exec error. We use `docker info`
-// rather than `docker version` because version succeeds whenever the
-// docker CLI is installed (even with no daemon), whereas info round-
-// trips to the daemon and is the canonical "is docker actually
-// usable" probe.
+// hasDocker returns nil when a Docker daemon answers Ping within
+// detectTimeout, else the underlying error. It connects through
+// pkg/dockerutil.NewClient — the exact same Docker SDK path (driven by
+// DOCKER_HOST / the platform default socket) every docker-backend
+// engine plugin uses to start containers — rather than shelling out to
+// the `docker` CLI. The CLI resolves its endpoint from the active
+// `docker context` (~/.docker/config.json), which can silently diverge
+// from what the SDK's client.FromEnv resolves (e.g. Colima switches
+// the CLI context without exporting DOCKER_HOST): a CLI-based probe
+// can report "docker usable" right before the SDK-based plugin fails
+// to connect, or report "no docker" on a host whose daemon the SDK
+// could reach fine without the `docker` binary even being installed.
 func hasDocker(ctx context.Context) error {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker not on PATH: %w", err)
+	cli, err := dockerutil.NewClient()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
 	}
+	defer func() { _ = cli.Close() }()
 	cctx, cancel := context.WithTimeout(ctx, detectTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "docker", "info")
-	// Discard stdout/stderr; we only care about exit code. Leaving the
-	// default pipes attached would buffer a few KB of docker info
-	// output per probe needlessly.
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
+	if _, err := cli.Ping(cctx); err != nil {
+		return fmt.Errorf("docker ping: %w", err)
+	}
+	return nil
 }

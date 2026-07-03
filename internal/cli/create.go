@@ -115,8 +115,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	if err != nil {
 		// The plugin subprocess's own logs are suppressed at the default
 		// Warn level, so an engine-start failure is otherwise opaque —
-		// signpost the escape hatch unless the operator already enabled it.
-		if os.Getenv(pluginhost.EnvPluginLog) == "" {
+		// signpost the escape hatch unless the operator already enabled
+		// it. Skip the hint when backend detection itself failed
+		// (backend.ErrNoBackend): that happens before any plugin
+		// subprocess is spawned, so there is no plugin log to re-run
+		// for, and the error already names the real remediation
+		// (engines[].backend in .bough.yaml).
+		if os.Getenv(pluginhost.EnvPluginLog) == "" && !errors.Is(err, backend.ErrNoBackend) {
 			err = fmt.Errorf("%w (re-run with %s=debug for the plugin's own logs)", err, pluginhost.EnvPluginLog)
 		}
 		return err
@@ -238,7 +243,14 @@ func startEngines(
 		engineProviderWorktree = filepath.Join(worktreeRoot, provider.Name)
 	}
 
+	// A cold/NFS-mounted nix store or an unresponsive docker daemon can
+	// each take up to detectTimeout; animate a spinner across the call
+	// like every other multi-second step in create so an interactive
+	// operator sees liveness instead of a frozen prompt. No-op (and
+	// near-instant) when every engine already pins Backend explicitly.
+	sp := startSpinner(stderr, "backend: detecting nix/docker")
 	detected, err := detectBackendIfNeeded(ctx, stderr, cfg)
+	sp.Stop()
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +338,11 @@ func detectBackendIfNeeded(ctx context.Context, stderr io.Writer, cfg *config.Co
 // buildEngineExtras assembles the extras map the plugin Up call sees:
 // every engine-declared extra verbatim, plus `backend` (explicit YAML
 // value beats the auto-detect result, both beat the plugin default)
-// and `version` when set.
+// and `version` when set. Explicit beats auto-detect whether the
+// operator named the backend via the dedicated `eng.Backend` field or
+// directly through `extras.backend` — extras are documented as copied
+// verbatim, so auto-detect must only fill a genuine gap, never
+// silently discard a value already present in the map.
 func buildEngineExtras(eng config.Engine, detected string) map[string]string {
 	extras := make(map[string]string, len(eng.Extras)+2)
 	for k, v := range eng.Extras {
@@ -335,6 +351,8 @@ func buildEngineExtras(eng config.Engine, detected string) map[string]string {
 	switch {
 	case eng.Backend != "":
 		extras["backend"] = eng.Backend
+	case extras["backend"] != "":
+		// operator already set it via extras: — leave it alone.
 	case detected != "":
 		extras["backend"] = detected
 	}
