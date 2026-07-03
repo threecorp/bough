@@ -75,7 +75,15 @@ func pickDockerImage(req *api.UpReq) string {
 }
 
 func pickHeap(req *api.UpReq) string {
+	// "es.heap" is this file's own documented key; "heap" is what the
+	// nix backend (elasticsearch.go's Up()) has always read for the
+	// identical setting. Accept both so a value that works on one
+	// backend doesn't silently stop mattering after switching to the
+	// other.
 	if v := req.Extras["es.heap"]; v != "" {
+		return v
+	}
+	if v := req.Extras["heap"]; v != "" {
 		return v
 	}
 	return "1g"
@@ -129,10 +137,22 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	}
 	defer func() { _ = cli.Close() }()
 	id, err := dockerutil.LookupByName(ctx, cli, dockerContainerName(port))
-	if err != nil {
+	if err != nil || id == "" {
 		return false
 	}
-	return id != ""
+	// A stopped/leftover container must not count as "docker backend
+	// in use" — LookupByName lists with All:true, so a stale, already-
+	// stopped container from a prior run would otherwise make Down()
+	// take the docker path (stop+remove the irrelevant container,
+	// report success) while the real engine for this worktree/port —
+	// possibly nix-backed — keeps running untouched, and the
+	// subsequent Cleanup() would then rm -rf its datadir out from
+	// under it.
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil || info.State == nil {
+		return false
+	}
+	return info.State.Running
 }
 
 func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
