@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
@@ -154,5 +155,42 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 	id, _ := LookupByName(context.Background(), cli, name)
 	if id != "" {
 		t.Errorf("stale container still exists after UpOrReuse: %s", id)
+	}
+}
+
+// TestUpOrReuse_RemovingAnAlreadyGoneContainerIsNotFatal is the
+// regression guard for the #7-review finding: UpOrReuse's
+// ContainerRemove call (for a container LookupByName found stopped)
+// used to propagate ANY error verbatim, turning the benign race where
+// a concurrent actor (another `bough create` retry for the same
+// worktree, a parallel `bough remove`, a manual `docker rm`) removes
+// the container between LookupByName and this call into a hard Up
+// failure — even though "nothing there" is exactly the state the
+// id == "" branch one line earlier already treats as success.
+//
+// This cannot reproduce the exact LookupByName-then-ContainerRemove
+// timing window from outside the function, so instead it pins the
+// Docker SDK error-shape contract UpOrReuse's tolerance check (`err
+// != nil && !errdefs.IsNotFound(err)`) depends on: removing a
+// container ID Docker has already forgotten about — precisely what
+// UpOrReuse's own ContainerRemove call would see if it lost that
+// race — must produce an error errdefs.IsNotFound recognizes.
+func TestUpOrReuse_RemovingAnAlreadyGoneContainerIsNotFatal(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+
+	name := fmt.Sprintf("bough-test-vanish-%d", time.Now().UnixNano())
+	id := createSleepContainer(t, cli, name, false) // stopped
+	if err := cli.ContainerRemove(context.Background(), id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
+		t.Fatalf("pre-remove: %v", err)
+	}
+
+	err := cli.ContainerRemove(context.Background(), id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	if err == nil {
+		t.Fatal("removing an already-removed container ID: want error, got nil")
+	}
+	if !errdefs.IsNotFound(err) {
+		t.Errorf("removing an already-removed container ID produced a non-NotFound error (%T): %v — UpOrReuse's tolerance check would treat this as fatal", err, err)
 	}
 }

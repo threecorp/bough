@@ -152,6 +152,49 @@ func TestRunner_AddOrAttach_attachExistingBranch(t *testing.T) {
 	}
 }
 
+// TestRunner_AddOrAttach_ResumeIsNoOpThroughSymlink is the regression
+// guard for the #7-review finding: the resume idempotency check
+// compared the caller's literal dst against git's symlink-resolved
+// `worktree list --porcelain` path, so on any host where dst
+// traverses a symlink component — stock macOS's /tmp -> /private/tmp
+// and /var -> /private/var, which is exactly what Go's own
+// os.Getwd()/t.TempDir() return unresolved — a second AddOrAttach
+// call for an already-created worktree (claude --worktree --resume
+// re-firing WorktreeCreate) fell through to `git worktree add`
+// against the existing dir and failed with exit 128 instead of the
+// documented (false, base, nil) no-op.
+//
+// A symlink is created explicitly here (rather than relying on the
+// test host's own /tmp shape) so the regression reproduces
+// deterministically on any OS, not just machines that happen to
+// symlink their temp dir.
+func TestRunner_AddOrAttach_ResumeIsNoOpThroughSymlink(t *testing.T) {
+	src := initBareRepo(t)
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "via-symlink")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink not supported on this host: %v", err)
+	}
+	dst := filepath.Join(linkRoot, "wt")
+	r := NewRunner()
+
+	created, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Resume", "main")
+	if err != nil {
+		t.Fatalf("first AddOrAttach: %v", err)
+	}
+	if !created {
+		t.Fatalf("first call: created = false, want true")
+	}
+
+	created, _, err = r.AddOrAttach(context.Background(), src, dst, "F-Resume", "main")
+	if err != nil {
+		t.Fatalf("second AddOrAttach through a symlinked dst (simulating macOS /tmp -> /private/tmp): want a silent no-op, got error: %v", err)
+	}
+	if created {
+		t.Errorf("second call: created = true, want false (resume no-op)")
+	}
+}
+
 func TestRunner_RemoveAndDeleteBranch(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()

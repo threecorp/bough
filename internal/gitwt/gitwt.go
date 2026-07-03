@@ -120,8 +120,21 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 	// enabled yet fail, in which case the branch is cut from the local base.
 	effectiveBase = base
 	if wts, listErr := r.List(ctx, repoPath); listErr == nil {
+		// git worktree list --porcelain reports the symlink-resolved
+		// real path, but dst is the caller's literal path — on stock
+		// macOS (/tmp -> /private/tmp, /var -> /private/var) those
+		// differ even though they name the same directory, since
+		// os.Getwd()/$PWD (what callers build dst from) do not resolve
+		// symlinks. Resolve dst the same way before comparing so an
+		// already-registered worktree is actually recognized; a
+		// resolve failure (dst doesn't exist yet) falls back to the
+		// literal path, which is also what a genuinely-new dst needs.
+		resolvedDst := dst
+		if real, evalErr := filepath.EvalSymlinks(dst); evalErr == nil {
+			resolvedDst = real
+		}
 		for _, wt := range wts {
-			if wt.Path == dst {
+			if wt.Path == resolvedDst {
 				return false, base, nil
 			}
 		}

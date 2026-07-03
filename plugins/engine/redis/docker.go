@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -162,12 +161,8 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	if err != nil {
 		return fmt.Errorf("redis docker: create: %w", err)
 	}
-	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: false})
-		if strings.Contains(err.Error(), "port is already allocated") {
-			return fmt.Errorf("redis docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", port, port, err)
-		}
-		return fmt.Errorf("redis docker: start %s: %w", resp.ID, err)
+	if err := dockerutil.StartOrCleanup(ctx, cli, resp.ID, "redis", port); err != nil {
+		return err
 	}
 	return nil
 }
