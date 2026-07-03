@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.9.25
+
+Retrospective `/code-review` sweep of merged PRs that shipped without pre-merge
+review (#1/#2/#3/#4/#5/#6/#7/#8/#14/#16/#17). First installment covering wave
+1+2; the rest follow in later releases.
+
+### Fixed
+
+- **gRPC context cancellation was killing every nix-backend engine's
+  subprocess seconds after start** (mysql/postgres/redis/elasticsearch).
+  `Up()` launched the detached `nix run -- up` process with the per-RPC gRPC
+  context; grpc-go cancels that context the instant `Up()` returns, and Go's
+  `exec.CommandContext` watchdog then SIGKILLs the still-starting process
+  regardless of `Setsid`, well before flake evaluation finishes. Switched to
+  `context.WithoutCancel(ctx)` plus a reaper goroutine.
+- **`bough create` always failed to materialize a `role: engine-provider`
+  repository's worktree** (exit 128). Engine plugins deployed their flake
+  into `<worktreeRoot>/<repo.Name>/...` before `git worktree add` ran against
+  that same path — which fails outright against a non-empty destination.
+  Repos are now materialized before engines start.
+- **`usingDockerBackend` could misdetect the backend from a stale, stopped
+  container**, taking the docker teardown path against the wrong container
+  while a real (possibly nix-backed) engine kept running — risking
+  `Cleanup()` deleting a live engine's datadir. Now also requires the
+  container to be actually running.
+- **`bough remove`'s hardcoded 10s graceful-timeout default silently
+  overrode every engine's own tuned shutdown budget** (30s for mysql's
+  InnoDB recovery window, 60s for elasticsearch's translog flush) on every
+  single invocation. Default changed to 0 so an engine's own budget applies
+  unless the operator explicitly overrides it.
+- `envwriter.Context` only ever carried a `Mysql` field, so a worktree whose
+  only engine was postgres/redis/elasticsearch had no way to reference its
+  own connection info in `env_local:` templates. Added `Postgres`/`Redis`/
+  `Elasticsearch` fields alongside the existing `Mysql` one.
+- `killStrayProcessCompose`'s cwd-prefix match had no path-separator
+  boundary, so tearing down one worktree could SIGTERM a sibling whose name
+  is a literal prefix (`auba-api-139` vs `auba-api-1394`).
+- postgres's `Up()` pre-created the datadir itself before invoking nix,
+  defeating services-flake's init-detection check — `initdb` never ran, so
+  the nix backend could never actually bring up postgres on a fresh
+  worktree.
+- `gitwt.DeleteBranch` treated every git exit-1 as the idempotent
+  "branch not found" case, silently swallowing the real "used by worktree"
+  failure with zero diagnostic trail.
+- The canonical `example.yaml` fixture's `env_local:` templates referenced
+  `.Ports.Api`/`.Ports.Gateway` (capitalized) against a lowercase-keyed
+  `Ports` map — copying the documented example verbatim into a real config
+  aborted `bough create` with a template error.
+- `ready_timeout_sec` had no upper bound before crossing the plugin RPC wire
+  as a proto `int32`; an operator-set value at or above 2^31 would silently
+  wrap negative. Capped at 86400 (24h).
+- Elasticsearch's docker backend only read the JVM heap override from
+  `extras["es.heap"]`, while the nix backend has always read `extras["heap"]`
+  for the identical setting. Now accepts both.
+
 ## v0.9.24
 
 Review-driven follow-ups deferred from v0.9.23 (issues #67 / #68, PR #69).
