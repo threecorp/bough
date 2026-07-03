@@ -17,7 +17,15 @@ import (
 // Down() before SIGKILL. It backs both newRemoveCmd's --graceful-timeout
 // flag default and the flagless WorktreeRemove hook dispatch, so the two
 // removal paths cannot drift.
-const defaultRemoveGracefulSecs = 10
+//
+// Zero, not a positive number: every engine plugin's Down() only
+// falls back to its own tuned budget (e.g. 30s for mysql's InnoDB
+// recovery window, 60s for elasticsearch's translog flush) when
+// GracefulTimeoutSec <= 0. A positive default here would silently
+// override every engine's budget on every single `bough remove`,
+// since the host can't tell "operator left it unset" apart from
+// "operator explicitly asked for this many seconds".
+const defaultRemoveGracefulSecs = 0
 
 // hookInput is the shape Claude Code's WorktreeCreate / WorktreeRemove
 // hook contracts emit on stdin.

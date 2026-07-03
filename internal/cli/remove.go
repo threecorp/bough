@@ -52,7 +52,7 @@ func newRemoveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (when --path is not provided)")
 	cmd.Flags().StringVar(&path, "path", "", "absolute worktree path (typical Claude Code stdin payload)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {worktree_path} from stdin")
-	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback")
+	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback (0 = let each engine plugin use its own tuned default)")
 	return cmd
 }
 
