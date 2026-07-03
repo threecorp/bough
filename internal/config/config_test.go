@@ -252,6 +252,24 @@ registry: {path: .bough-ports.json}
 			wantInErr: "ReadyTimeoutSec",
 		},
 		{
+			// Regression guard: the plugin RPC wire narrows this value to
+			// a proto int32, which would silently wrap negative for a
+			// value at or above 2^31 with no validation error — the
+			// operator's explicit timeout gets replaced by whatever the
+			// plugin's own <=0 fallback default is, with no warning
+			// anywhere in the chain.
+			name: "ready_timeout_sec above the int32-safe cap",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", port_ranges: {main: [42000, 44999]}, ready_timeout_sec: 999999999}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "ReadyTimeoutSec",
+		},
+		{
 			name: "unknown top-level field (strict mode)",
 			yaml: `schema_version: 1
 monorepo_root: "."

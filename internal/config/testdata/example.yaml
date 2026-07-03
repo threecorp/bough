@@ -8,8 +8,8 @@ repositories:
     direnv: true
     env_local:
       DEMO_API_DSN: "root:@tcp(127.0.0.1:{{ .Mysql.Port }})/demo?parseTime=true&loc=UTC"
-      DEMO_API_URI: "grpc://0.0.0.0:{{ .Ports.Api }}"
-      DEMO_API_GATEWAY_PORT: "{{ .Ports.Gateway }}"
+      DEMO_API_URI: "grpc://0.0.0.0:{{ .Ports.api }}"
+      DEMO_API_GATEWAY_PORT: "{{ .Ports.gateway }}"
       DEMO_API_DISABLE_PORT_FALLBACK: "true"
 
   - name: demo-dbmigration

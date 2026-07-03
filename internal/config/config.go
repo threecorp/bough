@@ -137,8 +137,10 @@ type Engine struct {
 	Backend string `yaml:"backend" validate:"omitempty,oneof=nix docker"`
 	// ReadyTimeoutSec caps how long the host waits for the plugin's
 	// ReadyCheck loop to report ready. Zero means use the plugin's
-	// own default (typically 300-600 s).
-	ReadyTimeoutSec int               `yaml:"ready_timeout_sec" validate:"omitempty,min=1"`
+	// own default (typically 300-600 s). Capped well under int32 max:
+	// the value crosses the wire to the plugin as a proto int32, and
+	// an unbounded value here could silently wrap negative there.
+	ReadyTimeoutSec int               `yaml:"ready_timeout_sec" validate:"omitempty,min=1,max=86400"`
 	Extras          map[string]string `yaml:"extras"`
 }
 
