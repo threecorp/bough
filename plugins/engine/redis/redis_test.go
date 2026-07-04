@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
+
+	"github.com/ikeikeikeike/bough/pkg/procutil"
 )
 
 func TestProvider_PortRangeDefault(t *testing.T) {
@@ -62,8 +64,8 @@ func TestProvider_EnvVars(t *testing.T) {
 func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "extracted")
-	if err := deployFlake(dst); err != nil {
-		t.Fatalf("deployFlake: %v", err)
+	if err := procutil.DeployFlake(nixAssets, "nix", dst); err != nil {
+		t.Fatalf("DeployFlake: %v", err)
 	}
 	flakePath := filepath.Join(dst, "flake.nix")
 	if _, err := os.Stat(flakePath); err != nil {

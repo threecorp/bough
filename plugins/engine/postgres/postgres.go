@@ -24,23 +24,21 @@
 package postgres
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
+
+	"github.com/ikeikeikeike/bough/pkg/procutil"
 )
 
 //go:embed nix
@@ -89,7 +87,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("postgres: Up: invalid port %d (Ports=%v)", port, req.Ports)
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
-	if err := deployFlake(flakeDir); err != nil {
+	if err := procutil.DeployFlake(nixAssets, "nix", flakeDir); err != nil {
 		return fmt.Errorf("postgres: deploy flake: %w", err)
 	}
 	if req.Datadir != "" {
@@ -215,14 +213,14 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		_ = cmd.Run()
 		cancel()
 	}
-	if pid := lsofListener(port); pid > 0 {
+	if pid := procutil.LsofListener(port); pid > 0 {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 		time.Sleep(time.Second)
-		if again := lsofListener(port); again == pid {
+		if again := procutil.LsofListener(port); again == pid {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
-	killStrayProcessCompose(req.WorktreeRoot)
+	procutil.KillStrayProcessCompose(req.WorktreeRoot)
 	return nil
 }
 
@@ -282,80 +280,6 @@ func socketDirOrDefault(s string) string {
 		return defaultSocketDir
 	}
 	return s
-}
-
-func deployFlake(dst string) error {
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	return fs.WalkDir(nixAssets, "nix", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel("nix", p)
-		if rel == "" || rel == "." {
-			return nil
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := fs.ReadFile(nixAssets, p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
-	})
-}
-
-func lsofListener(port int) int {
-	out, err := exec.Command("lsof", fmt.Sprintf("-tiTCP:%d", port), "-sTCP:LISTEN").Output()
-	if err != nil {
-		return 0
-	}
-	s := strings.TrimSpace(string(out))
-	if s == "" {
-		return 0
-	}
-	if i := strings.IndexAny(s, "\n\t "); i >= 0 {
-		s = s[:i]
-	}
-	pid, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return pid
-}
-
-func killStrayProcessCompose(cwdPrefix string) {
-	out, err := exec.Command("pgrep", "-f", "process-compose").Output()
-	if err != nil {
-		return
-	}
-	for _, ps := range strings.Fields(string(out)) {
-		pid, err := strconv.Atoi(ps)
-		if err != nil {
-			continue
-		}
-		cwdOut, err := exec.Command("lsof", "-p", ps).Output()
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(bytes.NewReader(cwdOut))
-		for scanner.Scan() {
-			fields := strings.Fields(scanner.Text())
-			if len(fields) >= 9 && fields[3] == "cwd" {
-				// Exact match or a real path-separator boundary — a bare
-				// HasPrefix would also match ".../auba-api-1394" against
-				// cwdPrefix ".../auba-api-139", SIGTERMing a sibling
-				// worktree's still-running supervisor.
-				if cwd := fields[len(fields)-1]; cwd == cwdPrefix || strings.HasPrefix(cwd, cwdPrefix+"/") {
-					_ = syscall.Kill(pid, syscall.SIGTERM)
-				}
-				break
-			}
-		}
-	}
 }
 
 // socketPrefix is referenced by tests asserting on the socket-dir

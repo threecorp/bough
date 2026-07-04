@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/ikeikeikeike/bough/internal/backend"
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/registry"
+	"github.com/ikeikeikeike/bough/pkg/procutil"
 	"github.com/spf13/cobra"
 )
 
@@ -91,7 +90,7 @@ func buildStatus(ctx context.Context, reg registry.Registry, cfg *config.Config)
 	var out []statusEntry
 	for name, kinds := range reg {
 		for kind, port := range kinds {
-			pid := lsofListen(port)
+			pid := procutil.LsofListener(port)
 			out = append(out, statusEntry{
 				Name: name, Kind: kind, Port: port,
 				Listening: pid > 0, PID: pid,
@@ -172,26 +171,4 @@ func computeEngineBackends(ctx context.Context, cfg *config.Config, registeredKi
 		}
 	}
 	return out
-}
-
-// lsofListen returns the PID of whichever process holds the TCP
-// listener on `port`, or 0 when nothing is listening. Mirror of the
-// helper in plugins/engine/mysql/mysql.go.
-func lsofListen(port int) int {
-	out, err := exec.Command("lsof", fmt.Sprintf("-tiTCP:%d", port), "-sTCP:LISTEN").Output()
-	if err != nil {
-		return 0
-	}
-	s := strings.TrimSpace(string(out))
-	if s == "" {
-		return 0
-	}
-	if i := strings.IndexAny(s, "\n\t "); i >= 0 {
-		s = s[:i]
-	}
-	pid, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return pid
 }
