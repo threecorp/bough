@@ -186,5 +186,12 @@ func spawnFreshAndPickPort(t *testing.T, cfg Config) (engineapi.EngineProvider, 
 		t.Fatalf("PortRangeDefault did not declare the configured main role %q; "+
 			"set conformance.Config.MainPortRole to one of the plugin's declared roles", cfg.MainPortRole)
 	}
-	return prov, kill, mainRange.Low
+	// Route through the same probe-and-bind picker allocateRoles uses
+	// (lifecycle.go) instead of the raw, unscanned Low — otherwise a
+	// stray process already bound to Low (the exact class of CI flake
+	// pickFreePort exists to dodge) makes Up() fail on a port
+	// collision, and Fault_DatadirPermission / Fault_ImagePullFailure
+	// both only assert upErr != nil, so they'd false-pass without ever
+	// having exercised the fault they exist to guard.
+	return prov, kill, pickFreePort(mainRange.Low, mainRange.High, nil)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io/fs"
-	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"github.com/ikeikeikeike/bough/internal/pluginhost"
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 )
 
 // quickPhaseTimeout bounds Down / Cleanup / EnvVars / PortRangeDefault
@@ -336,8 +336,15 @@ func allocateRoles(ranges map[string]engineapi.PortRange, mainRole string) ([]en
 	ports := make([]engineapi.PortSpec, 0, len(ranges))
 	portInts := make([]int, 0, len(ranges))
 	mainPort := 0
+	// claimed tracks ports already handed to an earlier role in this
+	// same call so two roles with overlapping PortRangeDefault ranges
+	// (e.g. a multi-port engine's AMQP + Management ranges) can never
+	// be assigned the identical port — pickFreePort's own probe-release
+	// would otherwise report the same just-vacated port free to both.
+	claimed := make(map[int]bool, len(ranges))
 	for role, pr := range ranges {
-		port := pickFreePort(pr.Low, pr.High)
+		port := pickFreePort(pr.Low, pr.High, claimed)
+		claimed[port] = true
 		ports = append(ports, engineapi.PortSpec{Role: role, Port: port})
 		portInts = append(portInts, port)
 		if role == mainRole {
@@ -347,30 +354,39 @@ func allocateRoles(ranges map[string]engineapi.PortRange, mainRole string) ([]en
 	return ports, portInts, mainPort
 }
 
-// pickFreePort scans [low, high] for the first port that can be
-// momentarily bound on 127.0.0.1. The bind is released before
-// return so the engine container can claim it. The scan is bounded
-// at 64 attempts because conformance ranges are wide enough that
-// > 64 consecutive busy ports indicates something else is wrong.
+// portScanAttempts bounds how many consecutive candidate ports
+// pickFreePort probes from low before giving up — conformance ranges
+// are wide enough that more busy/claimed ports in a row than this
+// indicates something else is wrong.
+const portScanAttempts = 64
+
+// pickFreePort scans [low, high] for the first port that is free on
+// 127.0.0.1 (per dockerutil.IsPortFree) and not already in claimed
+// (ports allocateRoles already handed to an earlier role in the same
+// call; pass nil when there is only one role, as faults.go does).
+//
+// IsPortFree is a best-effort, momentary probe — the caller must
+// still detect the backend's "port already allocated" error when the
+// engine actually binds, same caveat as IsPortFree's own doc comment.
 //
 // Falls back to low when no free port is found so the caller still
 // surfaces the (deterministic) failure path through the engine
 // rather than swallowing the contention here.
-func pickFreePort(low, high int) int {
+func pickFreePort(low, high int, claimed map[int]bool) int {
 	if high <= low {
 		return low
 	}
-	limit := low + 64
+	limit := low + portScanAttempts
 	if limit > high {
 		limit = high
 	}
 	for p := low; p <= limit; p++ {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
-		if err != nil {
+		if claimed[p] {
 			continue
 		}
-		_ = ln.Close()
-		return p
+		if dockerutil.IsPortFree(p) {
+			return p
+		}
 	}
 	return low
 }
