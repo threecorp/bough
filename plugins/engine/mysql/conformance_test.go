@@ -145,10 +145,27 @@ func TestDockerReadyCheck_NoRaceWithTemporaryServer(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 
+	// Not t.TempDir(): mysqld writes files (e.g. its auto-generated SSL
+	// certs) as its own container-internal uid, which a non-root CI
+	// runner often can't remove. That's the same known, tracked-elsewhere
+	// limitation conformance/lifecycle.go's assertCleanup tolerates via
+	// t.Skip rather than failing the test — but t.TempDir()'s own
+	// automatic cleanup has no such tolerance (it calls t.Fatalf), so
+	// this test owns its directory and cleanup instead.
+	datadir, err := os.MkdirTemp("", "bough-mysql-readiness-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(datadir); rmErr != nil {
+			t.Logf("cleanup datadir %s: %v (tolerated, same class as lifecycle.go's assertCleanup)", datadir, rmErr)
+		}
+	}()
+
 	p := mysql.New()
 	req := &api.UpReq{
 		Ports:   []api.PortSpec{{Role: "main", Port: port}},
-		Datadir: t.TempDir(),
+		Datadir: datadir,
 		Extras:  map[string]string{"backend": "docker", "docker.image": mysqlConformanceImage},
 	}
 	if err := p.Up(ctx, req); err != nil {
