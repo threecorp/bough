@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.9.26
+
+Retrospective `/code-review` sweep, wave 3 (#9/#10/#11/#12/#18/#19/#20).
+
+### Fixed
+
+- **The recommended install one-liner was broken on 3 of 4 published
+  platform/arch combinations.** It built the release asset name from
+  raw `uname -s`/`uname -m` output, but GoReleaser publishes assets
+  keyed by Go's `GOARCH` (`amd64`/`arm64`) — `uname -m`'s `x86_64`/
+  `aarch64` never matched, so the command 404'd on everything except
+  Apple Silicon macOS (where `arm64` happens to already agree). Added
+  an explicit `uname`→`GOARCH` mapping.
+- **`bough status`'s backend column ignored `extras.backend`**, used a
+  disconnected 3s timeout instead of the shared `Detect()` budget
+  `create` relies on, and probed the backend unconditionally before
+  even checking whether the registry had a matching row. Now honors
+  `extras.backend`, threads the command's own context, and only probes
+  for engine kinds the registry actually has an entry for.
+- **mysql's docker backend could silently duplicate
+  `MYSQL_DATABASE`/`MYSQL_ALLOW_EMPTY_PASSWORD` env entries** when an
+  operator's `extras` collided with the hardcoded defaults — undefined
+  behavior in the official image's entrypoint, and a real Bough/MySQL
+  database-name mismatch. Both keys are now reserved.
+- **`usingDockerBackend` was duplicated verbatim across all four
+  engine plugins.** Centralized as `dockerutil.IsBackendRunning`;
+  `RemoveIfExists` (previously missing the container-vanish-race
+  tolerance its sibling `UpOrReuse` already had) now shares the same
+  fix.
+- **A prior docs-refresh PR had silently dropped the repo's only
+  end-to-end coverage of the still-supported v0.3 legacy schema path**
+  — including `engineProviderRepo()`'s `db-provider` role-alias
+  branch, which no other test anywhere exercises. Restored as a
+  second end-to-end test; verified locally against a real
+  nix-launched mysqld.
+- `newConfigValidateCmd`'s no-args path discarded the real
+  config-load error and always reported a generic, actively-wrong
+  "path argument missing" message. Now propagates the real cause.
+- Root `--help` claimed bough spawns rabbitmq/kafka/NATS engines "via
+  a Hashicorp go-plugin gRPC plugin" — no such plugin binary exists
+  yet; corrected to match the README's own accurate wording.
+- `plugins/engine/api/CONTRACT.md` (the stated successor to the
+  deleted `plugins/db/api/CONTRACT.md`) was missing two invariants
+  that had each caused a real, previously-fixed bug in the plugins it
+  governs: backend self-detection must check `Running` state (not
+  mere existence), and a detached subprocess launched from `Up` must
+  use a context decoupled from the RPC's own. Added both.
+- Fixed several other stale doc claims: a self-contradicting README
+  paragraph calling the Postgres plugin both "battle-tested" and
+  "integration-test-only" in the same breath, `interface.go`'s package
+  comment still claiming the removed `plugins/db/api` exists, the
+  v0.3→v0.4 migration guide's TL;DR framing the already-shipped v0.5.0
+  removal as a future event, and README's nix-backend summary dropping
+  the "with flakes enabled" qualifier its own auto-detect logic
+  requires.
+
 ## v0.9.25
 
 Retrospective `/code-review` sweep of merged PRs that shipped without pre-merge
