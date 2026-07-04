@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.9.27
+
+Retrospective `/code-review` sweep, wave 4 (#27/#30/#38) — completes
+the sweep of all 20 merged-without-review PRs (waves 1+2 shipped in
+v0.9.25, wave 3 in v0.9.26).
+
+### Fixed
+
+- **`SanitizeAnthropicEnv` never stripped the actual Bedrock/Vertex
+  enable switches.** It removed `ANTHROPIC_BEDROCK_BASE_URL` /
+  `ANTHROPIC_VERTEX_*` (auxiliary endpoint/project overrides that do
+  nothing on their own) but not `CLAUDE_CODE_USE_BEDROCK` /
+  `CLAUDE_CODE_USE_VERTEX` — the vars that actually route Claude Code
+  onto Bedrock/Vertex billing. An operator's normal enterprise shell
+  (`CLAUDE_CODE_USE_BEDROCK=1`) had that switch pass straight through
+  into every `claude --print` subprocess bough spawns, silently
+  billing AWS/GCP instead of the operator's subscription — directly
+  contradicting the README's "cannot silently flip to API-key
+  billing" claim — and `bough doctor` scanned the same incomplete
+  list, so it reported a false-clean posture the whole time.
+- **The observer daemon's "30 calls/hour" self-DoS cap never actually
+  accumulated.** Each tick spawns a fresh `observer run-once`
+  subprocess (deliberate, for crash isolation), so each tick's
+  limiter started from zero and a daemon at the recommended
+  `--interval 60` could fire 2x the documented hourly ceiling with no
+  cap ever engaging. The tick loop now holds one daemon-lifetime
+  limiter that gates every tick. (The circuit-breaker half of the
+  same gap needs subprocess exit-code plumbing — tracked as #86.)
+- **The session tokenizer was ASCII-only, permanently disabling
+  confidence learning for non-Latin-script projects.** `addTokens`
+  recognized only `a-z`/`0-9`, so `instinctOverlap` always evaluated
+  to 0 for Japanese instinct/observation text — such instincts could
+  never be reinforced or demoted no matter how often they were
+  exercised. Now tokenizes on `unicode.IsLetter`/`IsDigit`.
+- **`bough ecc import --apply` aborted the whole migration on the
+  first failing project, in nondeterministic map order.** Now walks
+  projects in sorted order, continues past per-project copy failures,
+  registers everything that succeeded in ONE registry write
+  (`WriteUpsertMany`, replacing O(N) full-file rewrites), and exits
+  non-zero with an "imported N of M; failed: ..." summary. Also,
+  `--apply=false` silently performed the real import (the BoolFunc
+  callback ignored pflag's literal value) — now parsed properly.
+- **Conformance's probe-and-bind port picker could hand two roles of
+  a multi-port engine the identical port** (no cross-role
+  claimed-port tracking, a guaranteed false-negative `Up` failure for
+  overlapping ranges), **and the three `Fault_*` subtests bypassed
+  the picker entirely** — on a runner with a stray process on the
+  range's Low port, `Fault_DatadirPermission` / `Fault_ImagePullFailure`
+  false-passed on the port collision without ever exercising the
+  fault they guard. Both now route through `pickFreePort`, which
+  itself now reuses `dockerutil.IsPortFree` instead of duplicating it
+  and has unit coverage for all branches.
+- The SessionEnd hook dispatch passed a hardcoded empty session id,
+  so every `eval/scores.jsonl` row read `"session_id":""` — the real
+  id is now extracted from the hook payload.
+- `preserve-instincts`' `firstActionLine` matched `## Action`
+  case-sensitively (every sibling implementation is case-insensitive),
+  writing the wrong line into MEMORY.md for a differently-cased
+  heading; rewritten to mirror inject.go's helper, dropping the
+  hand-rolled ASCII-only `splitLines`/`trimSpace`.
+- `inject.Options` treated `MinConfidence <= 0` as "unset", so the
+  documented `--min-confidence 0` ("no floor") silently became 0.50
+  and dropped every instinct in the reachable 0.30-0.49 band. The
+  field is now a pointer (nil = unset) and the CLI only sets it when
+  the flag was actually passed.
+- `hook handle`'s UserPromptSubmit dispatch re-implemented
+  `inject-context`'s body inline (the two copies had already needed
+  one identical fix applied twice); both now share `runInjectContext`.
+
 ## v0.9.26
 
 Retrospective `/code-review` sweep, wave 3 (#9/#10/#11/#12/#18/#19/#20).
