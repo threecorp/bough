@@ -43,6 +43,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"syscall"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -178,32 +179,15 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	}
 
 	// Pre-create the bind-mounted datadir and align permissions so the
-	// elasticsearch process (which runs as uid 1000 in the official
-	// image) can write to it.
-	//
-	// Three ownership cases the plugin handles:
-	//
-	//   - macOS Docker Desktop: VirtioFS hides the uid mismatch, plain
-	//     0o755 works.
-	//   - Linux + bough running as root: chown to 1000:0 succeeds and
-	//     the directory is owned by the in-container user.
-	//   - Linux + bough running as a non-root user (CI runners, most
-	//     dev laptops): chown to 1000:0 fails with EPERM. Without a
-	//     fallback the container exits with `AccessDeniedException`
-	//     on its first index.create — the failure mode the bough
-	//     conformance matrix surfaced on ubuntu-24.04 runners.
-	//
-	// The fallback flips the mode to 0o777 so the container can write
-	// regardless of uid mismatch. This is wider than ideal for a
-	// shared host, but per-worktree datadirs already live under a
-	// user-private dir on a developer laptop; the trade-off is acceptable.
+	// in-container elasticsearch process (uid 1000) can write to it. See
+	// ensureDatadirWritableByContainer for the ownership cases (root
+	// chown, a reused datadir already owned by 1000, and the non-root
+	// chmod-0o777 fallback).
 	if err := os.MkdirAll(req.Datadir, 0o755); err != nil {
 		return fmt.Errorf("elasticsearch docker: mkdir datadir: %w", err)
 	}
-	if err := chownDatadirIfPossible(req.Datadir); err != nil {
-		if cerr := os.Chmod(req.Datadir, 0o777); cerr != nil {
-			return fmt.Errorf("elasticsearch docker: chmod datadir to 0o777 fallback: %w", cerr)
-		}
+	if err := ensureDatadirWritableByContainer(req.Datadir); err != nil {
+		return err
 	}
 
 	heap := pickHeap(req)
@@ -252,14 +236,63 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	return nil
 }
 
-// chownDatadirIfPossible recursively chowns the bind-mount target to
-// elasticsearch's container UID:GID (1000:0). On macOS / Windows
-// Docker Desktop the bind-mount layer maps host ownership through a
-// VirtioFS proxy so this is a no-op; on Linux it's necessary when
-// bough runs as root (CI). Returns an error if chown fails — the
-// caller treats it as soft-fail.
-func chownDatadirIfPossible(datadir string) error {
-	return os.Chown(datadir, 1000, 0)
+// esContainerUID is the uid the elasticsearch process runs as inside
+// the official image (the `elasticsearch` user, uid 1000, gid 0).
+const esContainerUID = 1000
+
+// ensureDatadirWritableByContainer aligns the freshly-created,
+// bind-mounted datadir so the in-container elasticsearch process
+// (esContainerUID) can write to it. The bind-mount passes the host
+// directory straight through, so its host-side ownership/mode is what
+// decides whether uid 1000 can write.
+//
+// Cases, in order:
+//
+//   - chown to 1000:0 succeeds (bough runs as root, e.g. a CI runner):
+//     the directory is owned by the in-container user; done. On macOS
+//     Docker Desktop the VirtioFS proxy papers over the uid mismatch and
+//     chown also succeeds.
+//   - chown fails (EPERM on a non-root host) but the datadir is ALREADY
+//     owned by uid 1000 — the common case for a datadir reused from a
+//     prior run — so the container can already write and there is
+//     nothing to fix. Widening the mode here is exactly what regressed:
+//     a non-root host can neither chown NOR chmod a directory it does
+//     not own, so the old chmod-0o777 fallback also EPERM'd and Up
+//     hard-failed even though the datadir was writable by the container
+//     (issue #74).
+//   - otherwise widen the mode to 0o777 so uid 1000 can write despite
+//     the ownership mismatch. Wider than ideal, but per-worktree
+//     datadirs live under a user-private dir. Only if THAT also fails is
+//     Up blocked, and then with an actionable error — the datadir is
+//     owned by a third uid the host can neither chown nor chmod.
+func ensureDatadirWritableByContainer(datadir string) error {
+	if err := os.Chown(datadir, esContainerUID, 0); err == nil {
+		return nil
+	}
+	if datadirOwnedBy(datadir, esContainerUID) {
+		return nil
+	}
+	if err := os.Chmod(datadir, 0o777); err != nil {
+		return fmt.Errorf("elasticsearch docker: cannot make datadir %q writable by the "+
+			"in-container elasticsearch user (uid %d): chown and chmod both failed (%w). "+
+			"It is likely a reused datadir owned by a different uid — remove it "+
+			"(rm -rf %q) or run bough as a user that can chown it",
+			datadir, esContainerUID, err, datadir)
+	}
+	return nil
+}
+
+// datadirOwnedBy reports whether datadir's owning uid is uid. Used to
+// detect a reused datadir already owned by the container user, where
+// neither chown nor chmod is needed (and, on a non-root host, neither is
+// even possible).
+func datadirOwnedBy(datadir string, uid uint32) bool {
+	info, err := os.Stat(datadir)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uid
 }
 
 // dockerReadyCheck polls TCP listen on the host-side HTTP port, then
