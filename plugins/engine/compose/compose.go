@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
@@ -44,6 +45,11 @@ import (
 type Provider struct {
 	PortLow  int
 	PortHigh int
+
+	// mu guards cache, populated by Up() and read by EnvVars()/
+	// ReadyCheck() — see state.go's cacheState/cachedState doc.
+	mu    sync.Mutex
+	cache map[int]*upState
 }
 
 // New returns a Provider with production defaults.
