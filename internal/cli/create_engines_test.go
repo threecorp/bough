@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -232,5 +233,68 @@ func TestStartEngines_HappyPathCollectsEnvVars(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "mysql: ready on port 42001") {
 		t.Errorf("missing ready log line: %q", buf.String())
+	}
+}
+
+// TestRunCreate_EmitsWorktreePathEvenWhenEngineStartFails is the
+// regression guard for the WorktreeCreate hook contract: every other
+// best-effort step in runCreate (repo materialise, env_local render,
+// post_create hooks) logs its failure and still reaches the stdout
+// emit, but an engine Up/ReadyCheck/EnvVars failure used to `return
+// err` immediately — skipping the stdout line the hook contract
+// requires unconditionally. Claude Code only re-buckets a
+// `--worktree`-started session's transcript under the worktree's own
+// project directory when the hook actually emits that path; a session
+// that hit this early return kept recording under the parent
+// checkout's bucket for its whole lifetime, breaking
+// `claude --worktree <name> --resume <id>` even though the worktree
+// itself (this test's target directory) was already fully created.
+func TestRunCreate_EmitsWorktreePathEvenWhenEngineStartFails(t *testing.T) {
+	monorepoRoot := t.TempDir()
+	cfg := engineTestConfig()
+	cfg.Registry.Path = ".bough-ports.json"
+	cfg.Engines[0].PortRanges = map[string][2]int{"main": {42000, 44999}}
+	sentinel := errors.New("mysql refused to start")
+	discover := func(string) (engineapi.EngineProvider, func(), error) {
+		return &fakeEngineProvider{upErr: sentinel}, func() {}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runCreate(context.Background(), &stderr, &stdout, cfg, monorepoRoot, "demo", true, false, discover)
+	if err != nil {
+		t.Fatalf("runCreate (non-strict) = %v, want nil — an engine failure must not abort before the stdout emit", err)
+	}
+
+	wantPath := filepath.Join(monorepoRoot, ".worktrees", "demo")
+	if got := strings.TrimSpace(stdout.String()); got != wantPath {
+		t.Errorf("stdout = %q, want the worktree root %q (the WorktreeCreate hook contract requires exactly this line even on engine failure)", got, wantPath)
+	}
+	if !strings.Contains(stderr.String(), sentinel.Error()) {
+		t.Errorf("stderr = %q, want it to mention the engine failure (%q)", stderr.String(), sentinel.Error())
+	}
+}
+
+// TestRunCreate_StrictModeFailsOnEngineError: --strict still turns an
+// engine-start failure into a non-zero exit for CI / scripted callers,
+// exactly like the existing failedRepos/failedEnv/failedHooks
+// problems — the stdout emit and the exit code are independent
+// concerns.
+func TestRunCreate_StrictModeFailsOnEngineError(t *testing.T) {
+	monorepoRoot := t.TempDir()
+	cfg := engineTestConfig()
+	cfg.Registry.Path = ".bough-ports.json"
+	cfg.Engines[0].PortRanges = map[string][2]int{"main": {42000, 44999}}
+	discover := func(string) (engineapi.EngineProvider, func(), error) {
+		return &fakeEngineProvider{upErr: errors.New("mysql refused to start")}, func() {}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runCreate(context.Background(), &stderr, &stdout, cfg, monorepoRoot, "demo", true, true, discover)
+	if err == nil {
+		t.Fatal("runCreate (--strict) = nil, want a non-nil error on engine failure")
+	}
+	wantPath := filepath.Join(monorepoRoot, ".worktrees", "demo")
+	if got := strings.TrimSpace(stdout.String()); got != wantPath {
+		t.Errorf("stdout = %q, want the worktree root %q even under --strict (operator still lands in the worktree)", got, wantPath)
 	}
 }

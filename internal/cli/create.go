@@ -51,7 +51,7 @@ func newCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict)
+			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict, pluginhost.Discover)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (mutually exclusive with --stdin-json)")
@@ -80,15 +80,30 @@ type engineInstance struct {
 
 // runCreate is the ordered choreography of allocator → registry →
 // gitwt → pluginhost → envwriter → post_create. Errors are
-// progressive: per-repo failures log to stderr and continue (the host
-// typically converges across two-or-three `bough create` retries),
-// but registry / plugin failures abort because they leave the
-// operator in an inconsistent state.
+// progressive: per-repo, per-engine, env_local, and post_create
+// failures all log to stderr and continue (the host typically
+// converges across two-or-three `bough create` retries) — only
+// registry allocation aborts outright, because it leaves the operator
+// in an inconsistent state before any worktree directory exists to
+// land in.
+//
+// Every one of the best-effort phases must still reach the stdout
+// emit at the end: the WorktreeCreate hook contract requires exactly
+// the worktree root path on stdout unconditionally, and Claude Code
+// uses that emission to associate the session's transcript with the
+// worktree's own project bucket. A phase that aborted early here used
+// to leave `claude --worktree <name> --resume <id>` unable to find a
+// session that, from the transcript's own recorded cwd, very much did
+// run inside the worktree the whole time.
 //
 // Each numbered phase below is a self-contained helper so this body
 // reads as the contract: load → allocate → materialise repos → start
 // engines → render env → run hooks → emit the worktree path.
-func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch, strict bool) error {
+//
+// discover is the plugin lookup (production: pluginhost.Discover),
+// injected so tests can substitute a fake EngineProvider and pin the
+// engine-failure paths without spawning plugin subprocesses.
+func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch, strict bool, discover func(kind string) (engineapi.EngineProvider, func(), error)) error {
 	// One mutex per fd: route every create-path stderr write (logf, the
 	// spinner) through the shared termio wrapper so pluginhost's hclog
 	// lines — which target termio.Stderr from their own goroutines —
@@ -128,13 +143,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// every started subprocess on the way out — even partial-start
 	// engines from a mid-loop error are caught because startEngines
 	// returns whatever it managed to bring up.
-	engines, err := startEngines(ctx, stderr, cfg, worktreeRoot, enginePorts, pluginhost.Discover)
+	engines, engineErr := startEngines(ctx, stderr, cfg, worktreeRoot, enginePorts, discover)
 	defer func() {
 		for _, e := range engines {
 			e.kill()
 		}
 	}()
-	if err != nil {
+	if engineErr != nil {
 		// The plugin subprocess's own logs are suppressed at the default
 		// Warn level, so an engine-start failure is otherwise opaque —
 		// signpost the escape hatch unless the operator already enabled
@@ -143,10 +158,16 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		// subprocess is spawned, so there is no plugin log to re-run
 		// for, and the error already names the real remediation
 		// (engines[].backend in .bough.yaml).
-		if os.Getenv(pluginhost.EnvPluginLog) == "" && !errors.Is(err, backend.ErrNoBackend) {
-			err = fmt.Errorf("%w (re-run with %s=debug for the plugin's own logs)", err, pluginhost.EnvPluginLog)
+		if os.Getenv(pluginhost.EnvPluginLog) == "" && !errors.Is(engineErr, backend.ErrNoBackend) {
+			engineErr = fmt.Errorf("%w (re-run with %s=debug for the plugin's own logs)", engineErr, pluginhost.EnvPluginLog)
 		}
-		return err
+		// Best-effort like every phase below: an engine that fails to
+		// start must not abort create before the worktree-path stdout
+		// emit — this used to be the one asymmetric early return in an
+		// otherwise all-best-effort function, and it broke the
+		// WorktreeCreate hook contract Claude Code depends on to
+		// associate the session with the worktree (see the doc comment
+		// above runCreate).
 	}
 
 	// Repos that failed to materialise (clone / worktree-add) are skipped
@@ -193,10 +214,18 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 
 	// 7. Surface partial failures loudly. By default create still
 	// returns success once the worktree exists (the hook's cd
-	// contract); --strict turns any worktree-add or post_create
-	// failure into a non-zero exit for CI / scripted callers.
-	if n := len(failedRepos) + len(failedEnv) + len(failedHooks); n > 0 {
+	// contract); --strict turns any engine-start, worktree-add, or
+	// post_create failure into a non-zero exit for CI / scripted
+	// callers.
+	n := len(failedRepos) + len(failedEnv) + len(failedHooks)
+	if engineErr != nil {
+		n++
+	}
+	if n > 0 {
 		logf(stderr, "[bough] WARNING: create finished with %d problem(s); the worktree exists but its environment may be incomplete:", n)
+		if engineErr != nil {
+			logf(stderr, "[bough]   - engine start failed: %v", engineErr)
+		}
 		for _, r := range failedRepos {
 			logf(stderr, "[bough]   - worktree add failed: %s", r)
 		}
@@ -207,8 +236,8 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 			logf(stderr, "[bough]   - post_create failed: %s", h)
 		}
 		if strict {
-			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d) with --strict",
-				name, n, len(failedRepos), len(failedEnv), len(failedHooks))
+			return fmt.Errorf("create %s: %d post-setup problem(s) (engine start: %v, worktree add: %d, env_local: %d, post_create: %d) with --strict",
+				name, n, engineErr != nil, len(failedRepos), len(failedEnv), len(failedHooks))
 		}
 	}
 	return nil

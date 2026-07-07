@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ikeikeikeike/bough/internal/config"
+	"github.com/ikeikeikeike/bough/internal/pluginhost"
 
 	"github.com/spf13/cobra"
 )
@@ -79,7 +80,7 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, false)
+	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, false, pluginhost.Discover)
 }
 
 // resolveRemoveTarget maps a (worktreePath OR name) removal request to
