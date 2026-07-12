@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.11.0
+
+Groups everything bough generates at the monorepo root so that a
+git-initialised root needs only two `.gitignore` entries — `.bough/`
+and `worktrees/` — and adds a heads-up about Claude Code's git-native
+`--worktree` resume.
+
+Background: `claude --worktree` is git-native. In a non-git monorepo
+root, bough's `WorktreeCreate` hook still lets `claude --worktree` run
+(the hook is Claude Code's documented escape hatch for non-git / other
+VCS), but Claude Code anchors such hook-based worktree sessions to the
+launch directory — so `claude --worktree <name> --resume <id>` cannot
+find them (only plain `claude --resume <id>` from the root can).
+Initialising the monorepo root as a git repository switches Claude
+Code onto the git-native path and makes `--worktree ... --resume` work.
+
+### Changed
+
+- **Workspace layout (v0.11):** source checkouts now live under
+  `<root>/.bough/repos/<name>` (was `<root>/<name>`), the port registry
+  default moves to `<root>/.bough/ports.json` (was `.bough-ports.json`),
+  and worktrees use the non-hidden `<root>/worktrees/<name>` (was
+  `.worktrees/`). All three are **backward-compatible**: a pre-v0.11
+  monorepo whose checkouts sit at `<root>/<name>`, whose worktrees live
+  under `.worktrees/`, and whose registry is `.bough-ports.json` is
+  detected and reused unchanged — only freshly-created artifacts adopt
+  the new locations, so upgrading never orphans an existing workspace.
+
+### Added
+
+- **`bough create` git heads-up:** when the monorepo root is not inside
+  a git work tree, bough prints a one-time note explaining that
+  `claude --worktree <name> --resume <id>` won't find sessions started
+  there (use plain `claude --resume <id>`, or `git init` the root), and
+  SUGGESTS — never writes — the `.bough/` + `worktrees/` `.gitignore`
+  lines. The ignore policy stays the operator's to own.
+
 ## v0.10.0
 
 Adds a 5th engine plugin, `bough-plugin-compose`. Instead of

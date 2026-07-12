@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/registry"
@@ -14,12 +13,12 @@ import (
 func newBackfillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backfill",
-		Short: "Register pre-existing .worktrees/* into .bough-ports.json without re-launching anything",
-		Long: `backfill walks .worktrees/* looking for directories that resemble bough
-worktrees and registers them in .bough-ports.json (or .worktree-ports.json
-on the v0.3 fallback path) so subsequent allocations don't accidentally
-re-use the same port. The engine is not restarted — pre-existing
-.env.local files keep their port assignments.
+		Short: "Register pre-existing worktrees into the port registry without re-launching anything",
+		Long: `backfill walks the monorepo's worktrees/ (or the pre-v0.11 hidden
+.worktrees/) looking for directories that resemble bough worktrees and
+registers them in the port registry so subsequent allocations don't
+accidentally re-use the same port. The engine is not restarted —
+pre-existing .env.local files keep their port assignments.
 
 Use this after upgrading to bough from a hand-rolled hook, or after a
 registry corruption recovered from ~/.bough/backups/. Subsequent
@@ -36,19 +35,19 @@ written registry.`,
 	return cmd
 }
 
-// runBackfill walks .worktrees/*/ and adds any unregistered name to the
-// registry with an empty entry. The follow-up `bough create <name>`
-// is what actually allocates ports — backfill alone is the "stop
-// allocator from re-issuing this name's slot" pass.
+// runBackfill walks the monorepo's worktrees dir and adds any
+// unregistered name to the registry with an empty entry. The follow-up
+// `bough create <name>` is what actually allocates ports — backfill
+// alone is the "stop allocator from re-issuing this name's slot" pass.
 func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) error {
-	root := filepath.Join(monorepoRoot, ".worktrees")
+	root := worktreesDir(monorepoRoot)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintln(stderr, "[backfill] .worktrees/ does not exist — nothing to do")
+			fmt.Fprintf(stderr, "[backfill] %s does not exist — nothing to do\n", root)
 			return nil
 		}
-		return fmt.Errorf("read .worktrees/: %w", err)
+		return fmt.Errorf("read %s: %w", root, err)
 	}
 	store := registry.NewStore(
 		resolveRegistryPath(monorepoRoot, cfg.Registry.Path),

@@ -21,7 +21,7 @@ worktree-scoped port isolation (see [Compose-wrapped
 services](#compose-wrapped-services) below).
 
 The "what to isolate" is fully declarative — pick which repositories
-appear under `.worktrees/<name>/` and which engines spawn per worktree
+appear under `worktrees/<name>/` and which engines spawn per worktree
 via a single YAML at the monorepo root. Engines are loaded as gRPC
 plugins, so adding a new engine (rabbitmq, kafka, nats, minio, …) never
 requires editing the host binary.
@@ -148,7 +148,7 @@ nix profile install github:ikeikeikeike/bough
 ## Quick start
 
 Drop a `.bough.yaml` at the monorepo root that declares which sub-repos
-hang off `.worktrees/<name>/` and which engines start per worktree
+hang off `worktrees/<name>/` and which engines start per worktree
 (v0.3.x `.worktree-isolation.yaml` is auto-read with a deprecation
 warning — see [`docs/MIGRATION-v0.3-to-v0.4.md`](./docs/MIGRATION-v0.3-to-v0.4.md)):
 
@@ -211,7 +211,7 @@ ports:
   api:    { range: [45000, 47999] }
 
 registry:
-  path: ".bough-ports.json"
+  path: ".bough/ports.json"   # pre-v0.11 monorepos may keep ".bough-ports.json"
   backup_dir: "~/.bough/backups"
 
 teardown:
@@ -258,6 +258,50 @@ After that, `claude --worktree F-FeatureName` deterministically:
 `bough remove` (or the WorktreeRemove hook) reverses all of the above:
 graceful plugin Down → lsof PID kill fallback → `git worktree remove`
 per sub-repo → registry cleanup → datadir teardown.
+
+## Workspace layout & resumable worktree sessions
+
+Everything bough generates at the monorepo root is grouped under two
+directories (v0.11+):
+
+```
+<monorepo-root>/
+  .bough/repos/<name>     # source checkouts (bough clones `source:` here)
+  .bough/ports.json       # port registry
+  worktrees/<name>/       # per-feature worktrees
+```
+
+So a git-initialised monorepo root needs just two `.gitignore` entries:
+
+```gitignore
+.bough/
+worktrees/
+```
+
+**Why git-init the root?** Claude Code's `--worktree` is git-native. In
+a non-git root, bough's `WorktreeCreate` hook still lets `claude
+--worktree` run (the hook is Claude Code's documented escape hatch for
+non-git / other-VCS workspaces), **but** Claude Code anchors such
+hook-based worktree sessions to the launch directory. That means:
+
+- ✅ `claude --resume <id>` from the monorepo root — always works.
+- ❌ `claude --worktree <name> --resume <id>` — cannot find the session
+  (it looks in the worktree's own project bucket, where a non-git
+  hook-based session was never stored).
+
+`git init` the monorepo root and Claude Code switches onto the
+git-native path, making `claude --worktree <name> --resume <id>` work
+too. `bough create` prints a one-time heads-up (with the two `.gitignore`
+lines above) when it notices the root is not a git repository — it never
+edits `.gitignore` for you.
+
+> **Upgrading from a pre-v0.11 layout is transparent.** A monorepo whose
+> checkouts still sit at `<root>/<name>` and whose worktrees still live
+> under `.worktrees/` keeps working unchanged — bough detects and reuses
+> the existing locations, and only fresh checkouts / worktrees adopt the
+> new paths. To fully consolidate, move the sub-repo checkouts into
+> `.bough/repos/`, rename `.worktrees/` → `worktrees/`, and (optionally)
+> `.bough-ports.json` → `.bough/ports.json`.
 
 ## Compose-wrapped services
 
@@ -317,7 +361,7 @@ bough remove [--config PATH] [--name NAME | --path PATH] [--stdin-json]
 bough verify <worktree-name>            # registry vs declared ranges vs .env.local
 bough status [--json]                   # registry + lsof TCP listen probe
 bough list                              # registry table (kinds dynamic)
-bough backfill                          # register pre-existing .worktrees/*
+bough backfill                          # register pre-existing worktrees/* (or legacy .worktrees/*)
 bough config validate [PATH]            # strict YAML schema check
 bough plugins list                      # glob $PATH for bough-plugin-*
 
@@ -348,7 +392,7 @@ bough/
 │   ├── cli/                                cobra subcommands
 │   ├── config/                             .bough.yaml schema (validator/v10)
 │   ├── allocator/                          crc32 + linear-probing port allocator
-│   ├── registry/                           .bough-ports.json atomic R/W (legacy read fallback)
+│   ├── registry/                           .bough/ports.json atomic R/W (legacy .bough-ports.json read fallback)
 │   ├── gitwt/                              `git worktree` wrapper
 │   ├── envwriter/                          text/template + Sprig .env.local generator
 │   ├── hooks/                              post_create / pre_remove hook runner

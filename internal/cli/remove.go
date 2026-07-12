@@ -111,8 +111,16 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	hookOut := termio.ExecWriter(stderr)
 	runner := gitwt.NewRunner()
 	for _, repo := range cfg.Repositories {
-		repoSrc := filepath.Join(monorepoRoot, repo.Name)
 		repoDst := filepath.Join(worktreePath, repo.Name)
+		// Prefer the source recorded in the worktree's own gitlink so
+		// remove targets the exact repo create registered this worktree
+		// against, even if resolveRepoSrc would now resolve elsewhere
+		// (post-migration drift). Fall back to resolveRepoSrc when the
+		// worktree copy is already gone / not a linked worktree.
+		repoSrc, ok := worktreeSourceRepo(repoDst)
+		if !ok {
+			repoSrc = resolveRepoSrc(monorepoRoot, repo.Name)
+		}
 		for _, line := range repo.PreRemove {
 			logf(stderr, "[bough] %s pre_remove: %s", repo.Name, line)
 			c := exec.CommandContext(ctx, "bash", "-c", line)

@@ -103,6 +103,18 @@ func (c *Config) validateSemantic() error {
 			errs = append(errs, fmt.Errorf("config: repositories[%d].name=%q must be a single path segment (no '.', '..', '/' or '\\')", i, r.Name))
 			continue
 		}
+		// Reject names that collide with bough's own layout directories at
+		// the monorepo root. A repo checked out at <root>/<name> would
+		// otherwise share a path with the worktrees dir or the .bough/ tree,
+		// so `bough create` could write feature worktrees INTO that repo's
+		// checkout and `bough remove` could RemoveAll files out of it. The
+		// literals mirror internal/cli/layout.go's worktreesName /
+		// legacyWtName / boughDir (config cannot import cli).
+		switch r.Name {
+		case "worktrees", ".worktrees", ".bough":
+			errs = append(errs, fmt.Errorf("config: repositories[%d].name=%q is reserved (collides with bough's worktrees/ and .bough/ layout dirs); rename the repo", i, r.Name))
+			continue
+		}
 		if seenRepo[r.Name] {
 			errs = append(errs, fmt.Errorf("config: repositories[%d].name=%q is duplicated", i, r.Name))
 		}

@@ -92,6 +92,24 @@ func TestLoad_RejectsTraversalName(t *testing.T) {
 	}
 }
 
+// TestLoad_RejectsReservedName: a repo whose name collides with bough's
+// own root-level layout dirs (worktrees / .worktrees / .bough) must be
+// rejected, else `bough create`/`remove` would write into (or RemoveAll
+// out of) that repo's checkout at <root>/<name>.
+func TestLoad_RejectsReservedName(t *testing.T) {
+	for _, name := range []string{"worktrees", ".worktrees", ".bough"} {
+		y := "schema_version: 2\nmonorepo_root: \".\"\nrepositories:\n  - name: '" + name + "'\n    branch_strategy: develop\nregistry:\n  path: \".bough/ports.json\"\n"
+		if _, err := LoadFromBytes([]byte(y), "t.yaml"); err == nil {
+			t.Errorf("name %q should be rejected (reserved layout dir)", name)
+		}
+	}
+	// a normal name that merely CONTAINS a reserved word is fine
+	y := "schema_version: 2\nmonorepo_root: \".\"\nrepositories:\n  - name: 'my-worktrees-tool'\n    branch_strategy: develop\nregistry:\n  path: \".bough/ports.json\"\n"
+	if _, err := LoadFromBytes([]byte(y), "t.yaml"); err != nil {
+		t.Errorf("name 'my-worktrees-tool' must be accepted: %v", err)
+	}
+}
+
 // TestLoad_EvolveClaudeMDOnSessionEnd covers the v0.9.14 opt-in flag:
 // it must default to false when absent (= bough's no-repo-contamination
 // default) and parse true when set under instinct:.

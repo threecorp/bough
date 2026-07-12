@@ -44,7 +44,7 @@ func newVerifyCmd() *cobra.Command {
 // against an unbooted api server would be misleading. The engine case
 // goes through `bough status`.
 func runVerify(stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string) error {
-	worktreePath := filepath.Join(monorepoRoot, ".worktrees", name)
+	worktreePath := filepath.Join(worktreesDir(monorepoRoot), name)
 	if _, err := os.Stat(worktreePath); err != nil {
 		return fmt.Errorf("worktree dir absent: %s", worktreePath)
 	}

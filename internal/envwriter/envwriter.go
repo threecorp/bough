@@ -42,7 +42,7 @@ type Context struct {
 
 // WorktreeCtx is the per-worktree identity. `Name` is what the user
 // passes to `claude --worktree`; `Root` is the absolute path of
-// `<monorepo>/.worktrees/<name>`.
+// `<monorepo>/worktrees/<name>`.
 type WorktreeCtx struct {
 	Name string
 	Root string

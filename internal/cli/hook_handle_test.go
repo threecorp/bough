@@ -36,6 +36,25 @@ func TestResolveMonorepoRoot(t *testing.T) {
 		t.Errorf("unmarked /.worktrees/ prefix: got %q want %q (no bogus split)", got, stray)
 	}
 
+	// v0.11: the non-hidden worktrees/ layout resolves the same way, and
+	// its fast-path must still jump PAST a worktree sub-repo that happens
+	// to carry a stray .bough.yaml (a plain ancestor walk would wrongly
+	// stop at that sub-repo).
+	monoNew := t.TempDir()
+	if err := os.WriteFile(filepath.Join(monoNew, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subNew := filepath.Join(monoNew, "worktrees", "F-feat", "auba-api")
+	if err := os.MkdirAll(subNew, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subNew, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveMonorepoRoot(subNew); got != monoNew {
+		t.Errorf("worktrees/ layout: got %q want the monorepo root %q (fast-path must skip the sub-repo's stray marker)", got, monoNew)
+	}
+
 	// walk up to the nearest ancestor holding the .bough.yaml marker
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {

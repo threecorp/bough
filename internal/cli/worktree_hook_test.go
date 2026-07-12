@@ -78,7 +78,9 @@ func TestHookHandle_WorktreeCreateEmitsPath(t *testing.T) {
 	}
 
 	got := strings.TrimSpace(out.String())
-	want := filepath.Join(root, ".worktrees", "F-Test")
+	// A fresh monorepo (no legacy .worktrees/) uses the non-hidden
+	// worktrees/ dir (v0.11 layout).
+	want := filepath.Join(root, "worktrees", "F-Test")
 	if got != want {
 		t.Errorf("stdout worktree path = %q, want %q\nstderr:\n%s", got, want, errBuf.String())
 	}
@@ -168,7 +170,7 @@ func TestHookHandle_WorktreeRemoveTearsDown(t *testing.T) {
 	}
 
 	handle("WorktreeCreate", fmt.Sprintf(`{"name":"F-Rm","cwd":%q}`, root))
-	wt := filepath.Join(root, ".worktrees", "F-Rm")
+	wt := filepath.Join(root, "worktrees", "F-Rm")
 	if _, err := os.Stat(wt); err != nil {
 		t.Fatalf("worktree not created by WorktreeCreate: %v", err)
 	}

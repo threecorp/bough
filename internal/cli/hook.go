@@ -398,17 +398,23 @@ func resolveHomunculusObsPath() string {
 // resolveMonorepoRoot mirrors threecorp's detect-project-wrapper.sh so
 // every sub-repo / worktree session pools into the one monorepo project:
 // a session inside a worktree resolves to the monorepo parent (the path
-// before /.worktrees/); otherwise it walks up to the nearest ancestor
-// holding the monorepo marker (.bough.yaml); else it falls back to cwd.
+// before the worktrees/ segment); otherwise it walks up to the nearest
+// ancestor holding the monorepo marker (.bough.yaml); else it falls back
+// to cwd.
 func resolveMonorepoRoot(cwd string) string {
-	// Prefer the prefix before /.worktrees/ — but only when it actually holds
-	// the .bough.yaml marker, so a path that legitimately contains a
-	// /.worktrees/ segment that is not bough's does not resolve to a bogus
-	// root. Otherwise fall through to the ancestor walk (which would also find
-	// the monorepo root for a real worktree, since it holds the marker).
-	if i := strings.Index(cwd, "/.worktrees/"); i >= 0 {
-		if cand := cwd[:i]; hasMonorepoMarker(cand) {
-			return cand
+	// Prefer the prefix before the worktrees segment — but only when it
+	// actually holds the .bough.yaml marker, so a path that legitimately
+	// contains such a segment that is not bough's does not resolve to a
+	// bogus root, and a worktree sub-repo carrying a stray marker cannot
+	// shadow the real root. Both the v0.11 worktrees/ and the pre-v0.11
+	// hidden .worktrees/ layouts are recognised. Otherwise fall through to
+	// the ancestor walk (which also finds a real worktree's monorepo root,
+	// since it holds the marker).
+	for _, seg := range []string{"/" + worktreesName + "/", "/" + legacyWtName + "/"} {
+		if i := strings.Index(cwd, seg); i >= 0 {
+			if cand := cwd[:i]; hasMonorepoMarker(cand) {
+				return cand
+			}
 		}
 	}
 	dir := cwd

@@ -79,7 +79,7 @@ type QualityGateCfg struct {
 }
 
 // Repository declares one git sub-repo that hangs off
-// `.worktrees/<name>/`.
+// `worktrees/<name>/`.
 //
 // Role values:
 //   - "" (empty): the worktree is created and direnv-allowed but
