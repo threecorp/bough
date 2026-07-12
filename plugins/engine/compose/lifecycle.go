@@ -64,12 +64,8 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: invalid compose.target_port %q", targetPortStr)
 	}
 
-	rawWorktreeRoot := filepath.Dir(req.WorktreeRoot)
-	worktreeName := filepath.Base(rawWorktreeRoot)
-	composeFile := file
-	if !filepath.IsAbs(composeFile) {
-		composeFile = filepath.Join(rawWorktreeRoot, composeFile)
-	}
+	worktreeName := filepath.Base(filepath.Dir(req.WorktreeRoot))
+	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, file)
 	if _, err := os.Stat(composeFile); err != nil {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
@@ -224,11 +220,7 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
-	rawWorktreeRoot := filepath.Dir(req.WorktreeRoot)
-	composeFile := st.File
-	if !filepath.IsAbs(composeFile) {
-		composeFile = filepath.Join(rawWorktreeRoot, composeFile)
-	}
+	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
 		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort,
 	})

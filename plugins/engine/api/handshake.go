@@ -3,11 +3,23 @@ package api
 import "github.com/hashicorp/go-plugin"
 
 // Handshake is the v0.4.0 EngineProvider magic-cookie negotiation
-// between the bough host and an engine plugin. Bumping
-// ProtocolVersion is the gate for backwards-incompatible engine.proto
-// changes — host and plugin must match.
+// between the bough host and an engine plugin. Bumping ProtocolVersion
+// is the gate for engine.proto changes — host and plugin must match.
+// Per CONTRACT.md, every field added after v0.4.0 rides along with a
+// bump even when it is technically proto3-additive: bough co-ships the
+// host and all bough-plugin-* binaries from one release and installs
+// them together, so a bump costs nothing in practice while turning an
+// accidental partial upgrade (a stale plugin binary left on PATH) into
+// a loud handshake error instead of a silently-dropped field.
+//
+//	v2 (ProtocolVersion 2) — v0.4.0 EngineProvider baseline.
+//	v3 (ProtocolVersion 3) — UpRequest.plugins (PluginSpec) added.
+//
+// MagicCookieValue is the plugin-TYPE identity (a friendly "this is a
+// bough engine plugin" check), not the compatibility gate, so it stays
+// constant across ProtocolVersion bumps.
 var Handshake = plugin.HandshakeConfig{
-	ProtocolVersion:  2,
+	ProtocolVersion:  3,
 	MagicCookieKey:   "BOUGH_ENGINE_PLUGIN",
 	MagicCookieValue: "v2",
 }

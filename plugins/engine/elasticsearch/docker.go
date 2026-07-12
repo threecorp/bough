@@ -25,12 +25,35 @@
 //     running 5-15 parallel worktrees. Override via
 //     `extras["es.heap"]="2g"` if a single-worktree workflow can afford
 //     more.
+//   - Container memory is capped via Docker's own `--memory` limit
+//     (defaults to 2x heap, override via `extras["es.mem_limit"]="3g"`).
+//     Elastic's own sizing guidance is heap <= 50% of container memory
+//     with 1-2 GB of headroom for Lucene + the filesystem cache; 2x
+//     heap satisfies that with a single knob. Without this limit a
+//     single worktree's ES container can grow unbounded and, on a host
+//     already running many parallel worktrees, tip the whole Docker
+//     Desktop VM into its own OOM killer — which then kills containers
+//     indiscriminately instead of the one actually misbehaving.
 //   - HTTP readiness against `/` (not `_cluster/health?wait_for_status=
 //     yellow`) because the root endpoint returns 200 once the cluster
 //     is yellow-or-better — single-node ES is always yellow because
 //     there is no replica to assign — and the request is cheaper.
 //   - Stop timeout is 60s — ES translog flush + Lucene commit can run
 //     long on a populated index.
+//   - Plugins (`req.Plugins`, e.g. a third-party analyzer) install via
+//     Elastic's own official `elasticsearch-plugins.yml` mechanism
+//     (Docker-image-only, honoured since 7.16: the container compares
+//     the file against what's already installed and adds/upgrades as
+//     needed) rather than a hand-rolled shell wrapper — bough only has
+//     to generate the file and bind-mount it in, ES owns the
+//     idempotency. Auxiliary plugin config that mechanism does not
+//     cover (e.g. an analyzer's dictionary file) bind-mounts from a
+//     host directory via `extras["es.config_mount"]` (resolved like
+//     kind: compose's `compose.file`: relative to the raw worktree
+//     root, i.e. the directory containing every sibling repo — see
+//     plugins/engine/compose/lifecycle.go) into
+//     `extras["es.config_mount_target"]` (default: same basename under
+//     the container's config dir).
 //
 // Generic Docker plumbing lives in pkg/dockerutil; ES-specific concerns
 // (ulimits, datadir chown, JVM heap, HTTP readiness) stay here.
@@ -43,6 +66,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -53,6 +77,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -61,6 +86,7 @@ const (
 	dockerInternalHTTP   = "9200/tcp"
 	dockerInternalTrans  = "9300/tcp"
 	dockerDataDir        = "/usr/share/elasticsearch/data"
+	dockerConfigDir      = "/usr/share/elasticsearch/config"
 	dockerStopTimeoutSec = 60
 	dockerReadyPollMS    = 1000
 )
@@ -88,6 +114,153 @@ func pickHeap(req *api.UpReq) string {
 		return v
 	}
 	return "1g"
+}
+
+// defaultMemLimitMultiplier follows Elastic's own Docker sizing
+// guidance (heap <= 50% of container memory): doubling the heap
+// satisfies that ratio with a single, easy-to-reason-about knob.
+const defaultMemLimitMultiplier = 2
+
+// minHeadroomBytes is the floor on how much RAM the container limit
+// leaves ABOVE the JVM heap for Lucene, the filesystem cache, and bulk
+// workloads (esreindex). Elastic recommends 1-2 GB of such headroom;
+// 2x heap alone only supplies heap-sized headroom, which is under 1 GB
+// once the heap drops below 1 GB — so the default takes the max of the
+// two. 1 GiB.
+const minHeadroomBytes = 1 << 30
+
+// pickMemoryLimitBytes returns the Docker container memory limit (the
+// `--memory` equivalent) to enforce alongside the JVM heap.
+//
+//   - An explicit `extras["es.mem_limit"]` wins, but must be >= the heap
+//     (a cap below -Xmx OOM-kills the JVM at startup, then dockerReadyCheck
+//     just times out with a misleading "not ready").
+//   - Otherwise the default is max(2x heap, heap + minHeadroomBytes), so
+//     even a small heap keeps Elastic's recommended above-heap budget.
+//
+// heap is already validated by validateHeap, whose pattern
+// (`\d+[kmgKMG]?`) is a strict subset of what RAMInBytes accepts — but
+// it admits "0", so the non-positive guard below still matters.
+func pickMemoryLimitBytes(req *api.UpReq, heap string) (int64, error) {
+	heapBytes, err := units.RAMInBytes(heap)
+	if err != nil {
+		return 0, fmt.Errorf("invalid heap %q for memory-limit derivation: %w", heap, err)
+	}
+	if heapBytes <= 0 {
+		return 0, fmt.Errorf("invalid heap %q for memory-limit derivation (want e.g. 512m, 1g)", heap)
+	}
+
+	if v := req.Extras["es.mem_limit"]; v != "" {
+		limit, err := units.RAMInBytes(v)
+		if err != nil {
+			return 0, fmt.Errorf("invalid es.mem_limit %q from extras (want e.g. 2g, 1500m): %w", v, err)
+		}
+		if limit <= 0 {
+			return 0, fmt.Errorf("invalid es.mem_limit %q from extras (want e.g. 2g, 1500m)", v)
+		}
+		if limit < heapBytes {
+			return 0, fmt.Errorf("es.mem_limit %q (%d bytes) is below the JVM heap %q (%d bytes); the container would OOM at startup — set es.mem_limit >= es.heap (Elastic recommends >= 2x heap)", v, limit, heap, heapBytes)
+		}
+		return limit, nil
+	}
+
+	doubled := heapBytes * defaultMemLimitMultiplier
+	if withHeadroom := heapBytes + minHeadroomBytes; withHeadroom > doubled {
+		return withHeadroom, nil
+	}
+	return doubled, nil
+}
+
+// pluginsYAMLFilename is the name Elastic's own Docker entrypoint looks
+// for inside the config directory. See
+// https://www.elastic.co/guide/en/elasticsearch/plugins/7.17/manage-plugins-using-configuration-file.html
+const pluginsYAMLFilename = "elasticsearch-plugins.yml"
+
+// pluginsYAMLDoc mirrors elasticsearch-plugins.yml's own shape 1:1 so
+// api.PluginSpec marshals with no translation layer. Location omits
+// empty so an official plugin's entry renders as bare `- id: ...`
+// (matching Elastic's own examples) instead of a stray `location: ""`.
+type pluginsYAMLDoc struct {
+	Plugins []pluginsYAMLEntry `yaml:"plugins"`
+}
+
+type pluginsYAMLEntry struct {
+	ID       string `yaml:"id"`
+	Location string `yaml:"location,omitempty"`
+}
+
+// writePluginsYAML renders req.Plugins into elasticsearch-plugins.yml
+// next to datadir (the same per-worktree .local/ scratch dir the other
+// engine plugins already use for flake dirs / startup logs). Returns
+// "" when there is nothing to declare, so an engine with no `plugins:`
+// in its YAML behaves exactly as it did before this feature existed —
+// dockerUp skips the bind-mount entirely rather than mounting an empty
+// file over the image's own config dir.
+//
+// Like every other container-shaping input (image, env, ulimits), this
+// only takes effect on a FRESH Up: dockerUp's up-or-reuse short-circuit
+// returns before this is called, so a plugin newly added to `plugins:`
+// installs on the next Down+Up, not into an already-running container.
+func writePluginsYAML(datadir string, plugins []api.PluginSpec) (string, error) {
+	if len(plugins) == 0 {
+		return "", nil
+	}
+	doc := pluginsYAMLDoc{Plugins: make([]pluginsYAMLEntry, len(plugins))}
+	for i, p := range plugins {
+		doc.Plugins[i] = pluginsYAMLEntry{ID: p.ID, Location: p.Location}
+	}
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("marshal %s: %w", pluginsYAMLFilename, err)
+	}
+	path := filepath.Join(filepath.Dir(datadir), pluginsYAMLFilename)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", pluginsYAMLFilename, err)
+	}
+	return path, nil
+}
+
+// resolveConfigMount turns extras["es.config_mount"] into a Docker
+// Binds entry ("<host>:<container>:ro"), or "" when unset. The host
+// path resolves relative to the RAW worktree root (the directory
+// containing every declared repository as a sibling) — req.WorktreeRoot
+// itself is the engine-provider repo's own worktree path, one level too
+// deep for a path like "auba-api/es-config/sudachi" that names a
+// sibling repo. This mirrors kind: compose's identical resolution for
+// compose.file (see plugins/engine/compose/lifecycle.go) so an
+// operator who already understands that convention gets no surprises
+// here.
+//
+// The container target defaults to the config dir plus the mount's own
+// basename (e.g. ".../config/sudachi" for a host dir named "sudachi");
+// extras["es.config_mount_target"] overrides it.
+//
+// Read-only, and deliberately without ensureDatadirWritableByContainer's
+// chown/chmod dance: this mounts pre-fetched auxiliary plugin data
+// (e.g. an analyzer dictionary) the elasticsearch process only ever
+// reads, and a typical host-prepared directory (created via curl +
+// unzip) is already world-readable, which is all uid 1000 needs for
+// read access.
+func resolveConfigMount(req *api.UpReq) (string, error) {
+	src := req.Extras["es.config_mount"]
+	if src == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(src) && req.WorktreeRoot == "" {
+		return "", errors.New("es.config_mount is a relative path but WorktreeRoot is empty")
+	}
+	// Same raw-worktree-root resolution kind: compose uses for
+	// compose.file — shared via api.ResolveUnderRawWorktreeRoot so the
+	// convention lives in one place.
+	src = api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, src)
+	if _, err := os.Stat(src); err != nil {
+		return "", fmt.Errorf("es.config_mount %s: %w", src, err)
+	}
+	target := req.Extras["es.config_mount_target"]
+	if target == "" {
+		target = dockerConfigDir + "/" + filepath.Base(src)
+	}
+	return src + ":" + target + ":ro", nil
 }
 
 // buildDockerEnv assembles the env slice passed to the elasticsearch
@@ -194,6 +367,18 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	if err := validateHeap(heap); err != nil {
 		return fmt.Errorf("elasticsearch docker: %w", err)
 	}
+	memLimitBytes, err := pickMemoryLimitBytes(req, heap)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+	pluginsYAMLPath, err := writePluginsYAML(req.Datadir, req.Plugins)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+	configMountBind, err := resolveConfigMount(req)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
 	hostPort := fmt.Sprintf("%d", port)
 	env := buildDockerEnv(heap, hostPort)
 	portBindings := nat.PortMap{
@@ -215,10 +400,18 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
 		ExposedPorts: exposed,
 	}
+	binds := []string{req.Datadir + ":" + dockerDataDir}
+	if pluginsYAMLPath != "" {
+		binds = append(binds, pluginsYAMLPath+":"+dockerConfigDir+"/"+pluginsYAMLFilename+":ro")
+	}
+	if configMountBind != "" {
+		binds = append(binds, configMountBind)
+	}
 	hostCfg := &container.HostConfig{
-		Binds:        []string{req.Datadir + ":" + dockerDataDir},
+		Binds:        binds,
 		PortBindings: portBindings,
 		Resources: container.Resources{
+			Memory: memLimitBytes,
 			Ulimits: []*units.Ulimit{
 				// memlock unlimited so bootstrap.memory_lock can succeed.
 				{Name: "memlock", Hard: -1, Soft: -1},

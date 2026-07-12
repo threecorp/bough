@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.12.0
+
+Engine-managed plugins + a container memory cap for the elasticsearch
+docker backend. Both address the same failure mode a heavily-parallel
+worktree setup hits: an ES container that either falls over (OOM) or
+comes up without the analyzer plugin an index mapping needs.
+
+### Added
+
+- **`plugins:` on an engine** (`engines[].plugins: [{id, location}]`):
+  a typed, wire-level list (proto `repeated PluginSpec plugins = 7`,
+  mirroring `initial_resources`' shape) of plugins the engine should
+  make available before it starts. The elasticsearch docker backend
+  consumes it by generating Elasticsearch's own official
+  `elasticsearch-plugins.yml` and bind-mounting it into the container's
+  config dir — ES installs/upgrades them idempotently on boot, so there
+  is no hand-rolled entrypoint or install-marker to maintain. `location`
+  is a direct download URL for third-party plugins and empty for
+  official ones. The other four plugins (mysql/redis/postgres/compose)
+  ignore the field. Declaring `plugins:` on an elasticsearch engine that
+  resolves to the nix backend is a config error (only the docker backend
+  installs them).
+- **`extras.es.config_mount`** (+ optional `es.config_mount_target`):
+  bind-mounts a host directory of auxiliary plugin data an installed
+  plugin needs at runtime (e.g. an analyzer's dictionary, which
+  `elasticsearch-plugins.yml` does not cover) into the container's
+  config dir, read-only. Resolves relative to the raw worktree root, the
+  same convention `kind: compose`'s `compose.file` uses.
+- **`extras.es.mem_limit`** on the elasticsearch docker backend: caps
+  the container's memory via Docker's own `--memory` limit. Defaults to
+  `max(2x heap, heap + 1 GiB)` so even a small heap keeps Elastic's
+  recommended 1-2 GB of above-heap headroom for Lucene / the filesystem
+  cache / bulk workloads (esreindex). An explicit value below the heap is
+  rejected. Without a cap, one worktree's ES could grow unbounded and tip
+  the whole Docker Desktop VM into its OOM killer, which then kills
+  containers indiscriminately instead of the one misbehaving.
+
+### Changed
+
+- **EngineProvider `ProtocolVersion` 2 → 3** for the additive
+  `UpRequest.plugins` field. Per CONTRACT.md every post-v0.4.0 field
+  rides along with a bump; bough co-ships the host and all
+  `bough-plugin-*` binaries from one release, so this only turns an
+  accidental partial upgrade (a stale plugin binary on PATH) into a loud
+  handshake error rather than a silently-dropped field.
+
 ## v0.11.0
 
 Groups everything bough generates at the monorepo root so that a

@@ -148,6 +148,10 @@ type Engine struct {
 	// validateSemantic requires it (non-nil, File/Service set) exactly
 	// when Kind == "compose".
 	Compose *ComposeSpec `yaml:"compose"`
+	// Plugins lists engine plugins (e.g. an Elasticsearch analyzer) to
+	// make available before Up. Ignored by engines that do not
+	// implement plugin management (mysql, redis, postgres, compose).
+	Plugins []EnginePlugin `yaml:"plugins" validate:"dive"`
 }
 
 // ComposeSpec identifies the pre-existing docker-compose file/service
@@ -177,6 +181,18 @@ type InitialResource struct {
 	Type   string            `yaml:"type" validate:"required"`
 	Name   string            `yaml:"name" validate:"required"`
 	Params map[string]string `yaml:"params"`
+}
+
+// EnginePlugin describes one plugin bough should make available to the
+// engine before it starts (e.g. an Elasticsearch analyzer). ID and
+// Location mirror elasticsearch-plugins.yml's own field names 1:1 so
+// the elasticsearch plugin can re-marshal this value directly into
+// that file. Location is required for unofficial/third-party plugins
+// (a direct download URL) and left empty for official plugins the
+// engine's own registry already knows by ID.
+type EnginePlugin struct {
+	ID       string `yaml:"id" validate:"required"`
+	Location string `yaml:"location"`
 }
 
 // PortRange covers all non-engine port kinds (api / gateway / view /

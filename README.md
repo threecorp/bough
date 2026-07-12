@@ -207,6 +207,23 @@ engines:
   #     service: "redis"
   #     target_port: 6379
 
+  # Elasticsearch with engine-managed plugins (docker backend). bough
+  # generates the official elasticsearch-plugins.yml and lets ES install
+  # them idempotently on boot — no custom entrypoint. Auxiliary plugin
+  # files a plugin needs at runtime (e.g. an analyzer dictionary) mount
+  # from a host dir via extras.es.config_mount.
+  # - kind: elasticsearch
+  #   version: "7"
+  #   port_ranges:
+  #     main: [56000, 58999]
+  #   extras:
+  #     es.mem_limit: "2g"          # docker --memory cap (default: 2x heap) — guards the host VM from OOM
+  #     es.config_mount: "demo-api/es-config/analyzer"   # host dir, relative to the monorepo worktree root
+  #   plugins:
+  #     - id: analysis-icu          # official plugin: id only
+  #     - id: analysis-example      # third-party plugin: id + a direct download URL
+  #       location: "https://example.com/analysis-example-7.17.0.zip"
+
 ports:
   api:    { range: [45000, 47999] }
 

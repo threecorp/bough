@@ -218,6 +218,68 @@ func (x *PortRange) GetHigh() int32 {
 	return 0
 }
 
+// PluginSpec is one plugin the host wants the engine to make available
+// before it starts (e.g. an Elasticsearch analyzer). `id` and
+// `location` mirror Elasticsearch's own `elasticsearch-plugins.yml`
+// field names 1:1 — the elasticsearch plugin re-marshals this message
+// directly into that file rather than inventing its own shape.
+// `location` is required for unofficial/third-party plugins and empty
+// for official ones the engine's own plugin registry already knows.
+// A plugin that does not implement engine-managed plugins (mysql,
+// redis, postgres, compose) silently ignores an empty or non-empty
+// list either way.
+type PluginSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Location      string                 `protobuf:"bytes,2,opt,name=location,proto3" json:"location,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginSpec) Reset() {
+	*x = PluginSpec{}
+	mi := &file_engine_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginSpec) ProtoMessage() {}
+
+func (x *PluginSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginSpec.ProtoReflect.Descriptor instead.
+func (*PluginSpec) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PluginSpec) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PluginSpec) GetLocation() string {
+	if x != nil {
+		return x.Location
+	}
+	return ""
+}
+
 type UpRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Ports            []*PortSpec            `protobuf:"bytes,1,rep,name=ports,proto3" json:"ports,omitempty"`
@@ -226,13 +288,14 @@ type UpRequest struct {
 	SocketDir        string                 `protobuf:"bytes,4,opt,name=socket_dir,json=socketDir,proto3" json:"socket_dir,omitempty"`
 	InitialResources []*ResourceSpec        `protobuf:"bytes,5,rep,name=initial_resources,json=initialResources,proto3" json:"initial_resources,omitempty"`
 	Extras           map[string]string      `protobuf:"bytes,6,rep,name=extras,proto3" json:"extras,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Plugins          []*PluginSpec          `protobuf:"bytes,7,rep,name=plugins,proto3" json:"plugins,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *UpRequest) Reset() {
 	*x = UpRequest{}
-	mi := &file_engine_proto_msgTypes[3]
+	mi := &file_engine_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -244,7 +307,7 @@ func (x *UpRequest) String() string {
 func (*UpRequest) ProtoMessage() {}
 
 func (x *UpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[3]
+	mi := &file_engine_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -257,7 +320,7 @@ func (x *UpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpRequest.ProtoReflect.Descriptor instead.
 func (*UpRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{3}
+	return file_engine_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *UpRequest) GetPorts() []*PortSpec {
@@ -302,6 +365,13 @@ func (x *UpRequest) GetExtras() map[string]string {
 	return nil
 }
 
+func (x *UpRequest) GetPlugins() []*PluginSpec {
+	if x != nil {
+		return x.Plugins
+	}
+	return nil
+}
+
 // String error instead of gRPC status so plugins authored in non-Go
 // languages can serialise a simple message without learning gRPC
 // error codes. Empty string == success.
@@ -314,7 +384,7 @@ type UpResponse struct {
 
 func (x *UpResponse) Reset() {
 	*x = UpResponse{}
-	mi := &file_engine_proto_msgTypes[4]
+	mi := &file_engine_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -326,7 +396,7 @@ func (x *UpResponse) String() string {
 func (*UpResponse) ProtoMessage() {}
 
 func (x *UpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[4]
+	mi := &file_engine_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -339,7 +409,7 @@ func (x *UpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpResponse.ProtoReflect.Descriptor instead.
 func (*UpResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{4}
+	return file_engine_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *UpResponse) GetError() string {
@@ -360,7 +430,7 @@ type DownRequest struct {
 
 func (x *DownRequest) Reset() {
 	*x = DownRequest{}
-	mi := &file_engine_proto_msgTypes[5]
+	mi := &file_engine_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -372,7 +442,7 @@ func (x *DownRequest) String() string {
 func (*DownRequest) ProtoMessage() {}
 
 func (x *DownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[5]
+	mi := &file_engine_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -385,7 +455,7 @@ func (x *DownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownRequest.ProtoReflect.Descriptor instead.
 func (*DownRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{5}
+	return file_engine_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DownRequest) GetPorts() []int32 {
@@ -418,7 +488,7 @@ type DownResponse struct {
 
 func (x *DownResponse) Reset() {
 	*x = DownResponse{}
-	mi := &file_engine_proto_msgTypes[6]
+	mi := &file_engine_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -430,7 +500,7 @@ func (x *DownResponse) String() string {
 func (*DownResponse) ProtoMessage() {}
 
 func (x *DownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[6]
+	mi := &file_engine_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -443,7 +513,7 @@ func (x *DownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownResponse.ProtoReflect.Descriptor instead.
 func (*DownResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{6}
+	return file_engine_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DownResponse) GetError() string {
@@ -463,7 +533,7 @@ type ReadyCheckRequest struct {
 
 func (x *ReadyCheckRequest) Reset() {
 	*x = ReadyCheckRequest{}
-	mi := &file_engine_proto_msgTypes[7]
+	mi := &file_engine_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -475,7 +545,7 @@ func (x *ReadyCheckRequest) String() string {
 func (*ReadyCheckRequest) ProtoMessage() {}
 
 func (x *ReadyCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[7]
+	mi := &file_engine_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -488,7 +558,7 @@ func (x *ReadyCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadyCheckRequest.ProtoReflect.Descriptor instead.
 func (*ReadyCheckRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{7}
+	return file_engine_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ReadyCheckRequest) GetPorts() []int32 {
@@ -515,7 +585,7 @@ type ReadyCheckResponse struct {
 
 func (x *ReadyCheckResponse) Reset() {
 	*x = ReadyCheckResponse{}
-	mi := &file_engine_proto_msgTypes[8]
+	mi := &file_engine_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -527,7 +597,7 @@ func (x *ReadyCheckResponse) String() string {
 func (*ReadyCheckResponse) ProtoMessage() {}
 
 func (x *ReadyCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[8]
+	mi := &file_engine_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -540,7 +610,7 @@ func (x *ReadyCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadyCheckResponse.ProtoReflect.Descriptor instead.
 func (*ReadyCheckResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{8}
+	return file_engine_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReadyCheckResponse) GetReady() bool {
@@ -567,7 +637,7 @@ type CleanupRequest struct {
 
 func (x *CleanupRequest) Reset() {
 	*x = CleanupRequest{}
-	mi := &file_engine_proto_msgTypes[9]
+	mi := &file_engine_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +649,7 @@ func (x *CleanupRequest) String() string {
 func (*CleanupRequest) ProtoMessage() {}
 
 func (x *CleanupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[9]
+	mi := &file_engine_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +662,7 @@ func (x *CleanupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupRequest.ProtoReflect.Descriptor instead.
 func (*CleanupRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{9}
+	return file_engine_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CleanupRequest) GetDatadir() string {
@@ -618,7 +688,7 @@ type CleanupResponse struct {
 
 func (x *CleanupResponse) Reset() {
 	*x = CleanupResponse{}
-	mi := &file_engine_proto_msgTypes[10]
+	mi := &file_engine_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +700,7 @@ func (x *CleanupResponse) String() string {
 func (*CleanupResponse) ProtoMessage() {}
 
 func (x *CleanupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[10]
+	mi := &file_engine_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +713,7 @@ func (x *CleanupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupResponse.ProtoReflect.Descriptor instead.
 func (*CleanupResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{10}
+	return file_engine_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CleanupResponse) GetError() string {
@@ -663,7 +733,7 @@ type PortRangeResponse struct {
 
 func (x *PortRangeResponse) Reset() {
 	*x = PortRangeResponse{}
-	mi := &file_engine_proto_msgTypes[11]
+	mi := &file_engine_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -675,7 +745,7 @@ func (x *PortRangeResponse) String() string {
 func (*PortRangeResponse) ProtoMessage() {}
 
 func (x *PortRangeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[11]
+	mi := &file_engine_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -688,7 +758,7 @@ func (x *PortRangeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortRangeResponse.ProtoReflect.Descriptor instead.
 func (*PortRangeResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{11}
+	return file_engine_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PortRangeResponse) GetRanges() map[string]*PortRange {
@@ -709,7 +779,7 @@ type EnvVarsRequest struct {
 
 func (x *EnvVarsRequest) Reset() {
 	*x = EnvVarsRequest{}
-	mi := &file_engine_proto_msgTypes[12]
+	mi := &file_engine_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +791,7 @@ func (x *EnvVarsRequest) String() string {
 func (*EnvVarsRequest) ProtoMessage() {}
 
 func (x *EnvVarsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[12]
+	mi := &file_engine_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +804,7 @@ func (x *EnvVarsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVarsRequest.ProtoReflect.Descriptor instead.
 func (*EnvVarsRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{12}
+	return file_engine_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *EnvVarsRequest) GetPorts() []*PortSpec {
@@ -767,7 +837,7 @@ type EnvVarsResponse struct {
 
 func (x *EnvVarsResponse) Reset() {
 	*x = EnvVarsResponse{}
-	mi := &file_engine_proto_msgTypes[13]
+	mi := &file_engine_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -779,7 +849,7 @@ func (x *EnvVarsResponse) String() string {
 func (*EnvVarsResponse) ProtoMessage() {}
 
 func (x *EnvVarsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[13]
+	mi := &file_engine_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -792,7 +862,7 @@ func (x *EnvVarsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVarsResponse.ProtoReflect.Descriptor instead.
 func (*EnvVarsResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{13}
+	return file_engine_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EnvVarsResponse) GetVars() map[string]string {
@@ -819,7 +889,11 @@ const file_engine_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"1\n" +
 	"\tPortRange\x12\x10\n" +
 	"\x03low\x18\x01 \x01(\x05R\x03low\x12\x12\n" +
-	"\x04high\x18\x02 \x01(\x05R\x04high\"\xe1\x02\n" +
+	"\x04high\x18\x02 \x01(\x05R\x04high\"8\n" +
+	"\n" +
+	"PluginSpec\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
+	"\blocation\x18\x02 \x01(\tR\blocation\"\x98\x03\n" +
 	"\tUpRequest\x12/\n" +
 	"\x05ports\x18\x01 \x03(\v2\x19.bough.engine.v1.PortSpecR\x05ports\x12\x18\n" +
 	"\adatadir\x18\x02 \x01(\tR\adatadir\x12#\n" +
@@ -827,7 +901,8 @@ const file_engine_proto_rawDesc = "" +
 	"\n" +
 	"socket_dir\x18\x04 \x01(\tR\tsocketDir\x12J\n" +
 	"\x11initial_resources\x18\x05 \x03(\v2\x1d.bough.engine.v1.ResourceSpecR\x10initialResources\x12>\n" +
-	"\x06extras\x18\x06 \x03(\v2&.bough.engine.v1.UpRequest.ExtrasEntryR\x06extras\x1a9\n" +
+	"\x06extras\x18\x06 \x03(\v2&.bough.engine.v1.UpRequest.ExtrasEntryR\x06extras\x125\n" +
+	"\aplugins\x18\a \x03(\v2\x1b.bough.engine.v1.PluginSpecR\aplugins\x1a9\n" +
 	"\vExtrasEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\"\n" +
@@ -888,55 +963,57 @@ func file_engine_proto_rawDescGZIP() []byte {
 	return file_engine_proto_rawDescData
 }
 
-var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_engine_proto_goTypes = []any{
 	(*PortSpec)(nil),           // 0: bough.engine.v1.PortSpec
 	(*ResourceSpec)(nil),       // 1: bough.engine.v1.ResourceSpec
 	(*PortRange)(nil),          // 2: bough.engine.v1.PortRange
-	(*UpRequest)(nil),          // 3: bough.engine.v1.UpRequest
-	(*UpResponse)(nil),         // 4: bough.engine.v1.UpResponse
-	(*DownRequest)(nil),        // 5: bough.engine.v1.DownRequest
-	(*DownResponse)(nil),       // 6: bough.engine.v1.DownResponse
-	(*ReadyCheckRequest)(nil),  // 7: bough.engine.v1.ReadyCheckRequest
-	(*ReadyCheckResponse)(nil), // 8: bough.engine.v1.ReadyCheckResponse
-	(*CleanupRequest)(nil),     // 9: bough.engine.v1.CleanupRequest
-	(*CleanupResponse)(nil),    // 10: bough.engine.v1.CleanupResponse
-	(*PortRangeResponse)(nil),  // 11: bough.engine.v1.PortRangeResponse
-	(*EnvVarsRequest)(nil),     // 12: bough.engine.v1.EnvVarsRequest
-	(*EnvVarsResponse)(nil),    // 13: bough.engine.v1.EnvVarsResponse
-	nil,                        // 14: bough.engine.v1.ResourceSpec.ParamsEntry
-	nil,                        // 15: bough.engine.v1.UpRequest.ExtrasEntry
-	nil,                        // 16: bough.engine.v1.PortRangeResponse.RangesEntry
-	nil,                        // 17: bough.engine.v1.EnvVarsResponse.VarsEntry
-	(*emptypb.Empty)(nil),      // 18: google.protobuf.Empty
+	(*PluginSpec)(nil),         // 3: bough.engine.v1.PluginSpec
+	(*UpRequest)(nil),          // 4: bough.engine.v1.UpRequest
+	(*UpResponse)(nil),         // 5: bough.engine.v1.UpResponse
+	(*DownRequest)(nil),        // 6: bough.engine.v1.DownRequest
+	(*DownResponse)(nil),       // 7: bough.engine.v1.DownResponse
+	(*ReadyCheckRequest)(nil),  // 8: bough.engine.v1.ReadyCheckRequest
+	(*ReadyCheckResponse)(nil), // 9: bough.engine.v1.ReadyCheckResponse
+	(*CleanupRequest)(nil),     // 10: bough.engine.v1.CleanupRequest
+	(*CleanupResponse)(nil),    // 11: bough.engine.v1.CleanupResponse
+	(*PortRangeResponse)(nil),  // 12: bough.engine.v1.PortRangeResponse
+	(*EnvVarsRequest)(nil),     // 13: bough.engine.v1.EnvVarsRequest
+	(*EnvVarsResponse)(nil),    // 14: bough.engine.v1.EnvVarsResponse
+	nil,                        // 15: bough.engine.v1.ResourceSpec.ParamsEntry
+	nil,                        // 16: bough.engine.v1.UpRequest.ExtrasEntry
+	nil,                        // 17: bough.engine.v1.PortRangeResponse.RangesEntry
+	nil,                        // 18: bough.engine.v1.EnvVarsResponse.VarsEntry
+	(*emptypb.Empty)(nil),      // 19: google.protobuf.Empty
 }
 var file_engine_proto_depIdxs = []int32{
-	14, // 0: bough.engine.v1.ResourceSpec.params:type_name -> bough.engine.v1.ResourceSpec.ParamsEntry
+	15, // 0: bough.engine.v1.ResourceSpec.params:type_name -> bough.engine.v1.ResourceSpec.ParamsEntry
 	0,  // 1: bough.engine.v1.UpRequest.ports:type_name -> bough.engine.v1.PortSpec
 	1,  // 2: bough.engine.v1.UpRequest.initial_resources:type_name -> bough.engine.v1.ResourceSpec
-	15, // 3: bough.engine.v1.UpRequest.extras:type_name -> bough.engine.v1.UpRequest.ExtrasEntry
-	16, // 4: bough.engine.v1.PortRangeResponse.ranges:type_name -> bough.engine.v1.PortRangeResponse.RangesEntry
-	0,  // 5: bough.engine.v1.EnvVarsRequest.ports:type_name -> bough.engine.v1.PortSpec
-	1,  // 6: bough.engine.v1.EnvVarsRequest.initial_resources:type_name -> bough.engine.v1.ResourceSpec
-	17, // 7: bough.engine.v1.EnvVarsResponse.vars:type_name -> bough.engine.v1.EnvVarsResponse.VarsEntry
-	2,  // 8: bough.engine.v1.PortRangeResponse.RangesEntry.value:type_name -> bough.engine.v1.PortRange
-	3,  // 9: bough.engine.v1.EngineProvider.Up:input_type -> bough.engine.v1.UpRequest
-	5,  // 10: bough.engine.v1.EngineProvider.Down:input_type -> bough.engine.v1.DownRequest
-	7,  // 11: bough.engine.v1.EngineProvider.ReadyCheck:input_type -> bough.engine.v1.ReadyCheckRequest
-	9,  // 12: bough.engine.v1.EngineProvider.Cleanup:input_type -> bough.engine.v1.CleanupRequest
-	18, // 13: bough.engine.v1.EngineProvider.PortRangeDefault:input_type -> google.protobuf.Empty
-	12, // 14: bough.engine.v1.EngineProvider.EnvVars:input_type -> bough.engine.v1.EnvVarsRequest
-	4,  // 15: bough.engine.v1.EngineProvider.Up:output_type -> bough.engine.v1.UpResponse
-	6,  // 16: bough.engine.v1.EngineProvider.Down:output_type -> bough.engine.v1.DownResponse
-	8,  // 17: bough.engine.v1.EngineProvider.ReadyCheck:output_type -> bough.engine.v1.ReadyCheckResponse
-	10, // 18: bough.engine.v1.EngineProvider.Cleanup:output_type -> bough.engine.v1.CleanupResponse
-	11, // 19: bough.engine.v1.EngineProvider.PortRangeDefault:output_type -> bough.engine.v1.PortRangeResponse
-	13, // 20: bough.engine.v1.EngineProvider.EnvVars:output_type -> bough.engine.v1.EnvVarsResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	16, // 3: bough.engine.v1.UpRequest.extras:type_name -> bough.engine.v1.UpRequest.ExtrasEntry
+	3,  // 4: bough.engine.v1.UpRequest.plugins:type_name -> bough.engine.v1.PluginSpec
+	17, // 5: bough.engine.v1.PortRangeResponse.ranges:type_name -> bough.engine.v1.PortRangeResponse.RangesEntry
+	0,  // 6: bough.engine.v1.EnvVarsRequest.ports:type_name -> bough.engine.v1.PortSpec
+	1,  // 7: bough.engine.v1.EnvVarsRequest.initial_resources:type_name -> bough.engine.v1.ResourceSpec
+	18, // 8: bough.engine.v1.EnvVarsResponse.vars:type_name -> bough.engine.v1.EnvVarsResponse.VarsEntry
+	2,  // 9: bough.engine.v1.PortRangeResponse.RangesEntry.value:type_name -> bough.engine.v1.PortRange
+	4,  // 10: bough.engine.v1.EngineProvider.Up:input_type -> bough.engine.v1.UpRequest
+	6,  // 11: bough.engine.v1.EngineProvider.Down:input_type -> bough.engine.v1.DownRequest
+	8,  // 12: bough.engine.v1.EngineProvider.ReadyCheck:input_type -> bough.engine.v1.ReadyCheckRequest
+	10, // 13: bough.engine.v1.EngineProvider.Cleanup:input_type -> bough.engine.v1.CleanupRequest
+	19, // 14: bough.engine.v1.EngineProvider.PortRangeDefault:input_type -> google.protobuf.Empty
+	13, // 15: bough.engine.v1.EngineProvider.EnvVars:input_type -> bough.engine.v1.EnvVarsRequest
+	5,  // 16: bough.engine.v1.EngineProvider.Up:output_type -> bough.engine.v1.UpResponse
+	7,  // 17: bough.engine.v1.EngineProvider.Down:output_type -> bough.engine.v1.DownResponse
+	9,  // 18: bough.engine.v1.EngineProvider.ReadyCheck:output_type -> bough.engine.v1.ReadyCheckResponse
+	11, // 19: bough.engine.v1.EngineProvider.Cleanup:output_type -> bough.engine.v1.CleanupResponse
+	12, // 20: bough.engine.v1.EngineProvider.PortRangeDefault:output_type -> bough.engine.v1.PortRangeResponse
+	14, // 21: bough.engine.v1.EngineProvider.EnvVars:output_type -> bough.engine.v1.EnvVarsResponse
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_engine_proto_init() }
@@ -950,7 +1027,7 @@ func file_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engine_proto_rawDesc), len(file_engine_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

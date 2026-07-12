@@ -88,6 +88,200 @@ func TestPickHeap(t *testing.T) {
 	}
 }
 
+// TestPickMemoryLimitBytes exercises the extras["es.mem_limit"]
+// override, the 2x-heap default derivation, and the invalid-input error
+// paths for both.
+func TestPickMemoryLimitBytes(t *testing.T) {
+	cases := []struct {
+		name    string
+		req     *api.UpReq
+		heap    string
+		want    int64
+		wantErr bool
+	}{
+		{"override via extras", &api.UpReq{Extras: map[string]string{"es.mem_limit": "3g"}}, "1g", 3 * 1024 * 1024 * 1024, false},
+		{"no override, 1g heap → 2x heap (>= heap+1GiB)", &api.UpReq{}, "1g", 2 * 1024 * 1024 * 1024, false},
+		{"no override, 512m heap → heap+1GiB headroom floor beats 2x", &api.UpReq{}, "512m", 512*1024*1024 + 1024*1024*1024, false},
+		{"no override, 2g heap → 2x heap (4GiB) beats heap+1GiB", &api.UpReq{}, "2g", 4 * 1024 * 1024 * 1024, false},
+		{"empty override falls back to default", &api.UpReq{Extras: map[string]string{"es.mem_limit": ""}}, "1g", 2 * 1024 * 1024 * 1024, false},
+		{"override equal to heap is allowed", &api.UpReq{Extras: map[string]string{"es.mem_limit": "1g"}}, "1g", 1024 * 1024 * 1024, false},
+		{"override below heap is rejected", &api.UpReq{Extras: map[string]string{"es.mem_limit": "512m"}}, "1g", 0, true},
+		{"invalid override", &api.UpReq{Extras: map[string]string{"es.mem_limit": "not-a-size"}}, "1g", 0, true},
+		{"zero override is rejected cleanly", &api.UpReq{Extras: map[string]string{"es.mem_limit": "0"}}, "1g", 0, true},
+		{"invalid heap with no override", &api.UpReq{}, "not-a-size", 0, true},
+		{"zero heap is rejected cleanly", &api.UpReq{}, "0", 0, true},
+	}
+	for _, c := range cases {
+		got, err := pickMemoryLimitBytes(c.req, c.heap)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%s: pickMemoryLimitBytes(heap=%q) = %d, nil, want an error", c.name, c.heap, got)
+			} else if strings.Contains(err.Error(), "%!w(<nil>)") {
+				// Regression guard: the non-positive-size branches must not
+				// fmt.Errorf("...%w", nilErr) — RAMInBytes returns (0, nil)
+				// for "0", which used to produce a garbled ': %!w(<nil>)'.
+				t.Errorf("%s: error contains a nil-%%w artifact: %v", c.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: pickMemoryLimitBytes(heap=%q) unexpected error: %v", c.name, c.heap, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: pickMemoryLimitBytes(heap=%q) = %d, want %d", c.name, c.heap, got, c.want)
+		}
+	}
+}
+
+// TestWritePluginsYAML_EmptyIsNoop confirms an engine with no
+// `plugins:` declared gets no elasticsearch-plugins.yml at all — the
+// pre-existing behaviour (no bind-mount, no file) must be unchanged.
+func TestWritePluginsYAML_EmptyIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	datadir := filepath.Join(dir, "es-data")
+	got, err := writePluginsYAML(datadir, nil)
+	if err != nil {
+		t.Fatalf("writePluginsYAML(nil) unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("writePluginsYAML(nil) = %q, want empty path", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, pluginsYAMLFilename)); !os.IsNotExist(err) {
+		t.Errorf("writePluginsYAML(nil) must not create %s, stat err = %v", pluginsYAMLFilename, err)
+	}
+}
+
+// TestWritePluginsYAML_RendersOfficialAndUnofficialPlugins confirms the
+// generated YAML matches elasticsearch-plugins.yml's own documented
+// shape: an official plugin (id only) and an unofficial one (id +
+// location), written next to datadir rather than inside it.
+func TestWritePluginsYAML_RendersOfficialAndUnofficialPlugins(t *testing.T) {
+	dir := t.TempDir()
+	datadir := filepath.Join(dir, "es-data")
+	plugins := []api.PluginSpec{
+		{ID: "analysis-icu"},
+		{ID: "analysis-sudachi", Location: "https://example.com/sudachi.zip"},
+	}
+	got, err := writePluginsYAML(datadir, plugins)
+	if err != nil {
+		t.Fatalf("writePluginsYAML: %v", err)
+	}
+	wantPath := filepath.Join(dir, pluginsYAMLFilename)
+	if got != wantPath {
+		t.Errorf("writePluginsYAML path = %q, want %q", got, wantPath)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	content := string(data)
+	mustContain := []string{
+		"id: analysis-icu",
+		"id: analysis-sudachi",
+		"location: https://example.com/sudachi.zip",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(content, want) {
+			t.Errorf("elasticsearch-plugins.yml missing %q\nfull content:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, `location: ""`) {
+		t.Errorf("elasticsearch-plugins.yml must omit empty location for official plugins\nfull content:\n%s", content)
+	}
+}
+
+// TestResolveConfigMount covers: unset (no-op), absolute path,
+// worktree-root-relative resolution (mirroring kind: compose's
+// compose.file), a custom container target, and the two error paths
+// (missing source dir, relative path with no WorktreeRoot).
+func TestResolveConfigMount(t *testing.T) {
+	base := t.TempDir()
+	rawWorktreeRoot := filepath.Join(base, "F-Feature")
+	engineProviderWorktree := filepath.Join(rawWorktreeRoot, "auba-api")
+	sudachiDir := filepath.Join(rawWorktreeRoot, "auba-api", "es-config", "sudachi")
+	if err := os.MkdirAll(sudachiDir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+
+	t.Run("unset is a no-op", func(t *testing.T) {
+		got, err := resolveConfigMount(&api.UpReq{WorktreeRoot: engineProviderWorktree})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "" {
+			t.Errorf("resolveConfigMount(unset) = %q, want empty", got)
+		}
+	})
+
+	t.Run("relative path resolves against the raw worktree root", func(t *testing.T) {
+		req := &api.UpReq{
+			WorktreeRoot: engineProviderWorktree,
+			Extras:       map[string]string{"es.config_mount": "auba-api/es-config/sudachi"},
+		}
+		got, err := resolveConfigMount(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := sudachiDir + ":" + dockerConfigDir + "/sudachi:ro"
+		if got != want {
+			t.Errorf("resolveConfigMount = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("absolute path is used as-is", func(t *testing.T) {
+		req := &api.UpReq{
+			WorktreeRoot: engineProviderWorktree,
+			Extras:       map[string]string{"es.config_mount": sudachiDir},
+		}
+		got, err := resolveConfigMount(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := sudachiDir + ":" + dockerConfigDir + "/sudachi:ro"
+		if got != want {
+			t.Errorf("resolveConfigMount = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("custom container target overrides the default basename", func(t *testing.T) {
+		req := &api.UpReq{
+			WorktreeRoot: engineProviderWorktree,
+			Extras: map[string]string{
+				"es.config_mount":        sudachiDir,
+				"es.config_mount_target": "/usr/share/elasticsearch/config/custom",
+			},
+		}
+		got, err := resolveConfigMount(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := sudachiDir + ":/usr/share/elasticsearch/config/custom:ro"
+		if got != want {
+			t.Errorf("resolveConfigMount = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("missing source directory errors", func(t *testing.T) {
+		req := &api.UpReq{
+			WorktreeRoot: engineProviderWorktree,
+			Extras:       map[string]string{"es.config_mount": filepath.Join(rawWorktreeRoot, "does-not-exist")},
+		}
+		if _, err := resolveConfigMount(req); err == nil {
+			t.Error("resolveConfigMount(nonexistent dir) = nil error, want an error")
+		}
+	})
+
+	t.Run("relative path with empty WorktreeRoot errors", func(t *testing.T) {
+		req := &api.UpReq{
+			Extras: map[string]string{"es.config_mount": "auba-api/es-config/sudachi"},
+		}
+		if _, err := resolveConfigMount(req); err == nil {
+			t.Error("resolveConfigMount(relative, no WorktreeRoot) = nil error, want an error")
+		}
+	})
+}
+
 // TestDatadirOwnedBy covers the detection mechanism at the heart of the
 // issue #74 fix: recognising that a bind-mount datadir is already owned
 // by the container uid, so Up neither chowns nor chmods a directory the

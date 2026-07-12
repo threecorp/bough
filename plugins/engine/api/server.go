@@ -26,6 +26,7 @@ func (s *grpcServer) Up(ctx context.Context, r *pb.UpRequest) (*pb.UpResponse, e
 		SocketDir:        r.GetSocketDir(),
 		InitialResources: resourceSpecsFromProto(r.GetInitialResources()),
 		Extras:           r.GetExtras(),
+		Plugins:          pluginSpecsFromProto(r.GetPlugins()),
 	})
 	return &pb.UpResponse{Error: errString(err)}, nil
 }
@@ -92,6 +93,14 @@ func resourceSpecsFromProto(rs []*pb.ResourceSpec) []ResourceSpec {
 	out := make([]ResourceSpec, len(rs))
 	for i, r := range rs {
 		out[i] = ResourceSpec{Type: r.GetType(), Name: r.GetName(), Params: r.GetParams()}
+	}
+	return out
+}
+
+func pluginSpecsFromProto(ps []*pb.PluginSpec) []PluginSpec {
+	out := make([]PluginSpec, len(ps))
+	for i, p := range ps {
+		out[i] = PluginSpec{ID: p.GetId(), Location: p.GetLocation()}
 	}
 	return out
 }

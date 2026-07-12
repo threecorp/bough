@@ -317,6 +317,7 @@ func startEngines(
 				SocketDir:        eng.SocketDir,
 				InitialResources: resources,
 				Extras:           extras,
+				Plugins:          toPluginSpecs(eng.Plugins),
 			}); err != nil {
 				return nil, fmt.Errorf("%s Up: %w", eng.Kind, err)
 			}
@@ -873,6 +874,14 @@ func toResourceSpecs(in []config.InitialResource) []engineapi.ResourceSpec {
 	out := make([]engineapi.ResourceSpec, len(in))
 	for i, r := range in {
 		out[i] = engineapi.ResourceSpec{Type: r.Type, Name: r.Name, Params: r.Params}
+	}
+	return out
+}
+
+func toPluginSpecs(in []config.EnginePlugin) []engineapi.PluginSpec {
+	out := make([]engineapi.PluginSpec, len(in))
+	for i, p := range in {
+		out[i] = engineapi.PluginSpec{ID: p.ID, Location: p.Location}
 	}
 	return out
 }

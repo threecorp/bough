@@ -106,6 +106,16 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Extras["backend"] == "docker" {
 		return p.dockerUp(ctx, req)
 	}
+	// Engine-managed plugins are installed only by the docker backend
+	// (via elasticsearch-plugins.yml — see docker.go). The nix backend
+	// has no equivalent, so rather than silently dropping declared
+	// plugins — which would leave the worktree green but fail at the
+	// first query referencing the missing analyzer — surface an
+	// actionable config error. backend auto-detect prefers nix, so this
+	// is the path a nix+flakes host takes by default.
+	if len(req.Plugins) > 0 {
+		return fmt.Errorf("elasticsearch: %d plugin(s) declared but the nix backend cannot install them; set backend: docker on this engine (or remove plugins:)", len(req.Plugins))
+	}
 	if req.WorktreeRoot == "" {
 		return errors.New("elasticsearch: Up: WorktreeRoot is required")
 	}

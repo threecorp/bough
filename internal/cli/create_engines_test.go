@@ -36,6 +36,50 @@ func (f *fakeEngineProvider) EnvVars(context.Context, *engineapi.EnvVarsReq) (ma
 	return f.envVars, f.envErr
 }
 
+// TestToPluginSpecs confirms config.EnginePlugin (the YAML-facing,
+// validated type) converts field-for-field into engineapi.PluginSpec
+// (the wire-facing type Up sends to the plugin), including the empty
+// and nil-slice cases so an engine with no `plugins:` declared gets an
+// empty (not nil-panicking) slice through toPluginSpecs → UpReq.Plugins
+// → pluginSpecsToProto's own len()-based make().
+func TestToPluginSpecs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []config.EnginePlugin
+		want []engineapi.PluginSpec
+	}{
+		{"nil in -> empty out", nil, []engineapi.PluginSpec{}},
+		{"empty in -> empty out", []config.EnginePlugin{}, []engineapi.PluginSpec{}},
+		{
+			"official plugin (no location)",
+			[]config.EnginePlugin{{ID: "analysis-icu"}},
+			[]engineapi.PluginSpec{{ID: "analysis-icu"}},
+		},
+		{
+			"unofficial plugin with location, multiple entries",
+			[]config.EnginePlugin{
+				{ID: "analysis-icu"},
+				{ID: "analysis-sudachi", Location: "https://example.com/sudachi.zip"},
+			},
+			[]engineapi.PluginSpec{
+				{ID: "analysis-icu"},
+				{ID: "analysis-sudachi", Location: "https://example.com/sudachi.zip"},
+			},
+		},
+	}
+	for _, c := range cases {
+		got := toPluginSpecs(c.in)
+		if len(got) != len(c.want) {
+			t.Fatalf("%s: toPluginSpecs(%v) = %v, want %v", c.name, c.in, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: toPluginSpecs(%v)[%d] = %+v, want %+v", c.name, c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
 // TestBuildEngineExtras_FlattensCompose is the regression guard for
 // the kind: compose wiring: Engine.Compose is the only conduit for
 // compose.file/service/target_port/project/env_prefix to reach
