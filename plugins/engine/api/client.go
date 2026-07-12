@@ -27,6 +27,7 @@ func (c *grpcClient) Up(ctx context.Context, req *UpReq) error {
 		SocketDir:        req.SocketDir,
 		InitialResources: resourceSpecsToProto(req.InitialResources),
 		Extras:           req.Extras,
+		Plugins:          pluginSpecsToProto(req.Plugins),
 	})
 	if err != nil {
 		return err
@@ -119,6 +120,14 @@ func resourceSpecsToProto(rs []ResourceSpec) []*pb.ResourceSpec {
 	out := make([]*pb.ResourceSpec, len(rs))
 	for i, r := range rs {
 		out[i] = &pb.ResourceSpec{Type: r.Type, Name: r.Name, Params: r.Params}
+	}
+	return out
+}
+
+func pluginSpecsToProto(ps []PluginSpec) []*pb.PluginSpec {
+	out := make([]*pb.PluginSpec, len(ps))
+	for i, p := range ps {
+		out[i] = &pb.PluginSpec{Id: p.ID, Location: p.Location}
 	}
 	return out
 }

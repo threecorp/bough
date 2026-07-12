@@ -94,6 +94,21 @@ message PortRange {
   int32 high = 2;
 }
 
+// PluginSpec is one plugin the host wants the engine to make available
+// before it starts (e.g. an Elasticsearch analyzer). `id` and
+// `location` mirror Elasticsearch's own `elasticsearch-plugins.yml`
+// field names 1:1 — the elasticsearch plugin re-marshals this message
+// directly into that file rather than inventing its own shape.
+// `location` is required for unofficial/third-party plugins and empty
+// for official ones the engine's own plugin registry already knows.
+// A plugin that does not implement engine-managed plugins (mysql,
+// redis, postgres, compose) silently ignores an empty or non-empty
+// list either way.
+message PluginSpec {
+  string id = 1;
+  string location = 2;
+}
+
 message UpRequest {
   repeated PortSpec ports = 1;
   string datadir = 2;
@@ -101,6 +116,7 @@ message UpRequest {
   string socket_dir = 4;
   repeated ResourceSpec initial_resources = 5;
   map<string, string> extras = 6;
+  repeated PluginSpec plugins = 7;
 }
 
 // String error instead of gRPC status so plugins authored in non-Go

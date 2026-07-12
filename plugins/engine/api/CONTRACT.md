@@ -92,6 +92,19 @@ and the suite will treat the clause as not-applicable rather than failed.
     docker-only (no host-process path) opts out with
     `SkipDatadirPermission=true`.
 
+## Plugins (optional)
+
+12. **`UpReq.Plugins` (proto `repeated PluginSpec plugins = 7`, v3) is a
+    best-effort, engine-optional hint.** Each entry is an `{ID, Location}`
+    pair mirroring Elasticsearch's own `elasticsearch-plugins.yml` fields
+    (Location empty = official plugin known by ID; non-empty = a direct
+    download URL for a third-party plugin). A plugin that does not manage
+    plugins (mysql, redis, postgres, compose) MUST ignore the list — an
+    empty OR non-empty `Plugins` must not change its behaviour. The
+    conformance suite passes an empty list, so this clause is not
+    separately asserted; it exists so a host can populate the field
+    unconditionally without breaking plugins that do not consume it.
+
 ## Notes for plugin authors
 
 - A detached, long-lived subprocess launched from `Up` (e.g. a nix

@@ -28,6 +28,16 @@ type PortRange struct {
 	High int
 }
 
+// PluginSpec is one plugin the host wants the engine to make available
+// before it starts (e.g. an Elasticsearch analyzer). ID and Location
+// mirror elasticsearch-plugins.yml's own field names 1:1. Location is
+// required for unofficial/third-party plugins and empty for official
+// ones the engine's own plugin registry already knows.
+type PluginSpec struct {
+	ID       string
+	Location string
+}
+
 // UpReq is the lifecycle-start request payload.
 type UpReq struct {
 	Ports            []PortSpec
@@ -36,6 +46,7 @@ type UpReq struct {
 	SocketDir        string
 	InitialResources []ResourceSpec
 	Extras           map[string]string
+	Plugins          []PluginSpec
 }
 
 // DownReq is the lifecycle-stop request payload. GracefulTimeoutSec is
