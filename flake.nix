@@ -18,7 +18,7 @@
         formatter = pkgs.nixfmt-tree;
 
         # buildGoModule produces all 5 binaries (host + 4 plugin) into one
-        # store path. `nix run github:ikeikeikeike/bough` invokes the host
+        # store path. `nix run github:threecorp/bough` invokes the host
         # binary; nix profile install drops every binary into the user's
         # profile so `bough-plugin-*` are discoverable on PATH.
         bough = pkgs.buildGoModule {
@@ -42,15 +42,15 @@
           ];
           meta = {
             description = "Per-worktree isolation orchestrator for monorepos";
-            homepage = "https://github.com/ikeikeikeike/bough";
+            homepage = "https://github.com/threecorp/bough";
             license = pkgs.lib.licenses.mit;
             mainProgram = "bough";
           };
         };
       in
       {
-        # Package + app entries make `nix run github:ikeikeikeike/bough`
-        # and `nix profile install github:ikeikeikeike/bough` actually work.
+        # Package + app entries make `nix run github:threecorp/bough`
+        # and `nix profile install github:threecorp/bough` actually work.
         # Until v0.1.1 these output names were missing so both invocations
         # were no-ops on the alpha tag.
         packages.default = bough;

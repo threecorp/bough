@@ -53,7 +53,7 @@ type Result struct {
 // for cosign 2.x keyless verification. GoReleaser keyless signing
 // embeds the github.com/<owner>/<repo>/.github/workflows/<file>@ref
 // identity into the certificate, so an operator passing the bough
-// release identity (e.g. https://github.com/ikeikeikeike/bough/.
+// release identity (e.g. https://github.com/threecorp/bough/.
 // github/workflows/release.yml@refs/tags/v0.6.0) and the GitHub
 // OIDC issuer (https://token.actions.githubusercontent.com) will
 // have a successful verify path. The CertPath holds the

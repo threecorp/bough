@@ -111,5 +111,5 @@ External plugin maintainers (your `bough-plugin-<kind>` repo):
   rebuilt against v0.4.0+ stop loading.
 
 If you are unsure how to migrate, open an issue at
-https://github.com/ikeikeikeike/bough/issues with your current
+https://github.com/threecorp/bough/issues with your current
 `.worktree-isolation.yaml` and we'll convert it.

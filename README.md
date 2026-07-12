@@ -117,8 +117,8 @@ bough ships as 6 binaries (`bough` + 5 `bough-plugin-*`). Pick one:
 #    filename embeds the release version (bough_<ver>_<os>_<arch>) so
 #    the tag is resolved first via the /releases/latest redirect.
 arch=$(uname -m); case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
-tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ikeikeikeike/bough/releases/latest); tag=${tag##*/}
-curl -fsSL "https://github.com/ikeikeikeike/bough/releases/download/${tag}/bough_${tag#v}_$(uname -s | tr A-Z a-z)_${arch}.tar.gz" \
+tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/threecorp/bough/releases/latest); tag=${tag##*/}
+curl -fsSL "https://github.com/threecorp/bough/releases/download/${tag}/bough_${tag#v}_$(uname -s | tr A-Z a-z)_${arch}.tar.gz" \
   | tar xz -C ~/.local/bin/  bough bough-plugin-mysql bough-plugin-postgres bough-plugin-redis bough-plugin-elasticsearch bough-plugin-compose
 #
 # macOS (Apple Silicon) one-time step: the release binaries are not
@@ -137,8 +137,8 @@ go install github.com/ikeikeikeike/bough/cmd/bough-plugin-elasticsearch@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-compose@latest
 
 # 3. Nix flake (requires Nix with flakes enabled)
-nix run    github:ikeikeikeike/bough -- create --stdin-json
-nix profile install github:ikeikeikeike/bough
+nix run    github:threecorp/bough -- create --stdin-json
+nix profile install github:threecorp/bough
 
 # 4. Homebrew (planned — tap not yet published)
 # brew tap     ikeikeikeike/tap

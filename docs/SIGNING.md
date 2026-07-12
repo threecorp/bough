@@ -66,7 +66,7 @@ run through an enforce gate that:
 
 Cosign keyless verification needs the OIDC identity + issuer the
 GoReleaser pipeline signed under (bough's own release identity:
-`https://github.com/ikeikeikeike/bough/.github/workflows/release.yml@<ref>`,
+`https://github.com/threecorp/bough/.github/workflows/release.yml@<ref>`,
 issuer `https://token.actions.githubusercontent.com`). `internal
 /pluginsign.Request` carries `CertIdentity` / `CertOIDCIssuer` /
 `CertPath` fields for this — there is no env-var or config-file
