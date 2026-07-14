@@ -350,7 +350,7 @@ func newHookHandleCmd() *cobra.Command {
 			switch event {
 			case string(hooks.EventUserPromptSubmit):
 				dispatchInjectContext(c)
-				dispatchObserverAutostart()
+				dispatchObserverAutostart(c)
 			case string(hooks.EventSessionEnd):
 				_ = runSessionEnd(c.OutOrStdout(), "", extractSessionID(payload), sessionEndDefaultWindow)
 				dispatchEvolveClaudeMD(c)
@@ -500,41 +500,56 @@ func dispatchEvolveClaudeMD(c *cobra.Command) {
 	_ = runEvolveClaudeMD(c.OutOrStdout(), root, "", true, time.Now())
 }
 
+// resolveObserverConfig loads .bough.yaml for the monorepo resolved from
+// the current working directory via the same resolveConfigPath every
+// other bough command uses (--config flag, then .bough.yaml, then the
+// legacy .worktree-isolation.yaml fallback) — instead of an independent
+// ad hoc path computation. Shared by dispatchObserverAutostart and
+// doctor's autostart-posture line so both agree on which config file
+// answers "is autostart on"; a resolution mismatch between what the hook
+// actually does and what doctor reports would otherwise be easy to
+// reintroduce by hand in either place.
+func resolveObserverConfig(c *cobra.Command) (cfg *config.Config, root string, err error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, "", err
+	}
+	root = resolveMonorepoRoot(cwd)
+	cfg, err = loadConfigQuiet(resolveConfigPath(c, root))
+	return cfg, root, err
+}
+
 // dispatchObserverAutostart ensures the continuous-learning observer
 // daemon is running when the monorepo's .bough.yaml sets
 // instinct.observer.autostart: true. It is wired on UserPromptSubmit
 // (once per turn, not per tool call) so the check is cheap and the daemon
-// starts early in the session. Best-effort + SILENT: UserPromptSubmit's
-// stdout carries the injected instinct block, so this must print nothing;
-// gate off / config missing / already running / a spawn failure are all
-// no-ops that never break the prompt. The started daemon detaches its own
-// stdio, and `bough doctor` surfaces its posture — minting is never
-// silent, and it stays subject to the self-DoS limiter.
-func dispatchObserverAutostart() {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return
-	}
-	root := resolveMonorepoRoot(cwd)
-	cfgPath := filepath.Join(root, ".bough.yaml")
-	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
-		cfgPath = v
-	}
-	cfg, err := loadConfigQuiet(cfgPath)
+// starts early in the session. Best-effort + SILENT ON STDOUT:
+// UserPromptSubmit's stdout carries the injected instinct block, so this
+// must never print there — a spawn failure is instead logged to the
+// observer's own log file (the same place `bough observer status` /
+// `doctor` already point operators to) so it stays diagnosable instead of
+// vanishing without a trace. Gate off / config missing / already running
+// are silent no-ops; the started daemon detaches its own stdio, and
+// `bough doctor` surfaces its posture — minting itself is never silent,
+// and it stays subject to the self-DoS limiter.
+func dispatchObserverAutostart(c *cobra.Command) {
+	cfg, root, err := resolveObserverConfig(c)
 	if err != nil || !cfg.Instinct.Observer.Autostart {
 		return
 	}
-	_, _, _, _ = startObserverDaemon(root, observerAutostartInterval(cfg))
+	if _, _, logPath, err := startObserverDaemon(root, observerAutostartInterval(cfg)); err != nil && logPath != "" {
+		appendDaemonLog(logPath, fmt.Sprintf("autostart: %v", err))
+	}
 }
 
 // observerAutostartInterval is the autostart daemon's minting cadence:
-// the operator's instinct.observer.interval_sec, or a 10-minute default
-// when it is unset or below the daemon's own 60s floor.
+// the operator's instinct.observer.interval_sec, or the daemon's own
+// default when it is unset or below its 60s floor.
 func observerAutostartInterval(cfg *config.Config) int {
 	if iv := cfg.Instinct.Observer.IntervalSec; iv >= 60 {
 		return iv
 	}
-	return 600
+	return defaultObserverIntervalSec
 }
 
 // dispatchQualityGates loads .bough.yaml's quality_gates: section

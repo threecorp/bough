@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -87,16 +86,17 @@ func renderContinuousLearningPosture(w io.Writer) {
 	// auto-running the minting daemon, and whether it is up right now.
 	// This keeps the "is bough minting in the background?" answer explicit
 	// even when autostart is on. Best-effort: no config / no project just
-	// reports the OFF line.
+	// reports the OFF line. Resolves the config file via resolveConfigPath
+	// (the same canonical .bough.yaml → legacy .worktree-isolation.yaml
+	// fallback every other bough command uses) rather than an ad hoc join,
+	// so a monorepo that has not renamed its legacy config still gets an
+	// accurate line instead of a false "autostart OFF" (observerDaemonRunning
+	// below is a pure process check and would otherwise disagree with it).
 	autostart := false
 	running := false
 	if cwd, err := os.Getwd(); err == nil {
 		root := resolveMonorepoRoot(cwd)
-		cfgPath := filepath.Join(root, ".bough.yaml")
-		if v := os.Getenv("BOUGH_CONFIG"); v != "" {
-			cfgPath = v
-		}
-		if cfg, err := loadConfigQuiet(cfgPath); err == nil {
+		if cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root)); err == nil {
 			autostart = cfg.Instinct.Observer.Autostart
 		}
 		running = observerDaemonRunning(root)
