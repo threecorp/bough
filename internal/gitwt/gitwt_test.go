@@ -195,6 +195,74 @@ func TestRunner_AddOrAttach_ResumeIsNoOpThroughSymlink(t *testing.T) {
 	}
 }
 
+// TestRunner_AddOrAttach_RecreatesPrunableWorktree is the regression guard for
+// the half-materialised-worktree bug: when a worktree dir is deleted
+// out-of-band (a partial teardown, a manual `rm -rf`, an interrupted run) while
+// its git admin record survives, `git worktree list` still reports the path —
+// as "prunable". The idempotency check matched that path and returned a no-op,
+// so `bough create` reported the repo "already registered" and never recreated
+// its dir, leaving `claude --worktree` sessions with only the repos whose dirs
+// happened to survive. AddOrAttach must instead prune the stale entry and
+// re-add, bringing the worktree back on the existing branch.
+func TestRunner_AddOrAttach_RecreatesPrunableWorktree(t *testing.T) {
+	src := initBareRepo(t)
+	// Resolve the temp root's symlinks up front so the path registered with git
+	// and the literal dst share a resolved prefix. On hosts where t.TempDir()
+	// sits under a symlink (macOS: /var -> /private/var), after os.RemoveAll(dst)
+	// EvalSymlinks(dst) fails, so AddOrAttach's resolvedDst falls back to the
+	// literal path and never matches git's symlink-resolved `worktree list`
+	// entry — the loop would then take the "no match" fall-through and never
+	// exercise the os.Stat recovery guard this test exists to protect (the guard
+	// could be reverted and the test would still pass). Resolving here forces the
+	// intended "match found -> os.Stat fails -> break" path on every OS, the same
+	// discipline TestRunner_AddOrAttach_ResumeIsNoOpThroughSymlink uses.
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "wt")
+	r := NewRunner()
+
+	// First materialisation creates the worktree + branch F-Recover.
+	if _, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Recover", "main"); err != nil {
+		t.Fatalf("initial add: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".git")); err != nil {
+		t.Fatalf("worktree dir not created: %v", err)
+	}
+
+	// Simulate the out-of-band deletion: remove the dir but leave git's admin
+	// record, so `git worktree list` now reports it as prunable.
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-run: must recreate the dir instead of no-op'ing on the stale entry.
+	created, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Recover", "main")
+	if err != nil {
+		t.Fatalf("recovery add: want the prunable worktree re-materialised, got error: %v", err)
+	}
+	if created {
+		t.Errorf("recovery took the -b (new-branch) path; want the attach path (created=false) onto the surviving F-Recover branch")
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".git")); err != nil {
+		t.Errorf("prunable worktree was not recreated on disk: %v", err)
+	}
+	wts, err := r.List(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onBranch bool
+	for _, wt := range wts {
+		if wt.Branch == "F-Recover" {
+			onBranch = true
+		}
+	}
+	if !onBranch {
+		t.Errorf("recreated worktree is not checked out to F-Recover: %+v", wts)
+	}
+}
+
 func TestRunner_RemoveAndDeleteBranch(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()

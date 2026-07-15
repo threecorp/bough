@@ -104,17 +104,21 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 // worktree was actually branched from (origin/<base> after a live
 // fetch, else the local <base>) — so the caller logs the true source.
 //
-// Idempotency: if `dst` is already a registered worktree, the call
-// returns `(false, base, nil)` immediately. This makes the hook safe to
-// re-invoke — Claude Code re-fires WorktreeCreate every time the user
-// runs `claude --worktree F-X --resume <session>`, so a "second call
-// is a no-op" contract is required (cf. threecorp's
-// scripts/worktree-create.sh:46-50 "skip if worktree already exists").
+// Idempotency: if `dst` is already a registered worktree AND its dir
+// still exists on disk, the call returns `(false, base, nil)`
+// immediately. This makes the hook safe to re-invoke — Claude Code
+// re-fires WorktreeCreate every time the user runs
+// `claude --worktree F-X --resume <session>`, so a "second call is a
+// no-op" contract is required.
 //
-// If the dir exists but is NOT in `git worktree list` (= a stale
-// orphan from an interrupted prior run), Prune is invoked first so
-// the subsequent `worktree add` is not blocked by leftover git admin
-// state.
+// Recovery: two stale states are healed instead of no-op'd. (a) `dst`
+// is registered but its dir is gone — git reports it "prunable", from a
+// partial teardown or an out-of-band `rm -rf` — so a bare path match is
+// not proof of materialisation; and (b) the dir exists but is NOT in
+// `git worktree list` (a leftover orphan from an interrupted prior run).
+// In both cases Prune runs first so the subsequent `worktree add` is not
+// blocked by leftover git admin state, and the worktree is
+// re-materialised (attach path, on the existing branch).
 func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base string) (created bool, effectiveBase string, err error) {
 	// effectiveBase is the ref the worktree was actually branched from,
 	// returned so the caller logs what seeded it (origin/<base> vs the
@@ -137,7 +141,27 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 		}
 		for _, wt := range wts {
 			if wt.Path == resolvedDst {
-				return false, base, nil
+				// A path match is only a materialised no-op when the
+				// worktree dir still exists on disk. `git worktree list`
+				// also reports "prunable" entries — a registration whose
+				// dir was deleted out-of-band (a partial teardown, a
+				// manual `rm -rf`, an interrupted run) while the git admin
+				// record survived. Treating those as a no-op is what left
+				// `claude --worktree` sessions with a half-materialised
+				// worktree: the missing repos were reported "already
+				// registered" and never recreated. When the dir is gone,
+				// fall through to the prune + add below so it comes back
+				// (attach path, on the existing branch).
+				//
+				// Only genuine non-existence triggers recovery: a stat that
+				// fails for any other reason (EACCES on a parent dir, a
+				// momentarily-stale NFS mount) must keep the old no-op rather
+				// than tear down a worktree that is actually present — the
+				// intent is "the dir was deleted", not "the dir is unreadable".
+				if _, statErr := os.Stat(dst); !errors.Is(statErr, os.ErrNotExist) {
+					return false, base, nil
+				}
+				break
 			}
 		}
 	}

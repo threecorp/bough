@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`bough create` now recovers a "prunable" worktree instead of leaving it
+  half-materialised.** When a worktree dir was deleted out-of-band (a partial
+  teardown, a manual `rm -rf`, an interrupted run) while its git admin record
+  survived, `git worktree list` still reported the path, so `AddOrAttach`
+  matched it and returned a no-op — the repo was reported "already registered"
+  and its dir was never recreated. A `claude --worktree <name>` over such a
+  worktree came up with only the sub-repos whose dirs happened to survive.
+  `AddOrAttach` now confirms the dir exists on disk before treating a path match
+  as a no-op; a registered-but-missing entry falls through to prune + re-add and
+  is re-materialised on its existing branch.
+
 ## v0.14.0
 
 Expose the monorepo root `CLAUDE.md` to every `claude --worktree` session by
