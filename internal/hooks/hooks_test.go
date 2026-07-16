@@ -379,15 +379,13 @@ func TestManager_Doctor_AfterInstall(t *testing.T) {
 	}
 }
 
-// TestDoctorRender_PluginDoubleWireNote covers the plugin double-fire
-// heads-up: it renders only when settings.json actually carries bough
-// hooks (the case where a settings.json copy could collide with the
-// bough Claude Code plugin's own hooks), and stays silent on a fresh
-// repo so users who never wired settings.json see no spurious warning.
-func TestDoctorRender_PluginDoubleWireNote(t *testing.T) {
-	const marker = "bough hook uninstall"
-
-	// with bough hooks in settings.json -> note present
+// TestDoctorRender_TransitionDoubleFireNote covers the reworded double-fire note
+// for the commands/skills-only plugin: since the plugin no longer ships hooks,
+// the note names the actual remaining cause (a pre-removal plugin release still
+// installed) rather than the old blanket "if you ALSO installed the plugin"
+// wording. It renders only when settings.json carries bough hooks, and stays
+// silent on a fresh repo.
+func TestDoctorRender_TransitionDoubleFireNote(t *testing.T) {
 	installed := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
 	if err := installed.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -398,8 +396,12 @@ func TestDoctorRender_PluginDoubleWireNote(t *testing.T) {
 	}
 	var withHooks strings.Builder
 	report.Render(&withHooks)
-	if !strings.Contains(withHooks.String(), marker) {
-		t.Errorf("expected the plugin double-wire note when bough hooks are in settings.json:\n%s", withHooks.String())
+	if !strings.Contains(withHooks.String(), "double-fire") {
+		t.Errorf("expected the transition double-fire note when bough hooks are wired:\n%s", withHooks.String())
+	}
+	// the obsolete blanket wording must not come back
+	if strings.Contains(withHooks.String(), "ALSO installed") || strings.Contains(withHooks.String(), "bough hook uninstall") {
+		t.Errorf("doctor still prints the obsolete blanket double-wire wording:\n%s", withHooks.String())
 	}
 
 	// fresh repo (no bough hooks) -> note absent
@@ -410,8 +412,8 @@ func TestDoctorRender_PluginDoubleWireNote(t *testing.T) {
 	}
 	var noHooks strings.Builder
 	freshReport.Render(&noHooks)
-	if strings.Contains(noHooks.String(), marker) {
-		t.Errorf("did not expect the double-wire note on a fresh repo:\n%s", noHooks.String())
+	if strings.Contains(noHooks.String(), "double-fire") {
+		t.Errorf("did not expect the double-fire note on a fresh repo:\n%s", noHooks.String())
 	}
 }
 

@@ -148,36 +148,46 @@ nix profile install github:threecorp/bough
 ## Use from Claude Code (plugin)
 
 bough is also packaged as a Claude Code plugin, so you can drive it from inside a
-session instead of dropping to a shell. The plugin ships the commands + hooks;
-the `bough` binary itself still comes from **Install** above (install it on
-`PATH` first).
+session instead of dropping to a shell. The plugin ships **commands + skill
+only** — no hooks. The `bough` binary itself still comes from **Install** above
+(install it on `PATH` first; the plugin's commands shell out to it).
 
 ```text
 /plugin marketplace add threecorp/bough
 /plugin install bough@bough
 ```
 
-Installing wires two things:
+Installing wires the user-facing surface:
 
 - **Slash commands** — type them in any session: `/bough:create <name>`,
   `/bough:remove <name>`, `/bough:list`, `/bough:status`, `/bough:verify <name>`,
   `/bough:doctor`, `/bough:instinct-status`, `/bough:instinct-list`,
   `/bough:instinct-promote`, `/bough:evolve`, `/bough:config-validate`. Each one
   shells out to `bough` and summarises the result.
-- **Hooks** — the plugin's `hooks/hooks.json` wires every event to the same
-  `bough hook handle` dispatcher `bough hook install` writes, so the
-  observe → instinct → evolve → preserve loop plus WorktreeCreate/Remove are
-  live without editing `settings.json`. (A committed test keeps that manifest in
-  lockstep with the canonical wiring.) LLM instinct minting stays opt-in
-  (`bough observer start`).
+- **Skill** — `using-bough`, model-invoked guidance on which `/bough:*` fits an
+  intent, with a `command -v bough` PATH preflight.
 
-**Don't double-wire.** If you install the plugin *and* run `bough hook install`,
-both copies fire on every event. Pick one — for the plugin path, run
-`bough hook uninstall` to drop the `settings.json` copy. `bough doctor` prints a
-heads-up when it sees bough hooks in `settings.json`.
+Commands and the skill are inert until invoked, so installing the plugin at the
+default user scope is side-effect-free — it does not observe or inject anything.
+
+**Hooks are separate, and deliberately so.** The observe → instinct → inject →
+evolve → preserve loop (plus `WorktreeCreate` / `WorktreeRemove`) is wired by the
+CLI, not the plugin, because hooks fire on *every* event and belong to the
+project you actually want observed:
+
+```text
+bough hook install --scope project      # wire this repo's .claude/settings.json  (recommended)
+bough hook install --scope user         # wire ~/.claude/settings.json (observe every repo)
+bough hook uninstall                     # remove them
+```
+
+Keeping hooks out of the plugin means installing the plugin never bleeds
+observation into unrelated repos (e.g. another repo already running its own
+learning loop). LLM instinct minting stays opt-in on top of that
+(`bough observer start`, or `.bough.yaml` `instinct.observer.autostart`).
 
 See [`docs/PLUGIN_CLAUDE_CODE.md`](./docs/PLUGIN_CLAUDE_CODE.md) for the plugin
-layout and how the hook manifest is kept honest.
+layout and why hooks are wired by the CLI, not the plugin.
 
 ## Quick start
 

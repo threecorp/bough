@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The Claude Code plugin now ships commands + skill only — no hooks.** Removed
+  `hooks/hooks.json` (and its drift test) from the plugin. A plugin installs at
+  user scope by default, so bundling the observe/inject dispatcher made it fire
+  in *every* repo — double-recording and injecting an unwanted instinct block in
+  any repo already running its own learning loop. Commands and the `using-bough`
+  skill are inert until invoked, so the plugin is now side-effect-free to install
+  anywhere. Observation stays wired per-project via
+  `bough hook install --scope project|user`. `bough doctor`'s double-fire
+  heads-up is reworded to name the actual cause — a *previously* hooks-shipping
+  plugin release left installed — instead of firing on every `settings.json` that
+  has bough hooks.
+
 ## v0.16.0
 
 A retrospective `/code-review` sweep of every merged PR that had never been

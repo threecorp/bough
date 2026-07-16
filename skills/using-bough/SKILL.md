@@ -41,15 +41,26 @@ without it.
 | turn instincts into skills/commands | `/bough:evolve` |
 | validate a `.bough.yaml` | `/bough:config-validate` |
 
-The primary way to create a worktree is still `claude --worktree <name>`, whose
-`WorktreeCreate` hook this plugin also wires; `/bough:create` is for cutting one
-from inside an already-running session.
+The primary way to create a worktree is still `claude --worktree <name>`, which
+fires a `WorktreeCreate` hook — but that hook is wired by `bough hook install`
+(see below), not by this plugin. `/bough:create` cuts one from inside an
+already-running session.
 
-## Hook wiring
+## Hook wiring (not done by this plugin)
 
-Installing this plugin auto-wires bough's hook dispatcher for every event
-(observe / inject / session-end / preserve / worktree create+remove). If the
-user also ran `bough hook install`, those `settings.json` entries and the
-plugin's hooks double-fire — run `bough hook uninstall` to keep only one. LLM
-instinct minting stays opt-in (`bough observer start`); the plugin does not
-enable it.
+This plugin ships **commands + this skill only — no hooks**. It does not observe,
+inject, or run any lifecycle handler on its own; the `/bough:*` commands act only
+when the user invokes them. So installing the plugin (even user-scoped, in every
+repo) has no background side effects.
+
+The observe → instinct → inject → evolve → preserve loop, and the
+`WorktreeCreate` / `WorktreeRemove` handlers, are wired separately and scoped to
+the project the user actually wants observed:
+
+- `bough hook install --scope project` — wire this repo's `.claude/settings.json` (recommended)
+- `bough hook install --scope user` — wire `~/.claude/settings.json` (observe every repo)
+- `bough hook uninstall` — remove them
+
+If the user asks to "turn on learning / observation here", point them at
+`bough hook install --scope project`. LLM instinct minting stays opt-in on top of
+that (`bough observer start`, or `.bough.yaml` `instinct.observer.autostart`).

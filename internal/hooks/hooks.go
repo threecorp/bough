@@ -436,8 +436,8 @@ func (m *Manager) Doctor(ctx context.Context, obsPath string) (*DoctorReport, er
 }
 
 // hasBoughSettingsHooks reports whether any event carries a
-// bough-installed group in settings.json. The doctor renders the
-// plugin double-fire heads-up only when this is true.
+// bough-installed group in settings.json — the gate for the
+// transition double-fire note in Render.
 func (r *DoctorReport) hasBoughSettingsHooks() bool {
 	for _, st := range r.Events {
 		if st.BoughInstalled {
@@ -471,20 +471,14 @@ func (r *DoctorReport) Render(w io.Writer) {
 		}
 	}
 	if r.hasBoughSettingsHooks() {
-		// The bough Claude Code plugin ships the same hook dispatcher in
-		// its own hooks/hooks.json, so a settings.json copy on top of the
-		// installed plugin double-fires every event. bough cannot see
-		// the plugin from here (its registry is Claude Code's, not
-		// bough's), so this renders UNCONDITIONALLY whenever bough hooks
-		// are wired in settings.json - including the more common case of
-		// plain `bough hook install` with no plugin involved at all. The
-		// wording says so explicitly, so it reads as standing guidance
-		// rather than a diagnosed problem for operators who never touch
-		// the plugin.
-		fmt.Fprintln(w, "  fyi: if you ALSO installed the bough Claude Code plugin, these settings.json")
-		fmt.Fprintln(w, "       entries double-fire every event alongside it - run `bough hook uninstall`")
-		fmt.Fprintln(w, "       to keep only the plugin's copy. (bough can't detect the plugin, so this")
-		fmt.Fprintln(w, "       always shows here regardless of whether you use it.)")
+		// bough cannot see the Claude Code plugin registry from here, so this
+		// prints whenever bough hooks are wired in settings.json. The plugin no
+		// longer ships hooks, so the only remaining double-fire path is a bough
+		// plugin release from BEFORE hooks were dropped still installed alongside
+		// these entries — the note names that, instead of the old blanket warning.
+		fmt.Fprintln(w, "  note: bough's hooks live only here (settings.json). If a bough plugin release")
+		fmt.Fprintln(w, "        from before hooks were dropped from it is still installed, update or")
+		fmt.Fprintln(w, "        remove it so events don't double-fire.")
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Observer:")

@@ -17,15 +17,17 @@ commands/            # slash commands — one .md per /bough:<name>
   instinct-status.md instinct-list.md instinct-promote.md evolve.md config-validate.md
 skills/
   using-bough/SKILL.md   # model-invoked orchestration + PATH preflight
-hooks/
-  hooks.json         # wires all 8 events to `bough hook handle --event <E>`
 ```
 
-`plugin.json` omits the `commands` / `skills` / `hooks` fields on purpose: Claude
-Code auto-discovers the default `commands/`, `skills/`, and `hooks/hooks.json`
-directories at the plugin root. `version` is omitted too, so the plugin tracks
-the git commit SHA (every push is a new version) rather than needing a manual
-bump per command edit.
+The plugin ships **commands + skill only — no `hooks/`**. Hooks fire on every
+event and belong to the specific project you want observed, so they are wired by
+the CLI (`bough hook install`), not forced on by installing the plugin (see
+[Hooks are not in the plugin](#hooks-are-not-in-the-plugin-on-purpose) below).
+
+`plugin.json` omits the `commands` / `skills` fields on purpose: Claude Code
+auto-discovers the default `commands/` and `skills/` directories at the plugin
+root. `version` is omitted too, so the plugin tracks the git commit SHA (every
+push is a new version) rather than needing a manual bump per command edit.
 
 ## Command / skill / hook reference
 
@@ -43,7 +45,7 @@ bump per command edit.
 | `/bough:instinct-list` | List instincts (id, trigger, confidence, domain). | — |
 | `/bough:instinct-promote` | Promote cross-project instincts (≥2 projects, avg confidence ≥0.8) into the global corpus. Previews with `--dry-run`. | `[--dry-run]` |
 | `/bough:evolve` | Cluster instincts into skills/agents/commands via the 5-gate pipeline (`--generate` to emit; GATE 5 runs an LLM judge on your Claude subscription). | `[--generate]` |
-| `/bough:doctor` | Report hook wiring, observer state, and cost posture; warns on double-wiring. | — |
+| `/bough:doctor` | Report hook wiring, observer state, and cost posture. | — |
 
 ### Skill — Claude invokes this on its own
 
@@ -51,9 +53,17 @@ bump per command edit.
 |---|---|
 | `using-bough` | Model-invoked guidance on which `/bough:*` fits the user's intent, plus a `command -v bough` PATH preflight that stops with install guidance when the binary is missing. |
 
-### Hooks — fire automatically (no command)
+### Hooks — wired separately (NOT by the plugin)
 
-Installing the plugin wires all eight events to `bough hook handle --event <E>`:
+The plugin does **not** wire hooks. Observation is opt-in per project via the
+CLI:
+
+```text
+bough hook install --scope project      # this repo's .claude/settings.json  (recommended)
+bough hook install --scope user         # ~/.claude/settings.json (observe every repo)
+```
+
+That wires all eight events to `bough hook handle --event <E>`:
 
 | Event | Effect |
 |---|---|
@@ -74,22 +84,25 @@ The plugin ships markdown + JSON only. Every command shells out to `bough` on
 README **Install** section). The `using-bough` skill runs a `command -v bough`
 preflight and stops with install guidance if it is missing.
 
-## The hook manifest is kept honest
+## Hooks are not in the plugin (on purpose)
 
-`hooks/hooks.json` mirrors, verbatim, the command `bough hook install` writes
-into `settings.json`: every event in `hooks.AllEvents()` mapped to
-`hooks.CanonicalCommand(event)` (`bough hook handle --event <E>`). Because it is
-a hand-authored static file, it could silently drift when the event set changes.
+Earlier versions shipped a `hooks/hooks.json` so `/plugin install` also wired the
+observe/inject loop. That was dropped: a plugin installs at **user scope** by
+default, so its hooks would fire in *every* repo — including a repo that already
+runs its own learning loop, where a second observer double-records and injects an
+unwanted instinct block. Commands and the skill are inert until invoked, so they
+are safe user-scoped; hooks are not.
 
-`internal/hooks/plugin_sync_test.go` is the guard: it parses the committed
-`hooks/hooks.json` and fails CI if any event is missing, wires a non-canonical
-command, or declares an event absent from `AllEvents()`. Update the manifest and
-the canonical wiring in lockstep, or the test goes red.
+So observation is wired by the CLI, scoped to the project you choose:
 
-## Don't double-wire
+```text
+bough hook install --scope project      # this repo only  (recommended)
+bough hook install --scope user         # every repo (if that is genuinely what you want)
+bough hook uninstall
+```
 
-Installing the plugin wires the hooks; running `bough hook install` also wires
-them into `settings.json`. Both present means every event fires twice. Use one:
-for the plugin, run `bough hook uninstall` to drop the `settings.json` copy.
-`bough doctor` prints a heads-up when it detects bough hooks in `settings.json`.
-LLM instinct minting stays opt-in either way (`bough observer start`).
+`bough hook install` writes every event in `hooks.AllEvents()` mapped to
+`hooks.CanonicalCommand(event)` (`bough hook handle --event <E>`) into the chosen
+`settings.json`. `bough doctor` shows exactly what is wired there. This keeps the
+"install the plugin everywhere / observe only where you asked" split clean, with
+no double-firing to reconcile.
