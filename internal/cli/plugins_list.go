@@ -14,8 +14,18 @@ import (
 
 func newPluginsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "plugins",
-		Short: "List and verify bough plugin binaries",
+		Use: "plugins",
+		// PR #23 (Ν-1.8) added a `bough plugins verify` subcommand
+		// and updated this Short text to "List and verify ...", but
+		// the v0.9.0 reset (eee8a3d) deleted internal/cli/plugin_verify.go
+		// and the AddCommand(..., newPluginsVerifyCmd()) call without
+		// reverting this string — leaving `bough plugins --help` and
+		// `bough plugins -h` advertising a "verify" capability that
+		// does not exist (docs/SIGNING.md already documents its
+		// absence accurately: "There is no `bough plugins verify`
+		// subcommand today"). Restored to match the single `list`
+		// subcommand actually wired below.
+		Short: "List bough plugin binaries discoverable on PATH",
 	}
 	cmd.AddCommand(newPluginsListCmd())
 	return cmd
