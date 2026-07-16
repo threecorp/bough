@@ -1,5 +1,161 @@
 # Changelog
 
+## v0.16.0
+
+A retrospective `/code-review` sweep of every merged PR that had never been
+reviewed (all 32 of them, including the earlier retro-review PRs themselves,
+which had never been reviewed either). 13 of the 32 turned up a confirmed,
+still-live defect; each was fixed in its own PR with a regression test, and the
+finding was posted as an inline comment on the PR that introduced it.
+
+The headline is a secret-redaction hole: the structured fallback added in
+v0.9.18 only matched *bare* secret key names, so a compound key like
+`access_token` wrote its value to `observations.jsonl` unredacted. Also
+notable — three of the defects were in bugfix code that had been written to
+prevent that exact class of bug, and reintroduced it through an unhandled path
+(`pickFreePort`'s exhaustion fallback, `kind: compose`'s missing mysql probe,
+and `AddOrAttach`'s ENOENT-only prunable check).
+
+No breaking changes; every entry below is a fix to already-shipped behavior.
+
+### Security
+
+- **Compound secret key names are now redacted in the structured fallback (fixes
+  a leak introduced in v0.9.18).** `sanitizeObservation`'s byte-level
+  `scrubSecrets` can break JSON validity (the substring `token` inside
+  `access_token` matches `secretPattern`), which correctly triggers the
+  structured `walkScrub` fallback — but that fallback's `secretKeyRE` was
+  anchored `^(...)$`, matching only a bare key like `token`. Real tool/API JSON
+  almost always uses a compound key (`access_token`, `refresh_token`,
+  `client_secret`, `auth_token`), so those fell through `walkScrub`'s `default`
+  case and the secret was persisted **completely unredacted** while the
+  observation still reported as valid JSON. Verified live against
+  `{"access_token":12345678}` before the fix (passed through byte-identical),
+  and guarded now by `TestSanitizeObservation_CompoundSecretKeyNotLeaked`.
+
+### Fixed
+
+- **Quality gates never ran outside the monorepo root.** `dispatchQualityGates`
+  resolved its config as a bare cwd-relative `.bough.yaml` instead of going
+  through `resolveMonorepoRoot`/`resolveConfigPath` like every sibling
+  dispatcher. Since `bough hook handle` ordinarily runs with cwd inside a
+  sub-repo or worktree, the canonical `.bough.yaml` was silently never found and
+  **no quality gate ever fired** except when the hook happened to run with cwd
+  exactly at the root. Same bug class already fixed for `resolveObserverConfig`
+  in `487ea4c`, never applied here. Additionally, `buildMatchContext` never
+  populated `qualitygate.MatchContext.Repo`, so the documented `on_repo:` gate
+  matcher always compared against `""` — dead since it shipped.
+- **`kind: compose` had no mysql readiness probe, so a wrapped mysql went ready
+  ~1.6s early.** `compose.ready_probe` offered only `tcp` / `redis` / `postgres`
+  / `http`, leaving a compose-wrapped mysql stuck on the bare-dial `tcp`
+  default — reintroducing, for `kind: compose`, the exact race
+  `plugins/engine/mysql`'s own `dockerReadyCheck` had to fix: a Docker host
+  port's forwarding accepts the handshake the instant the container starts,
+  while the `mysql:8.x` image is still bootstrapping its datadir behind
+  `--skip-networking`. Measured against a real `mysql:8.4` container: ~1.6s of
+  `tcp=ready` while every real connection got `EOF`. Adds a `mysql` probe that
+  reads the server's Initial Handshake Packet; existing probe users are
+  unaffected.
+- **The observer autostart spawn gate could start a second daemon.**
+  `startObserverDaemon` trusted the pid file alone, while `observer
+  stop`/`status`/doctor already fell back to a process-table scan (the fix #47
+  shipped for #45) — that fallback was never carried into the shared start path
+  v0.13.0's autostart wired onto every `UserPromptSubmit`. A live daemon with a
+  missing or stale pid file therefore got a twin, silently doubling the minting
+  rate. All four call sites now route through one `findLiveDaemon` helper
+  (pid file → process scan, self-healing the pid file when the scan is what
+  found it), so the "is it running" verdict cannot diverge again.
+- **Autostart's earliest failures left no trace at all.**
+  `dispatchObserverAutostart` documents that a spawn failure "stays diagnosable
+  instead of vanishing without a trace" via the observer log — but it only
+  logged when `startObserverDaemon` returned a non-empty `logPath`, and that is
+  `""` for exactly its two earliest failure modes (`resolveObserverProject` /
+  `EnsureProjectDirs` erroring, e.g. a permission problem on a fresh opt-in
+  machine). Since autostart runs every turn, those failed silently forever. Adds
+  a project-independent `observer-autostart-errors.log` fallback.
+- **A sub-floor `interval_sec` rejected the entire `.bough.yaml`.**
+  `InstinctObserver.IntervalSec` carried `validate:"omitempty,min=60"` while
+  `observerAutostartInterval` already floors any sub-60 value to the default at
+  read time. Because `Config.Validate()` validates the whole struct in one pass,
+  one typo'd `interval_sec` failed the whole config load — breaking every
+  unrelated feature sharing it (quality gates included) instead of degrading to
+  the default the runtime already handles.
+- **`bough create` missed a whole shape of "prunable" worktree.** v0.15.0's
+  recovery fires only when `os.Stat(dst)` returns `ErrNotExist`, which detects
+  the "directory is gone" shape only. `git worktree list --porcelain` also flags
+  `prunable` when the directory survives but its `.git` file (or git's
+  admin-side gitdir record) was removed independently — a partial teardown, a
+  dotfile-stripping cleanup. `os.Stat` reports no error there, so the guard
+  silently returned the old no-op. `AddOrAttach` now trusts git's own `prunable`
+  annotation (parsed from porcelain output into a new `Worktree.Prunable`
+  field), keeping the ENOENT check as a fallback and preserving v0.15.0's
+  EACCES/stale-NFS protection unchanged.
+- **The root `CLAUDE.md` symlink was never relinked by `bough backfill`.**
+  v0.14.0 wired `linkWorktreeClaudeMd` into `bough create` only. Any worktree
+  bootstrapped before that release, or registered by an earlier `backfill`,
+  therefore never got the symlink — and `backfill`, the documented
+  non-destructive repair for exactly this gap, silently did nothing about it.
+  Same defect class as #61 (fixed for `.claude/{skills,agents,commands}` by
+  this sweep's evolve fix, which predated this feature and never covered it).
+- **Evolved skills/agents/commands disagreed on which root they belong to
+  (closes #60, #61, #62).** `bough create` linked worktree skills against
+  `loadConfigAndRoot`'s possibly-`monorepo_root:`-relocated root while `bough
+  evolve` deployed into `resolveMonorepoRoot`'s un-relocated marker dir (#60);
+  `backfill` never relinked pre-existing worktrees (#61); and only skills were
+  deployed to project scope, so every evolved agent and command was written and
+  then linked nowhere Claude Code reads (#62). Adds `resolveIdentityRoot`,
+  generalizes the deploy/link helpers to `.claude/{skills,agents,commands}`, and
+  makes `backfill` relink every discovered worktree.
+- **Emitted source-instinct paths could resolve against the reader's cwd.**
+  `sourceInstinctsBlock`/`RenderCommand` rendered `homunculus.Instinct.Path`
+  verbatim into a persisted "resolvable" provenance reference, but that path is
+  relative whenever `BOUGH_HOMUNCULUS_DIR`/`XDG_DATA_HOME` is set to a relative
+  path — defeating the feature's own purpose. `c9cece5` already fixed this
+  hazard for the sibling `ensureSymlink` path the same day; it never reached
+  `emit.go`.
+- **`pickFreePort`'s exhaustion fallback could still hand two roles the same
+  port.** The v0.9-era conformance fix added a `claimed` map to prevent exactly
+  this, but the scan-exhausted fallback returned `low` unconditionally, ignoring
+  it — so a multi-port engine with narrow/overlapping role ranges could collide
+  through the fallback, reintroducing the bug the `claimed` map exists to
+  prevent.
+- **Elasticsearch's datadir chown error was dropped from its own "actionable"
+  message.** `ensureDatadirWritableByContainer`'s hard-fail claimed "chown and
+  chmod both failed" but only wrapped the *chmod* error via `%w` — the chown
+  error was computed in an inner scope and never reached that branch, discarding
+  the diagnostic detail the error path exists to surface.
+- **`bough plugins --help` advertised a subcommand that doesn't exist.** The
+  v0.9.0 reset deleted `internal/cli/plugin_verify.go` and its `AddCommand`
+  wiring but left the cobra `Short` text reading "List and verify bough plugin
+  binaries", so `--help` kept claiming a `verify` capability — while
+  `docs/SIGNING.md` already documented its absence accurately. Now guarded by a
+  regression test that fails if the text and the wired subcommands drift apart
+  again.
+
+### Docs
+
+- **`docs/MIGRATION-v0.3-to-v0.4.md` claimed the v0.3 config fallback was
+  removed; it is still live.** A v0.9-era docs pass conflated two separate
+  fallbacks: the **plugin gRPC handshake** (`DBProvider`/`BOUGH_DB_PLUGIN`)
+  really was removed in v0.5.0, but the **config-file fallback** (old YAML file
+  name, section names, field names) was not — `migrateLegacy()` still converts
+  `schema_version: 1` today, `resolveConfigPath` still falls back to
+  `.worktree-isolation.yaml`, and the schema validator still accepts the old
+  value. The same over-broad claim was in README's roadmap table. Both corrected
+  to distinguish what v0.5.0 actually removed from what is still read (with a
+  deprecation warning, no scheduled removal).
+- **macOS chown behavior in the elasticsearch datadir comment was backwards.**
+  The comment asserted "on macOS Docker Desktop the VirtioFS proxy papers over
+  the uid mismatch and chown also succeeds." Disproven on a real Darwin host:
+  a non-root `os.Chown(dir, 1000, 0)` returns `operation not permitted` (the
+  syscall runs on the host filesystem, before any container/VirtioFS
+  involvement), and a real `elasticsearch:7.17.29` container bind-mounted to a
+  plain never-chowned 0o755 datadir starts cleanly with files coming back owned
+  by the *host* user — the opposite of native Linux's uid passthrough.
+- README's planned Homebrew tap line still named the pre-transfer personal
+  account (`brew tap ikeikeikeike/tap`); pointed at `threecorp/tap` for
+  consistency with the rest of the post-transfer install instructions.
+
 ## v0.15.0
 
 Recover a "prunable" worktree (registered in git but with its dir deleted
