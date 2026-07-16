@@ -732,26 +732,39 @@ func defaultClaudeSettingsPath() (string, error) {
 	return claudeSettingsPath(HookScopeProject)
 }
 
-// claudeSettingsPath resolves the settings.json bough manages for
-// the requested scope. Project scope anchors against the current
-// working directory; user scope expands ~/.claude/settings.json.
-func claudeSettingsPath(scope HookScope) (string, error) {
+// claudeDir resolves the .claude directory bough manages for the requested
+// scope. Project scope anchors against the current working directory; user
+// scope expands ~/.claude. Every artifact kind bough installs lives under this
+// one directory (settings.json for hooks, skills/ and commands/ for the rest),
+// so the scope vocabulary is resolved here once rather than per kind.
+func claudeDir(scope HookScope) (string, error) {
 	switch scope {
 	case "", HookScopeProject:
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", fmt.Errorf("getwd: %w", err)
 		}
-		return filepath.Join(cwd, ".claude", "settings.json"), nil
+		return filepath.Join(cwd, ".claude"), nil
 	case HookScopeUser:
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("UserHomeDir: %w", err)
 		}
-		return filepath.Join(home, ".claude", "settings.json"), nil
+		return filepath.Join(home, ".claude"), nil
 	default:
-		return "", fmt.Errorf("unknown hook scope %q (use 'project' or 'user')", scope)
+		return "", fmt.Errorf("unknown scope %q (use 'project' or 'user')", scope)
 	}
+}
+
+// claudeSettingsPath resolves the settings.json bough manages for
+// the requested scope. Project scope anchors against the current
+// working directory; user scope expands ~/.claude/settings.json.
+func claudeSettingsPath(scope HookScope) (string, error) {
+	dir, err := claudeDir(scope)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "settings.json"), nil
 }
 
 // commandCtx returns the cobra command's context or background

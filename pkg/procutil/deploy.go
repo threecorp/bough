@@ -15,12 +15,22 @@ import (
 	"path/filepath"
 )
 
-// DeployFlake materialises the embedded asset subtree rooted at subdir
-// (e.g. "nix") into dst. Re-running is idempotent: existing files are
-// overwritten so a future plugin upgrade picks up the new wrapper
-// without manual cleanup. Plugins pass their package-level //go:embed FS
-// as assets — embed.FS satisfies fs.FS.
+// DeployFlake materialises a plugin's embedded nix flake subtree into dst.
+// Thin wrapper over DeployAssets, kept because "deploy the flake" is what the
+// four engine plugins actually mean at their call sites.
 func DeployFlake(assets fs.FS, subdir, dst string) error {
+	return DeployAssets(assets, subdir, dst)
+}
+
+// DeployAssets materialises the embedded asset subtree rooted at subdir
+// (e.g. "nix", "skills", "commands") into dst. Re-running is idempotent:
+// existing files are overwritten so a future upgrade picks up new content
+// without manual cleanup. Callers pass their package-level //go:embed FS as
+// assets — embed.FS satisfies fs.FS.
+//
+// Nothing here is nix-specific; the engine plugins' flakes and bough's Claude
+// Code skills / commands are both "write this embedded tree to that directory".
+func DeployAssets(assets fs.FS, subdir, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}

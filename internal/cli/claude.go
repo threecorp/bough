@@ -43,6 +43,8 @@ install broadly; hooks are not, so they default to project scope.`,
 	}
 	cmd.AddCommand(
 		newHookCmd(),
+		newSkillCmd(),
+		newCommandCmd(),
 		newDoctorCmd(),
 	)
 	return cmd
