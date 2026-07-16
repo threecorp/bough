@@ -42,16 +42,17 @@ written registry.`,
 
 // runBackfill walks the monorepo's worktrees dir, adds any unregistered
 // name to the registry with an empty entry, and relinks every discovered
-// worktree's project-scoped .claude/{skills,agents,commands} symlinks. The
-// follow-up `bough create <name>` is what actually allocates ports —
-// backfill alone is the "stop allocator from re-issuing this name's slot"
-// pass, plus a non-destructive repair for worktrees that predate the
-// project-scope evolved-artifact move (only `bough create` wired
-// linkWorktreeArtifacts, so a hand-created / pre-v0.9.20 / already-backfilled
-// worktree never got the link and silently loaded zero evolved artifacts —
-// #61). The relink runs for every worktree dir, not just newly-registered
-// ones, since ensureSymlink is idempotent and a no-op on an already-correct
-// link.
+// worktree's root CLAUDE.md and project-scoped .claude/{skills,agents,commands}
+// symlinks. The follow-up `bough create <name>` is what actually allocates
+// ports — backfill alone is the "stop allocator from re-issuing this name's
+// slot" pass, plus a non-destructive repair for worktrees that predate a
+// link being wired only into `bough create` (a hand-created / pre-move /
+// already-backfilled worktree never got the link and silently missed the
+// linked content — #61 for .claude/{skills,agents,commands}; the same gap
+// applied to CLAUDE.md, wired into `create` by #106 but never into backfill
+// until now). The relink runs for every worktree dir, not just
+// newly-registered ones, since ensureSymlink is idempotent and a no-op on an
+// already-correct link.
 func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot, identityRoot string) error {
 	root := worktreesDir(monorepoRoot)
 	entries, err := os.ReadDir(root)
@@ -77,7 +78,9 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot, identityRoo
 			continue
 		}
 		name := e.Name()
-		linkWorktreeArtifacts(stderr, identityRoot, filepath.Join(root, name))
+		wtRoot := filepath.Join(root, name)
+		linkWorktreeClaudeMd(stderr, monorepoRoot, wtRoot)
+		linkWorktreeArtifacts(stderr, identityRoot, wtRoot)
 		relinked++
 		if _, exists := reg[name]; exists {
 			continue
@@ -86,7 +89,7 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot, identityRoo
 		added++
 	}
 	if relinked > 0 {
-		fmt.Fprintf(stderr, "[backfill] relinked project-scoped .claude artifacts for %d worktree dir(s)\n", relinked)
+		fmt.Fprintf(stderr, "[backfill] relinked CLAUDE.md and project-scoped .claude artifacts for %d worktree dir(s)\n", relinked)
 	}
 	if added == 0 {
 		fmt.Fprintln(stderr, "[backfill] all worktree dirs already registered — no changes")
