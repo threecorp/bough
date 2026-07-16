@@ -556,30 +556,77 @@ func observerAutostartInterval(cfg *config.Config) int {
 // (when present) and runs the entries whose matchers fit the
 // current event. Configuration absence is a hard non-error: a
 // monorepo with no gates declared sees no behaviour change.
+//
+// v0.7.2 originally resolved cfgPath as a bare cwd-relative
+// ".bough.yaml" (or $BOUGH_CONFIG), which only found the canonical
+// config when `bough hook handle` happened to run with cwd exactly at
+// the monorepo root. Per this file's own documented ECC model, every
+// sub-repo / worktree session pools into one monorepo project — so a
+// session operating inside e.g. <root>/extremo-api/ (the ordinary
+// case) silently never found <root>/.bough.yaml and no gate ever ran.
+// This is the same class of bug already fixed for
+// dispatchObserverAutostart (see resolveObserverConfig /
+// TestResolveObserverConfig_LegacyConfigFallback) but never applied to
+// this sibling dispatcher. Now resolves through resolveMonorepoRoot +
+// resolveConfigPath (the canonical/legacy/--config fallback every
+// other bough command uses), with $BOUGH_CONFIG kept as the
+// highest-priority override.
 func dispatchQualityGates(c *cobra.Command, event string, payload []byte) {
-	cfgPath := os.Getenv("BOUGH_CONFIG")
-	if cfgPath == "" {
-		cfgPath = ".bough.yaml"
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
 	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		return // no .bough.yaml in cwd → nothing to run.
+	root := resolveMonorepoRoot(cwd)
+	cfgPath := resolveConfigPath(c, root)
+	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
+		cfgPath = v
 	}
 	cfg, err := loadConfigQuiet(cfgPath)
 	if err != nil || len(cfg.QualityGates) == 0 {
 		return
 	}
-	mc := buildMatchContext(event, payload)
+	mc := buildMatchContext(event, payload, repoNameFromCwd(cwd, root))
 	gates := convertGates(cfg.QualityGates)
 	_ = qualitygate.RunMatching(commandCtx(c), gates, mc, c.ErrOrStderr())
+}
+
+// repoNameFromCwd derives the qualitygate on_repo matcher value: the
+// sub-repo directory name (config.Repository.Name) that cwd sits
+// inside, relative to the resolved monorepo root. Mirrors
+// resolveMonorepoRoot's worktree-segment handling — inside
+// <root>/worktrees/<branch>/<repo>/... (or the legacy hidden
+// .worktrees/), the repo is the segment AFTER the worktree name;
+// otherwise it is the first segment directly under root. Returns ""
+// when cwd does not resolve to any sub-repo (e.g. cwd == root, or cwd
+// sits outside root), so an on_repo matcher wildcards rather than
+// false-matching on garbage.
+func repoNameFromCwd(cwd, root string) string {
+	rel, err := filepath.Rel(root, cwd)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	segs := strings.Split(filepath.ToSlash(rel), "/")
+	if segs[0] == worktreesName || segs[0] == legacyWtName {
+		if len(segs) < 3 {
+			return ""
+		}
+		return segs[2]
+	}
+	return segs[0]
 }
 
 // buildMatchContext projects the Claude Code hook payload into a
 // qualitygate.MatchContext. The payload shape varies by event;
 // PreToolUse / PostToolUse carry tool_name + tool_input. Missing
 // fields fall through as the empty string so an unmatcher matcher
-// still wildcards correctly.
-func buildMatchContext(event string, payload []byte) qualitygate.MatchContext {
-	mc := qualitygate.MatchContext{Event: event}
+// still wildcards correctly. repo is the sub-repo directory name
+// derived from cwd (repoNameFromCwd) — left unset, every gate's
+// on_repo matcher (config.QualityGateCfg.OnRepo /
+// qualitygate.Gate.OnRepo) compared against an always-empty Repo
+// field and could never match, silently disabling any gate an
+// operator scoped to one sub-repo.
+func buildMatchContext(event string, payload []byte, repo string) qualitygate.MatchContext {
+	mc := qualitygate.MatchContext{Event: event, Repo: repo}
 	if len(payload) == 0 {
 		return mc
 	}
