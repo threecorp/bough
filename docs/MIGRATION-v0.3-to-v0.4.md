@@ -9,23 +9,31 @@ the cost once.
 This guide covers:
 
 1. What changed on the wire and on disk
-2. What `bough` reads as a fallback during v0.4.x (no immediate action
-   needed for existing deployments)
-3. What needs editing before v0.5.0 (when the fallbacks are removed)
+2. What `bough` reads as a fallback today (no immediate action needed
+   for existing deployments)
+3. What was actually removed in v0.5.0, and what was not
 
 ## TL;DR
 
-**v0.5.0 already shipped and removed the v0.3.x fallback described
-below.** If you are still running a `.worktree-isolation.yaml` config
-(or a plugin binary built before v0.4.0), migrate to `.bough.yaml`
-before upgrading past v0.4.x — a current bough host no longer reads
-the old file, section names, field names, or gRPC handshake key at
-all; see Timeline below.
+**Two separate fallbacks are described below, and only one of them was
+removed.** v0.5.0 shipped and removed the v0.3.x **plugin gRPC
+handshake** fallback only: the `DBProvider` interface and the
+`BOUGH_DB_PLUGIN` magic-cookie key are gone, so a plugin binary that
+has not been rebuilt against `plugins/engine/api` (v0.4.0+) no longer
+spawns under a current host.
 
-(Historical, for anyone running a pinned v0.4.x host: during that
-window your existing `.worktree-isolation.yaml` kept working without
-edits — the host loader detected the old file and read it with a
-deprecation warning. That grace period ended at v0.5.0.)
+The **config-file** fallback is a separate code path
+(`internal/config`'s `migrateLegacy()`) and was never removed: a
+current bough host still reads `.worktree-isolation.yaml` when
+`.bough.yaml` is absent, still accepts the old `databases:` /
+`port_range:` / `initial_databases:` names under `schema_version: 1`,
+and still prints the same deprecation warning it always has. There is
+no scheduled removal date for this fallback — see Timeline below.
+
+If you are still running a `.worktree-isolation.yaml` config, it keeps
+working; if you are still running a plugin binary built before
+v0.4.0, rebuild it against `plugins/engine/api` before upgrading past
+v0.4.x.
 
 ## What renamed
 
@@ -106,9 +114,16 @@ External plugin maintainers (your `bough-plugin-<kind>` repo):
   deprecation warning.
 - **v0.4.x** — every minor release prints the same deprecation warnings;
   no behavioural change.
-- **v0.5.0** — old YAML file name, old section name, old field names,
-  and old magic-cookie fallback are all removed. Plugins that have not
-  rebuilt against v0.4.0+ stop loading.
+- **v0.5.0** — the old **plugin gRPC handshake** (`DBProvider` /
+  `BOUGH_DB_PLUGIN`) is removed. Plugins that have not rebuilt against
+  `plugins/engine/api` (v0.4.0+) stop loading.
+- **v0.5.0 onward** — the old YAML file name, section name, and field
+  names are **not** removed: `internal/config`'s `migrateLegacy()`
+  keeps reading `.worktree-isolation.yaml` / `databases:` /
+  `port_range:` / `initial_databases:` under `schema_version: 1`, and
+  has continued to be extended release over release (e.g. to mirror
+  new v0.5+ config sections) rather than retired. Treat this fallback
+  as long-lived, not as a v0.5.0 deadline.
 
 If you are unsure how to migrate, open an issue at
 https://github.com/threecorp/bough/issues with your current
