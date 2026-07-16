@@ -109,14 +109,25 @@ func startObserverDaemon(root string, interval int) (started bool, pid int, logP
 	// live for this function's check-then-spawn section.
 	release, ok := acquireStartLock(pidPath + ".lock")
 	if !ok {
-		if running, existing := daemonRunning(pidPath, ident.Root); running {
+		if running, existing := findLiveDaemon(pidPath, ident.Root); running {
 			return false, existing, logPath, nil
 		}
 		return false, 0, logPath, nil
 	}
 	defer release()
 
-	if running, existing := daemonRunning(pidPath, ident.Root); running {
+	// findLiveDaemon (not the bare pid-file check) so a pid file that is
+	// missing, stale, or was never written — a daemon started out-of-band,
+	// one whose spawn raced the pid-file write, or one left behind after
+	// an operator cleared the homunculus dir by hand — still counts as
+	// "already running". Before this fell back only in `stop` / `status`
+	// / doctor's posture check; `start`'s own spawn gate trusted the pid
+	// file alone, so exactly that situation made it spawn a SECOND daemon
+	// for the same root. That gap was tolerable while `start` was a rare,
+	// deliberate operator command; autostart now runs this same gate on
+	// every UserPromptSubmit, which turns a rare edge case into a
+	// standing risk of silently doubling the minting rate.
+	if running, existing := findLiveDaemon(pidPath, ident.Root); running {
 		return false, existing, logPath, nil
 	}
 	// Re-exec ourselves in --daemon mode as a detached child.
@@ -138,6 +149,34 @@ func startObserverDaemon(root string, interval int) (started bool, pid int, logP
 	return true, child.Process.Pid, logPath, nil
 }
 
+// findLiveDaemon reports whether a live observer daemon exists for root,
+// checking the pid file first (the cheap, common-case path) and falling
+// back to a process-table scan when the file is missing, stale, or names
+// a pid that is not our daemon. Every caller that must decide "is a
+// daemon already up for this root" — the start gate, `stop`, `status`,
+// and doctor's posture line — goes through this one function so the
+// answer cannot diverge between "should I spawn a new one" and "is one
+// already running" the way it used to (the start gate trusted the pid
+// file alone and could spawn a duplicate next to a daemon the other
+// three call sites would have found just fine).
+//
+// When the fallback scan is what found it, the pid file is missing or
+// wrong by definition, so it is best-effort self-healed here to the
+// discovered pid — the same "own the pid file" idea `_run-daemon`
+// already applies to itself on startup — so the next lookup for this
+// root is the cheap pid-file path again instead of paying for another
+// full process-table scan.
+func findLiveDaemon(pidPath, root string) (running bool, pid int) {
+	if running, pid := daemonRunning(pidPath, root); running {
+		return true, pid
+	}
+	if dpid, ok := findDaemonByRoot(root); ok {
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(dpid)), 0o644)
+		return true, dpid
+	}
+	return false, 0
+}
+
 // observerDaemonRunning reports whether a live observer daemon exists for
 // the monorepo resolved from root. Used by `bough doctor` to show the
 // autostart posture. Best-effort: a resolution failure reads as "not
@@ -147,11 +186,8 @@ func observerDaemonRunning(root string) bool {
 	if err != nil {
 		return false
 	}
-	if running, _ := daemonRunning(observerPidFile(layout, ident.ID), ident.Root); running {
-		return true
-	}
-	_, ok := findDaemonByRoot(ident.Root)
-	return ok
+	running, _ := findLiveDaemon(observerPidFile(layout, ident.ID), ident.Root)
+	return running
 }
 
 // newObserverStartCmd / Stop / Status extend the `bough observer`
@@ -201,17 +237,12 @@ func newObserverStopCmd() *cobra.Command {
 				return err
 			}
 			pidPath := observerPidFile(layout, ident.ID)
-			running, pid := daemonRunning(pidPath, ident.Root)
-			if !running {
-				// The pid file is stale or missing, but a daemon may
-				// still be alive with a pid the file never captured (a
-				// spawn race, or one started out-of-band). Discover it
-				// by command line before giving up, so a live daemon is
-				// never orphaned by a bad pid file.
-				if dpid, ok := findDaemonByRoot(ident.Root); ok {
-					running, pid = true, dpid
-				}
-			}
+			// findLiveDaemon: the pid file may be stale or missing while a
+			// daemon is still alive with a pid the file never captured (a
+			// spawn race, or one started out-of-band) — the fallback
+			// process-table scan finds it before giving up, so a live
+			// daemon is never orphaned by a bad pid file.
+			running, pid := findLiveDaemon(pidPath, ident.Root)
 			if !running {
 				fmt.Fprintln(cmd.OutOrStdout(), "observer not running")
 				_ = os.Remove(pidPath)
@@ -263,12 +294,7 @@ func newObserverStatusCmd() *cobra.Command {
 				return err
 			}
 			pidPath := observerPidFile(layout, ident.ID)
-			running, pid := daemonRunning(pidPath, ident.Root)
-			if !running {
-				if dpid, ok := findDaemonByRoot(ident.Root); ok {
-					running, pid = true, dpid
-				}
-			}
+			running, pid := findLiveDaemon(pidPath, ident.Root)
 			if running {
 				fmt.Fprintf(cmd.OutOrStdout(), "observer running (pid %d)\nlog: %s\n", pid, layout.ObserverLog(ident.ID))
 			} else {
