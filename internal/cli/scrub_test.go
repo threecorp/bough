@@ -152,6 +152,44 @@ func TestSanitizeObservation_NoSiblingLeakOnFallback(t *testing.T) {
 	}
 }
 
+// TestSanitizeObservation_CompoundSecretKeyNotLeaked is the retrospective-review
+// fix for PR #57's own structured fallback: secretKeyRE was anchored
+// (`^(...)$`), so it only matched a BARE key like "token" and missed compound
+// key names — "access_token", "refresh_token", "client_secret", "auth_token"
+// — that a real API response actually uses. For an UNQUOTED scalar under one
+// of those keys, the byte-level scrub still broke JSON validity (triggering
+// this exact fallback), but the fallback's key gate then silently let the
+// secret through in clear — the very leak the fallback exists to prevent.
+func TestSanitizeObservation_CompoundSecretKeyNotLeaked(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		leak string // the secret value that must not survive in cleartext
+	}{
+		{"access_token", `{"access_token":12345678}`, "12345678"},
+		{"refresh_token", `{"tool_input":{"refresh_token":98765432101234}}`, "98765432101234"},
+		{"client_secret", `{"client_secret":13579246813579}`, "13579246813579"},
+		{"nested under array", `{"data":[{"auth_token":11122233344}]}`, "11122233344"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !json.Valid([]byte(tc.in)) {
+				t.Fatalf("test input itself is not valid JSON: %s", tc.in)
+			}
+			out := sanitizeObservation([]byte(tc.in))
+			if !json.Valid(out) {
+				t.Fatalf("sanitize produced invalid JSON: %s", out)
+			}
+			if strings.Contains(string(out), tc.leak) {
+				t.Errorf("LEAK: compound-key secret survived in cleartext:\n  in:  %s\n  out: %s", tc.in, out)
+			}
+			if !strings.Contains(string(out), "[REDACTED]") {
+				t.Errorf("compound-key secret was not redacted at all:\n  in:  %s\n  out: %s", tc.in, out)
+			}
+		})
+	}
+}
+
 // TestScrubSecrets_EscapedJSONStringValue is the v0.9.18 regression for the
 // recall gap: a secret inside an ESCAPED JSON string value (a tool whose
 // stdout is itself a JSON body) used to slip past redaction because the `\"`

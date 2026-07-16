@@ -144,9 +144,15 @@ func sanitizeObservation(b []byte) []byte {
 	return scrubbed
 }
 
-// secretKeyRE matches a JSON KEY that names a secret — the same vocabulary as
-// secretPattern, anchored as a whole key.
-var secretKeyRE = regexp.MustCompile(`(?i)^(api[_-]?key|token|secret|password|authorization|credentials?|auth)$`)
+// secretKeyRE matches a JSON key that NAMES or CONTAINS a secret — the same
+// vocabulary and substring-matching philosophy as secretPattern (not anchored
+// to the whole key). An earlier anchored `^(...)$` version only matched a
+// bare key like "token", missing the far more common compound key names a
+// real tool response uses — "access_token", "refresh_token", "client_secret",
+// "auth_token" — so an unquoted scalar under one of those slipped through
+// this fallback's key gate in clear (the exact leak this fallback exists to
+// prevent). See TestSanitizeObservation_CompoundSecretKeyNotLeaked.
+var secretKeyRE = regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|authorization|credentials?|auth)`)
 
 // structuredScrub redacts secrets over the PARSED JSON so the result is valid
 // by construction: any value under a secret-named key becomes "[REDACTED]", and
