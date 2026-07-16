@@ -263,6 +263,64 @@ func TestRunner_AddOrAttach_RecreatesPrunableWorktree(t *testing.T) {
 	}
 }
 
+// TestRunner_AddOrAttach_RecreatesPrunableWorktree_DirSurvivesGitLinkGone
+// covers a "prunable" shape the ENOENT-only guard in AddOrAttach cannot see:
+// the worktree directory itself is still present on disk (os.Stat succeeds),
+// but its `.git` file — the link back to the main repo's admin record — was
+// removed independently (a cleanup pass that strips dotfiles, or a teardown
+// interrupted right after unlinking `.git` but before the rest of the tree).
+// `git worktree list --porcelain` still flags this entry "prunable" (verified
+// against real git: "prunable gitdir file points to non-existent location"),
+// so AddOrAttach must recover it via wt.Prunable even though a bare os.Stat(dst)
+// reports no error at all.
+func TestRunner_AddOrAttach_RecreatesPrunableWorktree_DirSurvivesGitLinkGone(t *testing.T) {
+	src := initBareRepo(t)
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "wt")
+	r := NewRunner()
+
+	if _, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Link", "main"); err != nil {
+		t.Fatalf("initial add: %v", err)
+	}
+
+	// Remove only the worktree-side `.git` file, leaving the rest of the
+	// directory (and the directory entry itself) intact.
+	if err := os.Remove(filepath.Join(dst, ".git")); err != nil {
+		t.Fatalf("remove .git link: %v", err)
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("precondition: dst must still exist on disk, got: %v", err)
+	}
+
+	wts, err := r.List(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawPrunable bool
+	for _, wt := range wts {
+		if wt.Branch == "F-Link" {
+			sawPrunable = wt.Prunable
+		}
+	}
+	if !sawPrunable {
+		t.Fatalf("precondition: git worktree list did not flag the broken entry prunable: %+v", wts)
+	}
+
+	created, _, err := r.AddOrAttach(context.Background(), src, dst, "F-Link", "main")
+	if err != nil {
+		t.Fatalf("recovery add: want the prunable worktree re-materialised, got error: %v", err)
+	}
+	if created {
+		t.Errorf("recovery took the -b (new-branch) path; want the attach path (created=false) onto the surviving F-Link branch")
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".git")); err != nil {
+		t.Errorf(".git link was not restored: %v", err)
+	}
+}
+
 func TestRunner_RemoveAndDeleteBranch(t *testing.T) {
 	src := initBareRepo(t)
 	r := NewRunner()

@@ -25,9 +25,10 @@ import (
 
 // Worktree is one entry of `git worktree list --porcelain`.
 type Worktree struct {
-	Path   string // absolute path
-	HEAD   string // commit hash
-	Branch string // branch shortname ("" for detached HEAD)
+	Path     string // absolute path
+	HEAD     string // commit hash
+	Branch   string // branch shortname ("" for detached HEAD)
+	Prunable bool   // true when git itself flags this entry as removable by `git worktree prune`
 }
 
 // Runner exposes the wrapped git operations. The cmd field is injectable
@@ -105,16 +106,19 @@ func (r *Runner) DetectBase(ctx context.Context, repoPath, fallback string) (str
 // fetch, else the local <base>) — so the caller logs the true source.
 //
 // Idempotency: if `dst` is already a registered worktree AND its dir
-// still exists on disk, the call returns `(false, base, nil)`
-// immediately. This makes the hook safe to re-invoke — Claude Code
-// re-fires WorktreeCreate every time the user runs
+// still exists on disk AND git does not itself flag the entry
+// "prunable", the call returns `(false, base, nil)` immediately. This
+// makes the hook safe to re-invoke — Claude Code re-fires
+// WorktreeCreate every time the user runs
 // `claude --worktree F-X --resume <session>`, so a "second call is a
 // no-op" contract is required.
 //
 // Recovery: two stale states are healed instead of no-op'd. (a) `dst`
-// is registered but its dir is gone — git reports it "prunable", from a
-// partial teardown or an out-of-band `rm -rf` — so a bare path match is
-// not proof of materialisation; and (b) the dir exists but is NOT in
+// is registered but git considers it "prunable" — either the whole dir
+// is gone (a partial teardown or an out-of-band `rm -rf`) or the dir
+// survives but its own `.git` link (or git's admin-side record) was
+// removed independently — so a bare path match is not proof of
+// materialisation; and (b) the dir exists but is NOT in
 // `git worktree list` (a leftover orphan from an interrupted prior run).
 // In both cases Prune runs first so the subsequent `worktree add` is not
 // blocked by leftover git admin state, and the worktree is
@@ -142,23 +146,31 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 		for _, wt := range wts {
 			if wt.Path == resolvedDst {
 				// A path match is only a materialised no-op when the
-				// worktree dir still exists on disk. `git worktree list`
-				// also reports "prunable" entries — a registration whose
-				// dir was deleted out-of-band (a partial teardown, a
-				// manual `rm -rf`, an interrupted run) while the git admin
-				// record survived. Treating those as a no-op is what left
-				// `claude --worktree` sessions with a half-materialised
-				// worktree: the missing repos were reported "already
-				// registered" and never recreated. When the dir is gone,
-				// fall through to the prune + add below so it comes back
-				// (attach path, on the existing branch).
+				// worktree dir still exists on disk AND git does not
+				// itself consider the entry prunable. `git worktree list`
+				// flags "prunable" whenever `git worktree prune` would
+				// remove the entry — not only when the whole dir is gone
+				// (os.Stat ENOENT), but also when the dir survives while
+				// its own `.git` file (or the admin-side gitdir record) was
+				// removed independently, e.g. a partial teardown that
+				// cleared `.git` before the rest of the tree, or a cleanup
+				// script that strips dotfiles. A bare os.Stat cannot see
+				// that second case — the dir is right there — so trust
+				// git's own verdict first and treat ENOENT as a fallback
+				// for git versions/entries where the annotation is absent.
+				// Either signal firing is what left `claude --worktree`
+				// sessions with a half-materialised worktree: the entry was
+				// reported "already registered" and never recreated. Fall
+				// through to the prune + add below so it comes back (attach
+				// path, on the existing branch).
 				//
-				// Only genuine non-existence triggers recovery: a stat that
-				// fails for any other reason (EACCES on a parent dir, a
-				// momentarily-stale NFS mount) must keep the old no-op rather
-				// than tear down a worktree that is actually present — the
-				// intent is "the dir was deleted", not "the dir is unreadable".
-				if _, statErr := os.Stat(dst); !errors.Is(statErr, os.ErrNotExist) {
+				// A stat that fails for a reason other than ENOENT (EACCES
+				// on a parent dir, a momentarily-stale NFS mount) is not
+				// proof of prunability by itself and keeps the old no-op —
+				// unless git's own prunable flag already fired — rather
+				// than tear down a worktree that might actually be present.
+				_, statErr := os.Stat(dst)
+				if !wt.Prunable && !errors.Is(statErr, os.ErrNotExist) {
 					return false, base, nil
 				}
 				break
@@ -328,6 +340,13 @@ func (r *Runner) List(ctx context.Context, repoPath string) ([]Worktree, error) 
 			cur.HEAD = strings.TrimPrefix(line, "HEAD ")
 		case strings.HasPrefix(line, "branch "):
 			cur.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case strings.HasPrefix(line, "prunable"):
+			// "prunable" or "prunable <reason>" — git's own verdict on
+			// whether `git worktree prune` would remove this entry (dir
+			// missing, gitdir file broken, etc). See AddOrAttach, which
+			// trusts this over re-deriving "is this dir really gone" from
+			// a single os.Stat.
+			cur.Prunable = true
 		}
 	}
 	flush()
