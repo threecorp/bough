@@ -3,6 +3,7 @@
 package elasticsearch
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -326,5 +327,38 @@ func TestEnsureDatadirWritableByContainer_ChmodFallback(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o777 {
 		t.Errorf("datadir mode = %o, want 0o777 after the fallback", info.Mode().Perm())
+	}
+}
+
+// TestActionableDatadirError covers the hard-fail error path directly
+// (the "third uid" case: datadir owned by neither the caller nor
+// esContainerUID, so both chown and chmod EPERM). This case cannot be
+// exercised end-to-end without root (there is no portable way for a
+// non-root test to create a directory it does not own), so the message
+// construction is extracted into its own function and tested with
+// synthetic errors instead.
+//
+// Regression guard for a real bug found in review: the original version
+// only wrapped the chmod error via a single %w, silently discarding the
+// chown error even though the message claimed "chown and chmod both
+// failed." Both must be present and both must be errors.Is-matchable.
+func TestActionableDatadirError(t *testing.T) {
+	chownErr := errors.New("chown boom")
+	chmodErr := errors.New("chmod boom")
+
+	err := actionableDatadirError("/tmp/es-data", chownErr, chmodErr)
+	if err == nil {
+		t.Fatal("actionableDatadirError(...) = nil, want a non-nil error")
+	}
+	if !errors.Is(err, chownErr) {
+		t.Errorf("error does not wrap the chown error: %v", err)
+	}
+	if !errors.Is(err, chmodErr) {
+		t.Errorf("error does not wrap the chmod error: %v", err)
+	}
+	for _, want := range []string{"/tmp/es-data", "rm -rf"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error message missing %q: %v", want, err)
+		}
 	}
 }
