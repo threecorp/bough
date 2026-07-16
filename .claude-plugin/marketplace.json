@@ -9,7 +9,17 @@
     {
       "name": "bough",
       "source": "./",
-      "description": "Drive bough — per-worktree dev-environment orchestration + continuous-learning instincts — from inside a Claude Code session."
+      "description": "Commands + skill only, no hooks: /bough:* slash commands and the using-bough skill. Inert until invoked, so it is safe at any scope. Pair with `bough claude hook install` when you want observation."
+    },
+    {
+      "name": "bough-hooks",
+      "source": "./claude-plugins/bough-hooks",
+      "description": "Hooks only: bough's observe -> instinct -> inject -> evolve loop plus WorktreeCreate/Remove. Install with --scope project so it observes just that repo."
+    },
+    {
+      "name": "bough-all",
+      "source": "./claude-plugins/bough-all",
+      "description": "Everything: /bough:* commands, the using-bough skill, and the hook loop. Install with --scope project to keep the hooks to one repo."
     }
   ]
 }

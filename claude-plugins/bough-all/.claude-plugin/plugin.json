@@ -1,0 +1,8 @@
+{
+  "name": "bough-all",
+  "description": "Everything bough installs into Claude Code: /bough:* commands, the using-bough skill, and the observe/inject hook loop. Install at project scope to keep the hooks to one repo.",
+  "author": { "name": "ikeikeikeike", "email": "jp.ne.co.jp@gmail.com" },
+  "homepage": "https://github.com/threecorp/bough",
+  "repository": "https://github.com/threecorp/bough",
+  "keywords": ["bough", "worktree", "hooks", "continuous-learning"]
+}
