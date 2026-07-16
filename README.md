@@ -58,7 +58,7 @@ that holds up:
   start` daemon) — each one `claude --print` under your subscription, hard
   rate-limited (10 / session, 30 / hour, 3-failure circuit breaker).
 
-Run `bough doctor` to confirm the posture (it warns if an
+Run `bough claude doctor` to confirm the posture (it warns if an
 `ANTHROPIC_API_KEY`-style variable in your shell would override
 subscription auth).
 
@@ -148,14 +148,22 @@ nix profile install github:threecorp/bough
 ## Use from Claude Code (plugin)
 
 bough is also packaged as a Claude Code plugin, so you can drive it from inside a
-session instead of dropping to a shell. The plugin ships **commands + skill
-only** — no hooks. The `bough` binary itself still comes from **Install** above
-(install it on `PATH` first; the plugin's commands shell out to it).
+session instead of dropping to a shell. The `bough` binary itself still comes
+from **Install** above (install it on `PATH` first; the plugin's commands shell
+out to it).
 
 ```text
 /plugin marketplace add threecorp/bough
-/plugin install bough@bough
+/plugin install bough-all@bough
 ```
+
+Three variants share one tree — pick by what you want acting on your sessions:
+
+| Plugin | Ships | Install when |
+|---|---|---|
+| `bough` | commands + skill | You want `/bough:*` on hand. Inert until invoked, so it is safe at any scope. |
+| `bough-hooks` | hooks | You drive bough from the shell and only want the observe/inject loop. |
+| `bough-all` | commands + skill + hooks | You want the lot in one line. |
 
 Installing wires the user-facing surface:
 
@@ -167,27 +175,33 @@ Installing wires the user-facing surface:
 - **Skill** — `using-bough`, model-invoked guidance on which `/bough:*` fits an
   intent, with a `command -v bough` PATH preflight.
 
-Commands and the skill are inert until invoked, so installing the plugin at the
-default user scope is side-effect-free — it does not observe or inject anything.
+Commands and the skill are inert until invoked — they observe and inject nothing
+until you type one — so the `bough` variant is side-effect-free at any scope.
 
-**Hooks are separate, and deliberately so.** The observe → instinct → inject →
-evolve → preserve loop (plus `WorktreeCreate` / `WorktreeRemove`) is wired by the
-CLI, not the plugin, because hooks fire on *every* event and belong to the
-project you actually want observed:
+**Hooks are the part to scope deliberately.** They carry the observe → instinct
+→ inject → evolve → preserve loop (plus `WorktreeCreate` / `WorktreeRemove`) and
+fire on *every* event in whatever scope they are installed at, so install a
+hook-bearing variant into the repo you actually want observed:
 
 ```text
-bough hook install --scope project      # wire this repo's .claude/settings.json  (recommended)
-bough hook install --scope user         # wire ~/.claude/settings.json (observe every repo)
-bough hook uninstall                     # remove them
+claude plugin install bough-all@bough --scope project   # this repo only  (recommended)
+claude plugin install bough-all@bough --scope user      # every repo on the machine
 ```
 
-Keeping hooks out of the plugin means installing the plugin never bleeds
-observation into unrelated repos (e.g. another repo already running its own
-learning loop). LLM instinct minting stays opt-in on top of that
-(`bough observer start`, or `.bough.yaml` `instinct.observer.autostart`).
+Project scope writes `enabledPlugins` into that repo's `.claude/settings.json`
+and the hooks fire only in sessions started there. The `claude plugin install`
+CLI defaults to user scope when `--scope` is omitted, so pass it.
 
-See [`docs/PLUGIN_CLAUDE_CODE.md`](./docs/PLUGIN_CLAUDE_CODE.md) for the plugin
-layout and why hooks are wired by the CLI, not the plugin.
+Prefer no plugin? The CLI installs the same artifacts from the binary's embedded
+copy — `bough claude hook|skill|command install --scope project`. Wire hooks one
+way or the other, not both: they run the same dispatcher, so keeping both fires
+every event twice (`bough claude doctor` flags it).
+
+LLM instinct minting stays opt-in on top of either route (`bough observer start`,
+or `.bough.yaml` `instinct.observer.autostart`).
+
+See [`docs/PLUGIN_CLAUDE_CODE.md`](./docs/PLUGIN_CLAUDE_CODE.md) for the variant
+layout, the full command / hook reference, and the CLI equivalents.
 
 ## Quick start
 
@@ -282,9 +296,9 @@ teardown:
 ```
 
 Then wire it into Claude Code's `WorktreeCreate` / `WorktreeRemove`
-hooks in `.claude/settings.json`. `bough hook install` writes these
-(and the continuous-learning hooks) for you, all routed through the
-single `bough hook handle` dispatcher:
+hooks in `.claude/settings.json`. `bough claude hook install` writes
+these (and the continuous-learning hooks) for you, all routed through
+the single `bough hook handle` dispatcher:
 
 ```json
 {
@@ -302,9 +316,9 @@ single `bough hook handle` dispatcher:
 > Wire each event through **one** command. `bough hook handle --event
 > WorktreeCreate` and the older `bough create --stdin-json` both run the
 > full create pipeline, so keeping both for the same event runs it twice
-> (a second `post_create` migration pass). `bough hook install` only ever
-> manages its own `bough hook handle` entries, so prefer it and don't also
-> hand-add a `bough create --stdin-json` group.
+> (a second `post_create` migration pass). `bough claude hook install` only
+> ever manages its own `bough hook handle` entries, so prefer it and don't
+> also hand-add a `bough create --stdin-json` group.
 
 After that, `claude --worktree F-FeatureName` deterministically:
 
@@ -430,17 +444,24 @@ bough backfill                          # register pre-existing worktrees/* (or 
 bough config validate [PATH]            # strict YAML schema check
 bough plugins list                      # glob $PATH for bough-plugin-*
 
+# What bough installs into Claude Code
+bough claude hook install | uninstall | list     # hook wiring in .claude/settings.json
+bough claude skill install | uninstall | list    # the using-bough skill
+bough claude command install | uninstall | list  # the /bough:* commands
+bough claude doctor                              # hook wiring + observer capture + cost posture
+
 # Continuous learning (opt-in; instinct.enabled: true)
-bough hook install | uninstall          # Claude Code hook wiring in .claude/settings.json
-bough doctor                            # hook wiring + observer capture + cost posture
 bough observer run-once | start         # mint instincts via claude --print
 bough instinct list | show <id>         # inspect the captured corpus
 bough evolve --generate                 # cluster instincts → skills / agents / commands
 bough ecc import                        # interop with an everything-claude-code corpus
-bough inject-context                    # UserPromptSubmit instinct block (hook)
-bough preserve-instincts                # PreCompact snapshot (hook)
-bough session-end                       # SessionEnd summary + confidence (hook)
 ```
+
+The hook dispatcher's own verbs (`inject-context`, `session-end`,
+`preserve-instincts`, `session-evolve-claudemd`) are fired by
+`bough hook handle`, not typed. They stay reachable for debugging but are out of
+`--help`. `bough hook` / `bough doctor` still work as deprecated aliases of
+their `bough claude ...` homes for the v0.x line.
 
 ## Repository layout
 
@@ -524,8 +545,8 @@ default:
 ```sh
 # Wire bough's hook handlers into .claude/settings.json (idempotent;
 # hand-edited rows are preserved) and inspect the posture.
-bough hook install
-bough doctor                     # hook wiring + observer capture + cost meter
+bough claude hook install
+bough claude doctor              # hook wiring + observer capture + cost meter
 
 # Mint instincts from recent observations, then review the corpus.
 bough observer run-once          # one claude --print pass
@@ -553,7 +574,7 @@ instinct:
 the `UserPromptSubmit` hook ensures the `bough observer start` daemon is running
 for this monorepo, so instincts are minted automatically without a manual start
 per machine. It is **off by default** — the daemon calls `claude --print`, so
-bough never starts it silently, and `bough doctor` always reports whether it is
+bough never starts it silently, and `bough claude doctor` always reports whether it is
 running. Minting stays subject to the self-DoS limiter. (This auto-mints
 instincts only; turning them into skills/agents/commands is still the explicit
 `bough evolve --generate`.)

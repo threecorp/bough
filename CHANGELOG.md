@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+Group everything bough installs into Claude Code under one `bough claude`
+namespace, give skills and commands the CLI path hooks already had, and publish
+`bough-hooks` / `bough-all` plugin variants now that plugin hooks are measured to
+respect project scope.
+
+### Added
+
+- **`bough claude` — one namespace for what bough installs INTO Claude Code**:
+  `bough claude hook|skill|command install|uninstall|list` plus
+  `bough claude doctor`. Two things forced the grouping. `bough plugins` already
+  means bough's own engine binaries, so a `bough plugin ...` verb for the Claude
+  Code kind would have sat one letter from an unrelated command; and the hook
+  dispatcher's internal verbs (`inject-context`, `session-end`,
+  `preserve-instincts`, `session-evolve-claudemd`) sat at root next to
+  `create`/`remove`, mixing what an operator runs with what a hook fires. Root
+  drops from 18 advertised commands to 15. `bough hook` / `bough doctor` keep
+  working as deprecated aliases for the v0.x line, and the dispatcher's verbs are
+  hidden rather than removed — the dispatcher calls their Go functions directly,
+  so they remain a debugging escape hatch.
+- **`bough claude skill|command`** — the CLI can now install the `using-bough`
+  skill and the `/bough:*` commands, not just hooks. The content is embedded in
+  the binary (new root-package `//go:embed`), so the CLI and the plugin ship
+  byte-identical artifacts from one tree, and the installed copy always matches
+  the bough version you are running. `uninstall` removes only the entries bough
+  ships; anything you authored alongside them is left alone. Note that
+  CLI-installed commands are flat (`/create`), not namespaced like the plugin's
+  (`/bough:create`).
+- **`bough-hooks` and `bough-all` plugin variants.** The marketplace now
+  publishes three plugins from one tree: `bough` (commands + skill, inert until
+  invoked, safe at any scope), `bough-hooks` (the hook loop alone), and
+  `bough-all` (both, for a one-line install). `bough-all` symlinks the root
+  `commands/`/`skills/` and `bough-hooks`' `hooks/`, so every artifact has
+  exactly one copy; tests assert the symlinks so a copy cannot silently ship
+  stale content under a shared version.
+
+### Changed
+
+- **`hooks/hooks.json` is back** (as `claude-plugins/bough-hooks/hooks/`), with
+  its drift guard. v0.17.0 removed it on the belief that plugin hooks could only
+  land at user scope and would therefore observe every repo on the machine. That
+  belief was wrong, and this release measured it: with an isolated
+  `CLAUDE_CONFIG_DIR`, `claude plugin install -s project` wrote `enabledPlugins`
+  into that repo's own `.claude/settings.json`, and the plugin's
+  `UserPromptSubmit` hook fired only in that repo — a second repo on the same
+  machine got zero hits. Scope is the operator's choice, so hooks can ship in a
+  plugin again.
+- **`bough claude doctor`'s double-fire note names the real conflict again.**
+  settings.json and the hook-bearing plugins wire the same dispatcher, so having
+  both fires every event twice. bough cannot read the plugin registry, so the
+  note tells the operator which two to compare (`claude plugin list`) and how to
+  drop one.
+
 ## v0.17.0
 
 Make the Claude Code plugin safe to install anywhere: it now ships commands +

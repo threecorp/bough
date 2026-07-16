@@ -379,13 +379,14 @@ func TestManager_Doctor_AfterInstall(t *testing.T) {
 	}
 }
 
-// TestDoctorRender_TransitionDoubleFireNote covers the reworded double-fire note
-// for the commands/skills-only plugin: since the plugin no longer ships hooks,
-// the note names the actual remaining cause (a pre-removal plugin release still
-// installed) rather than the old blanket "if you ALSO installed the plugin"
-// wording. It renders only when settings.json carries bough hooks, and stays
-// silent on a fresh repo.
-func TestDoctorRender_TransitionDoubleFireNote(t *testing.T) {
+// TestDoctorRender_DoubleFireNote covers the note that catches bough's one
+// self-inflicted foot-gun: settings.json and the bough-hooks / bough-all plugin
+// wire the same dispatcher, so having both fires every event twice. bough
+// cannot read the plugin registry, so the note is the operator's only prompt to
+// check. It renders whenever settings.json carries bough hooks (the half bough
+// CAN see) and stays silent on a fresh repo, where there is nothing to conflict
+// with and the note would be noise.
+func TestDoctorRender_DoubleFireNote(t *testing.T) {
 	installed := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
 	if err := installed.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -397,11 +398,19 @@ func TestDoctorRender_TransitionDoubleFireNote(t *testing.T) {
 	var withHooks strings.Builder
 	report.Render(&withHooks)
 	if !strings.Contains(withHooks.String(), "double-fire") {
-		t.Errorf("expected the transition double-fire note when bough hooks are wired:\n%s", withHooks.String())
+		t.Errorf("expected the double-fire note when bough hooks are wired:\n%s", withHooks.String())
 	}
-	// the obsolete blanket wording must not come back
-	if strings.Contains(withHooks.String(), "ALSO installed") || strings.Contains(withHooks.String(), "bough hook uninstall") {
-		t.Errorf("doctor still prints the obsolete blanket double-wire wording:\n%s", withHooks.String())
+	// A note that only says "something might be wrong" wastes the operator's
+	// time: it must name both plugins that conflict and the way out.
+	for _, want := range []string{"bough-hooks", "bough-all", "bough claude hook uninstall"} {
+		if !strings.Contains(withHooks.String(), want) {
+			t.Errorf("double-fire note does not mention %q:\n%s", want, withHooks.String())
+		}
+	}
+	// The v0.17.0 wording claimed bough's hooks live ONLY in settings.json.
+	// The plugins ship them again, so that sentence must not come back.
+	if strings.Contains(withHooks.String(), "live only here") {
+		t.Errorf("doctor still claims hooks live only in settings.json:\n%s", withHooks.String())
 	}
 
 	// fresh repo (no bough hooks) -> note absent

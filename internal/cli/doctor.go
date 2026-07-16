@@ -27,7 +27,7 @@ import (
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Report bough's hook wiring + observer + cost posture (alias for `bough hook doctor`)",
+		Short: "Report bough's hook wiring + observer + cost posture (alias for `bough claude hook doctor`)",
 		RunE: func(c *cobra.Command, _ []string) error {
 			return runDoctor(c)
 		},

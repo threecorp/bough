@@ -168,6 +168,11 @@ func renderArtifactList(w io.Writer, k artifactKind, dst string, names []string)
 
 // artifactDir resolves .claude/<subdir> for the scope, reusing the same scope
 // vocabulary (project | user) `bough claude hook` uses so the two never drift.
+//
+// Project scope lands where linkWorktreeArtifacts (create.go) points every
+// worktree's .claude/<subdir> symlink, so installing once at the monorepo root
+// reaches the worktree sessions too — provided cwd is the identity root those
+// symlinks resolve against (resolveIdentityRoot, see #60).
 func artifactDir(k artifactKind, scope HookScope) (string, error) {
 	dir, err := claudeDir(scope)
 	if err != nil {

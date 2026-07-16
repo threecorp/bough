@@ -138,7 +138,7 @@ cannot collide with the join character.
 
 Every CachedJudge call appends one record. Records are atomic
 (tmp+rename) and idempotent (same input → same output → same file).
-`bough doctor` will surface cumulative cost (= sum of
+`bough claude doctor` will surface cumulative cost (= sum of
 `cost_estimate_usd` across records) once the ClaudeJudgeClient
 lands in v0.7.2.
 

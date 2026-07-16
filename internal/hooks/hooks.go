@@ -472,13 +472,14 @@ func (r *DoctorReport) Render(w io.Writer) {
 	}
 	if r.hasBoughSettingsHooks() {
 		// bough cannot see the Claude Code plugin registry from here, so this
-		// prints whenever bough hooks are wired in settings.json. The plugin no
-		// longer ships hooks, so the only remaining double-fire path is a bough
-		// plugin release from BEFORE hooks were dropped still installed alongside
-		// these entries — the note names that, instead of the old blanket warning.
-		fmt.Fprintln(w, "  note: bough's hooks live only here (settings.json). If a bough plugin release")
-		fmt.Fprintln(w, "        from before hooks were dropped from it is still installed, update or")
-		fmt.Fprintln(w, "        remove it so events don't double-fire.")
+		// prints whenever bough hooks are wired in settings.json rather than on
+		// a detected conflict. The bough-hooks / bough-all plugins wire the same
+		// dispatcher through their own manifest, so having either installed on
+		// top of these entries fires every event twice — the operator is the
+		// only one who can see both sides, so name the check for them.
+		fmt.Fprintln(w, "  note: these settings.json entries are one of two ways bough's hooks get wired.")
+		fmt.Fprintln(w, "        If the bough-hooks or bough-all plugin is also installed (claude plugin list),")
+		fmt.Fprintln(w, "        events double-fire — keep one: `bough claude hook uninstall` or remove the plugin.")
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Observer:")
