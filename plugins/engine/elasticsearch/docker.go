@@ -439,43 +439,71 @@ const esContainerUID = 1000
 // ensureDatadirWritableByContainer aligns the freshly-created,
 // bind-mounted datadir so the in-container elasticsearch process
 // (esContainerUID) can write to it. The bind-mount passes the host
-// directory straight through, so its host-side ownership/mode is what
-// decides whether uid 1000 can write.
+// directory straight through on Linux, so its host-side ownership/mode
+// is what decides whether uid 1000 can write.
 //
 // Cases, in order:
 //
 //   - chown to 1000:0 succeeds (bough runs as root, e.g. a CI runner):
-//     the directory is owned by the in-container user; done. On macOS
-//     Docker Desktop the VirtioFS proxy papers over the uid mismatch and
-//     chown also succeeds.
+//     the directory is owned by the in-container user; done. This is
+//     root-only: chown to an arbitrary uid is _POSIX_CHOWN_RESTRICTED
+//     on every host bough ships for (darwin + linux, see
+//     .goreleaser.yaml), so a non-root process — Docker Desktop for Mac
+//     included — gets EPERM here too, verified empirically against a
+//     real 7.17.29 container: `os.Chown` to uid 1000 as a non-root
+//     macOS user fails exactly like non-root Linux.
 //   - chown fails (EPERM on a non-root host) but the datadir is ALREADY
 //     owned by uid 1000 — the common case for a datadir reused from a
-//     prior run — so the container can already write and there is
+//     prior root run — so the container can already write and there is
 //     nothing to fix. Widening the mode here is exactly what regressed:
 //     a non-root host can neither chown NOR chmod a directory it does
 //     not own, so the old chmod-0o777 fallback also EPERM'd and Up
 //     hard-failed even though the datadir was writable by the container
-//     (issue #74).
+//     (issue #74). Note this branch is effectively Linux-only in
+//     practice: Docker Desktop for Mac's VirtioFS bind-mount reflects a
+//     container-uid-1000 write back to the host as owned by the
+//     invoking host user, not uid 1000 (verified empirically), so a
+//     reused datadir on macOS keeps matching the next branch instead —
+//     which still resolves cleanly, since chmod on a directory the host
+//     user already owns is a same-user no-op.
 //   - otherwise widen the mode to 0o777 so uid 1000 can write despite
 //     the ownership mismatch. Wider than ideal, but per-worktree
-//     datadirs live under a user-private dir. Only if THAT also fails is
-//     Up blocked, and then with an actionable error — the datadir is
-//     owned by a third uid the host can neither chown nor chmod.
+//     datadirs live under a user-private dir. In practice a fresh
+//     datadir already works unwidened on macOS — a real container run
+//     against a plain 0o755, host-owned datadir started and wrote data
+//     with no AccessDeniedException — but 0o777 is applied uniformly
+//     here rather than special-cased per OS, since Linux genuinely
+//     needs it. Only if the chmod also fails is Up blocked, and then
+//     with an actionable error — the datadir is owned by a third uid
+//     the host can neither chown nor chmod.
 func ensureDatadirWritableByContainer(datadir string) error {
-	if err := os.Chown(datadir, esContainerUID, 0); err == nil {
+	chownErr := os.Chown(datadir, esContainerUID, 0)
+	if chownErr == nil {
 		return nil
 	}
 	if datadirOwnedBy(datadir, esContainerUID) {
 		return nil
 	}
-	if err := os.Chmod(datadir, 0o777); err != nil {
-		return fmt.Errorf("elasticsearch docker: cannot make datadir %q writable by the "+
-			"in-container elasticsearch user (uid %d): chown and chmod both failed (%w). "+
-			"It is likely a reused datadir owned by a different uid — remove it "+
-			"(rm -rf %q) or run bough as a user that can chown it",
-			datadir, esContainerUID, err, datadir)
+	if chmodErr := os.Chmod(datadir, 0o777); chmodErr != nil {
+		return actionableDatadirError(datadir, chownErr, chmodErr)
 	}
 	return nil
+}
+
+// actionableDatadirError builds the hard-fail error surfaced when
+// neither chown nor chmod can make datadir writable by the in-container
+// elasticsearch user. Both underlying errors are wrapped (Go 1.20+
+// supports multiple %w in one fmt.Errorf) rather than only chmod's —
+// the previous single-%w version silently dropped the chown failure's
+// detail even though the message claimed "chown and chmod both failed,"
+// and the two are not always identical (e.g. a stale/broken symlink at
+// datadir can make one syscall fail differently from the other).
+func actionableDatadirError(datadir string, chownErr, chmodErr error) error {
+	return fmt.Errorf("elasticsearch docker: cannot make datadir %q writable by the "+
+		"in-container elasticsearch user (uid %d): chown failed (%w) and chmod fallback "+
+		"failed (%w). It is likely a reused datadir owned by a different uid — remove it "+
+		"(rm -rf %q) or run bough as a user that can chown it",
+		datadir, esContainerUID, chownErr, chmodErr, datadir)
 }
 
 // datadirOwnedBy reports whether datadir's owning uid is uid. Used to
