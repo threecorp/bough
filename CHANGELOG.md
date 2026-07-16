@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.17.0
+
+Make the Claude Code plugin safe to install anywhere: it now ships commands +
+skill only (no hooks), so it never observes or injects on its own. Observation
+stays wired per-project via `bough hook install`.
 
 ### Changed
 
