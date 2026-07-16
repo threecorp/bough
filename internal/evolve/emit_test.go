@@ -68,6 +68,50 @@ func TestSourceInstinctsBlock_PathsDegradeAndSorted(t *testing.T) {
 	}
 }
 
+// TestSourceInstinctsBlock_RelativePathResolvedAbsolute guards the same
+// hazard ensureSymlink (internal/cli/create.go) documents for the skill
+// symlink target: BOUGH_HOMUNCULUS_DIR / XDG_DATA_HOME may be set to a
+// relative path, in which case homunculus.ReadInstinctFile sets Path to a
+// relative string. Emitting that verbatim defeats this feature's entire
+// point (a reader opening the SKILL.md from a different CWD — a worktree
+// symlink hop away — would resolve the relative path against ITS OWN cwd,
+// not the scan's, and silently get the wrong file or nothing).
+func TestSourceInstinctsBlock_RelativePathResolvedAbsolute(t *testing.T) {
+	rel := filepath.Join("relative", "instincts", "personal", "member-a.md")
+	m := &homunculus.Instinct{ID: "member-a", Path: rel}
+	blk := sourceInstinctsBlock([]*homunculus.Instinct{m})
+
+	wantAbs, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", rel, err)
+	}
+	if !strings.Contains(blk, "- `member-a` — "+wantAbs) {
+		t.Errorf("relative Path %q should render resolved to absolute %q:\n%s", rel, wantAbs, blk)
+	}
+	if strings.Contains(blk, "— "+rel+"\n") {
+		t.Errorf("relative Path leaked verbatim (unresolved) into the block:\n%s", blk)
+	}
+}
+
+// TestAbsInstinctPath covers the helper directly: relative resolves to
+// absolute (join against cwd), an already-absolute path is left as-is
+// (no double-resolution surprises), and empty stays empty (callers gate
+// on Path != "" before calling this, but the helper itself must not turn
+// "no path" into a bogus cwd reference).
+func TestAbsInstinctPath(t *testing.T) {
+	if got := absInstinctPath("/abs/instincts/member-a.md"); got != "/abs/instincts/member-a.md" {
+		t.Errorf("absolute path should be unchanged, got %q", got)
+	}
+	rel := filepath.Join("relative", "member-a.md")
+	want, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", rel, err)
+	}
+	if got := absInstinctPath(rel); got != want {
+		t.Errorf("absInstinctPath(%q) = %q, want %q", rel, got, want)
+	}
+}
+
 func TestWriteSkill_Atomic(t *testing.T) {
 	dir := t.TempDir()
 	skillsDir := filepath.Join(dir, "skills")
@@ -168,6 +212,19 @@ func TestRenderCommand(t *testing.T) {
 	art2 := RenderCommand(in, time.Now())
 	if !strings.Contains(art2.Body, "Source instinct: /abs/instincts/github-issue-structure.md") {
 		t.Errorf("command with Path missing Source instinct line: %s", art2.Body)
+	}
+	// relative Path (BOUGH_HOMUNCULUS_DIR set relative — see
+	// TestSourceInstinctsBlock_RelativePathResolvedAbsolute) must resolve
+	// to absolute too, not leak verbatim.
+	rel := filepath.Join("relative", "github-issue-structure.md")
+	wantAbs, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", rel, err)
+	}
+	in.Path = rel
+	art3 := RenderCommand(in, time.Now())
+	if !strings.Contains(art3.Body, "Source instinct: "+wantAbs) {
+		t.Errorf("command with relative Path should resolve to absolute %q: %s", wantAbs, art3.Body)
 	}
 }
 

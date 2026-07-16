@@ -162,7 +162,7 @@ func RenderCommand(in *homunculus.Instinct, now time.Time) SkillArtifact {
 	fmt.Fprintf(&b, "# %s\n\n", slug)
 	fmt.Fprintf(&b, "Evolved from instinct: %s\n", in.ID)
 	if in.Path != "" {
-		fmt.Fprintf(&b, "Source instinct: %s\n", in.Path)
+		fmt.Fprintf(&b, "Source instinct: %s\n", absInstinctPath(in.Path))
 	}
 	fmt.Fprintf(&b, "Confidence: %.0f%%\n\n", in.Confidence*100)
 	fmt.Fprintf(&b, "Trigger: %s\n\n", oneLine(in.Trigger))
@@ -200,11 +200,10 @@ func memberIDs(c Cluster) []string {
 // sourceInstinctsBlock renders a "## Source instincts" provenance block:
 // one "- `<id>` — <path>" line per member, sorted by id so a re-emit is
 // byte-stable (and matches the evolved_from frontmatter order). The path
-// is the member's absolute on-disk location (ReadInstinctFile enforces
-// filename == id), so a reader of a generated artifact — even through a
-// worktree symlink, hops away from the homunculus store — can open the
-// originating instinct. A member with no Path (an in-memory / test
-// instinct) degrades to "- `<id>`".
+// is resolved to absolute (absInstinctPath) so a reader of a generated
+// artifact — even through a worktree symlink, hops away from the
+// homunculus store — can open the originating instinct. A member with no
+// Path (an in-memory / test instinct) degrades to "- `<id>`".
 func sourceInstinctsBlock(members []*homunculus.Instinct) string {
 	sorted := append([]*homunculus.Instinct(nil), members...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
@@ -212,12 +211,31 @@ func sourceInstinctsBlock(members []*homunculus.Instinct) string {
 	b.WriteString("## Source instincts\n\n")
 	for _, m := range sorted {
 		if m.Path != "" {
-			fmt.Fprintf(&b, "- `%s` — %s\n", m.ID, m.Path)
+			fmt.Fprintf(&b, "- `%s` — %s\n", m.ID, absInstinctPath(m.Path))
 		} else {
 			fmt.Fprintf(&b, "- `%s`\n", m.ID)
 		}
 	}
 	return b.String()
+}
+
+// absInstinctPath best-effort resolves an instinct's on-disk Path to
+// absolute before it is persisted into a "Source instinct" reference.
+// Instinct.Path is set by homunculus.ReadInstinctFile to whatever
+// directory string the scan started from (homunculus.Layout.Root), which
+// is relative whenever BOUGH_HOMUNCULUS_DIR / XDG_DATA_HOME is set to a
+// relative path — the same hazard ensureSymlink (internal/cli/create.go)
+// guards against for the skill symlink target. Without this, a reader
+// opening the emitted path from a different CWD (a worktree symlink hop
+// away from the homunculus store, the exact scenario this feature exists
+// for) gets a path that resolves against ITS OWN cwd instead of the
+// scan's, silently pointing at the wrong file or nothing at all. Falls
+// back to the original string on error (never surface an empty path).
+func absInstinctPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 func avgConfidence(members []*homunculus.Instinct) float64 {
