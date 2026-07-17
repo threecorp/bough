@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.18.0
 
 Group everything bough installs into Claude Code under one `bough claude`
 namespace, give skills and commands the CLI path hooks already had, and publish
