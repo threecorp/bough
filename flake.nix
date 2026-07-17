@@ -25,7 +25,10 @@
           pname = "bough";
           version = "0.1.1";
           src = ./.;
-          vendorHash = "sha256-hsAAD7X1xt5l27ITiprPlhwdDY2NNoI0aJH0bVB29Bw=";
+          # Must be re-derived whenever go.mod's require list changes, or
+          # `nix build` fails on a vendor dir that no longer matches. Get the
+          # value by setting it to a wrong hash and reading nix's "got:" line.
+          vendorHash = "sha256-9eS+lhKOnRTkP2w9Zfm2OxpBvGD+G5wMmvXJYGaga3U=";
           subPackages = [
             "cmd/bough"
             "cmd/bough-plugin-mysql"
