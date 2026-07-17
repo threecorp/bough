@@ -52,6 +52,10 @@ func TestArtifactInstallDeploysEmbedded(t *testing.T) {
 					t.Errorf("install output does not name %q; the operator cannot see what landed", n)
 				}
 			}
+			// Into an empty dir, nothing can have been replaced.
+			if strings.Contains(out, "replaced") {
+				t.Errorf("first install into an empty dir reports a replacement:\n%s", out)
+			}
 		})
 	}
 }
@@ -97,6 +101,47 @@ func TestArtifactInstallIsIdempotent(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Error("re-install did not overwrite stale content; an upgrade would leave the old skill in place")
+	}
+}
+
+// TestArtifactInstallReportsWhatItReplaced covers the one place install can
+// destroy something: bough ships names as generic as list.md and create.md, so
+// an operator's own .claude/commands/list.md collides. install must overwrite
+// (that is the upgrade path) and bough cannot tell that file from its own older
+// copy — so the report is the only signal the operator gets, and it has to say
+// "replaced" rather than a uniform "installed" that hides the loss.
+func TestArtifactInstallReportsWhatItReplaced(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dst := filepath.Join(".claude", "commands")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// An operator's own command, sharing a name bough happens to ship.
+	names, err := embeddedArtifactNames(commandKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := names[0]
+	if err := os.WriteFile(filepath.Join(dst, mine), []byte("my own command"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runArtifact(t, commandKind, "install")
+
+	var replacedLine, newLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, mine) {
+			replacedLine = line
+		} else if strings.Contains(line, "new") && newLine == "" {
+			newLine = line
+		}
+	}
+	if !strings.Contains(replacedLine, "replaced") {
+		t.Errorf("install did not report %q as replaced; the operator's file vanished silently:\n%s", mine, out)
+	}
+	if newLine == "" {
+		t.Errorf("install reported no entry as new, so the report cannot distinguish the two:\n%s", out)
 	}
 }
 
