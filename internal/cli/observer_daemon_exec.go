@@ -35,7 +35,10 @@ func runObserverOnceQuiet(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	c := exec.CommandContext(ctx, exe, "observer", "run-once", "--root", root)
+	// The canonical path, not the deprecated `observer run-once` alias: the
+	// daemon re-execs this every tick, and pointing machinery at a deprecated
+	// spelling is how a migration notice ends up firing on a timer.
+	c := exec.CommandContext(ctx, exe, "instinct", "observer", "run-once", "--root", root)
 	c.Stdin = nil
 	c.Stdout = nil
 	c.Stderr = nil

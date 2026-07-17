@@ -53,8 +53,8 @@ that holds up:
   **no** LLM call. The `UserPromptSubmit` block is folded into your next
   turn as ordinary input tokens of your own session — the same as any
   context — not a separate charge.
-- **LLM calls happen only in the explicit commands** `bough observer
-  run-once` and `bough evolve --generate` (and the opt-in `bough observer
+- **LLM calls happen only in the explicit commands** `bough instinct observer
+  run-once` and `bough instinct evolve --generate` (and the opt-in `bough instinct observer
   start` daemon) — each one `claude --print` under your subscription, hard
   rate-limited (10 / session, 30 / hour, 3-failure circuit breaker).
 
@@ -197,7 +197,7 @@ copy — `bough claude hook|skill|command install --scope project`. Wire hooks o
 way or the other, not both: they run the same dispatcher, so keeping both fires
 every event twice (`bough claude doctor` flags it).
 
-LLM instinct minting stays opt-in on top of either route (`bough observer start`,
+LLM instinct minting stays opt-in on top of either route (`bough instinct observer start`,
 or `.bough.yaml` `instinct.observer.autostart`).
 
 See [`docs/PLUGIN_CLAUDE_CODE.md`](./docs/PLUGIN_CLAUDE_CODE.md) for the variant
@@ -451,10 +451,10 @@ bough claude command install | uninstall | list  # the /bough:* commands
 bough claude doctor                              # hook wiring + observer capture + cost posture
 
 # Continuous learning (opt-in; instinct.enabled: true)
-bough observer run-once | start         # mint instincts via claude --print
+bough instinct observer run-once | start         # mint instincts via claude --print
 bough instinct list | show <id>         # inspect the captured corpus
-bough evolve --generate                 # cluster instincts → skills / agents / commands
-bough ecc import                        # interop with an everything-claude-code corpus
+bough instinct evolve --generate                 # cluster instincts → skills / agents / commands
+bough instinct import                        # interop with an everything-claude-code corpus
 ```
 
 The hook dispatcher's own verbs (`inject-context`, `session-end`,
@@ -530,7 +530,7 @@ default:
    `sha256[:12]` of the credential-stripped git remote, else the repo
    path). Env scrubbing strips every `ANTHROPIC_*` / Bedrock / Vertex
    key so a spawned `claude --print` can never flip to API billing.
-2. **Evolve.** `bough evolve --generate` clusters related instincts
+2. **Evolve.** `bough instinct evolve --generate` clusters related instincts
    through a 5-gate pipeline (the final gate is an LLM judge via
    `claude --print --output-format json`) and emits Claude Code
    artifacts — `SKILL.md`, agents, and commands — into the repo's
@@ -549,15 +549,15 @@ bough claude hook install
 bough claude doctor              # hook wiring + observer capture + cost meter
 
 # Mint instincts from recent observations, then review the corpus.
-bough observer run-once          # one claude --print pass
+bough instinct observer run-once          # one claude --print pass
 bough instinct list              # confidence-ranked corpus
 bough instinct show <id>
 
 # Cluster the corpus into skills / agents / commands.
-bough evolve --generate          # 5-gate pipeline; writes <repo>/.claude/*
+bough instinct evolve --generate          # 5-gate pipeline; writes <repo>/.claude/*
 
 # Interop with an existing everything-claude-code corpus.
-bough ecc import
+bough instinct import
 ```
 
 Enable it per-monorepo in `.bough.yaml` (off by default):
@@ -571,16 +571,16 @@ instinct:
 ```
 
 `observer.autostart` is the "opt-in once, then automatic" switch: with it on,
-the `UserPromptSubmit` hook ensures the `bough observer start` daemon is running
+the `UserPromptSubmit` hook ensures the `bough instinct observer start` daemon is running
 for this monorepo, so instincts are minted automatically without a manual start
 per machine. It is **off by default** — the daemon calls `claude --print`, so
 bough never starts it silently, and `bough claude doctor` always reports whether it is
 running. Minting stays subject to the self-DoS limiter. (This auto-mints
 instincts only; turning them into skills/agents/commands is still the explicit
-`bough evolve --generate`.)
+`bough instinct evolve --generate`.)
 
-LLM calls happen **only** in the explicit `bough observer run-once` /
-`bough evolve --generate` (and the opt-in `bough observer start`
+LLM calls happen **only** in the explicit `bough instinct observer run-once` /
+`bough instinct evolve --generate` (and the opt-in `bough instinct observer start`
 daemon) — each a `claude --print` subprocess under your subscription,
 hard rate-limited (10 / session, 30 / hour, 3-failure circuit
 breaker). Everything else — hooks, ingest, clustering gates 1-4 — is
@@ -604,7 +604,7 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 | v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning — only the plugin gRPC handshake (`DBProvider`/`BOUGH_DB_PLUGIN`) was removed in v0.5.0, the YAML-level fallback (old file name / section / field names) is still read today, see [docs/MIGRATION-v0.3-to-v0.4.md](docs/MIGRATION-v0.3-to-v0.4.md) |
 | v0.5.0-v0.8.0 | (superseded) An earlier continuous-learning design, replaced wholesale in v0.9.0; pin v0.8.1 if you depend on it |
 | v0.9.0    | The "ECC verbatim port" reset. Deleted the v0.5-v0.8 surface and rebuilt continuous learning as a faithful Go port of [everything-claude-code](https://github.com/affaan-m/everything-claude-code): the `~/.local/share/bough-homunculus/` corpus, `observations.jsonl`, and a subscription-only `claude --print` mechanism (no Anthropic API, no separate billing) |
-| v0.9.1-v0.9.22 | The observe → evolve → inject loop: `bough evolve --generate` 5-gate clustering into skills / agents / commands, `UserPromptSubmit` instinct injection, `SessionEnd` / `PreCompact` hooks, secret-scrub at capture, project-scope evolved skills (v0.9.20), resolvable source-instinct paths (v0.9.22), plus a retrospective `/review` bug-fix sweep of the merged infra PRs |
+| v0.9.1-v0.9.22 | The observe → evolve → inject loop: `bough instinct evolve --generate` 5-gate clustering into skills / agents / commands, `UserPromptSubmit` instinct injection, `SessionEnd` / `PreCompact` hooks, secret-scrub at capture, project-scope evolved skills (v0.9.20), resolvable source-instinct paths (v0.9.22), plus a retrospective `/review` bug-fix sweep of the merged infra PRs |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres

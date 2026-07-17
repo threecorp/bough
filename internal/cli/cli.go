@@ -54,11 +54,9 @@ func NewRootCmd(version string) *cobra.Command {
 		// installs INTO Claude Code. Kept distinct from `plugins` above, which
 		// means bough's own engine plugin binaries.
 		newClaudeCmd(),
-		// Continuous learning surface (v0.9+).
-		newObserverCmd(),
+		// Continuous learning (v0.9+): one namespace, mirroring the single
+		// `instinct:` block that configures all of it in .bough.yaml.
 		newInstinctCmd(),
-		newEvolveCmd(),
-		newEccCmd(),
 
 		// --- Backwards compatibility ---------------------------------------
 		// `bough hook ...` / `bough doctor` predate the `claude` namespace and
@@ -66,6 +64,12 @@ func NewRootCmd(version string) *cobra.Command {
 		// the notice points at the new path.
 		deprecatedAlias(newHookCmd(), "bough claude hook"),
 		deprecatedAlias(newDoctorCmd(), "bough claude doctor"),
+		// The learning verbs that used to sit at root, before `instinct` became
+		// the namespace for the domain. Same contract as the hook aliases: they
+		// run, they just say where they went.
+		deprecatedAlias(newObserverCmd(), "bough instinct observer"),
+		deprecatedAlias(newEvolveCmd(), "bough instinct evolve"),
+		deprecatedAlias(newEccCmd(), "bough instinct"),
 		// The hook dispatcher's internal verbs. hook.go's handle switch calls
 		// their Go functions directly, so these CLI entry points are a manual
 		// debugging escape hatch, not part of the advertised surface.

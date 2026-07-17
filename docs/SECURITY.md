@@ -35,7 +35,7 @@ Full detail in [SIGNING.md](SIGNING.md).
 chars and redacts secret-shaped tokens (API key / token / password /
 Bearer-style patterns) at the point bough writes an observation to
 disk — a verbatim port of ECC `observe.sh`'s redaction regex. This
-runs unconditionally on every `bough hook handle` / `bough observer`
+runs unconditionally on every `bough hook handle` / `bough instinct observer`
 write; there is no opt-out flag and no separate plugin-facing
 redaction layer (there is no plugin in the loop that would need one).
 

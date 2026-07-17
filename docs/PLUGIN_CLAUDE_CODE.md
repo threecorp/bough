@@ -105,7 +105,7 @@ All eight events map to `bough hook handle --event <E>`:
 | Stop | record an observation |
 | WorktreeCreate / WorktreeRemove | run `bough create` / `bough remove` for `claude --worktree` |
 
-LLM instinct **minting** (`bough observer start`) stays opt-in — none of the
+LLM instinct **minting** (`bough instinct observer start`) stays opt-in — none of the
 hooks above spawn it.
 
 ## The CLI installs the same artifacts

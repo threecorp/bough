@@ -20,17 +20,42 @@ import (
 // homunculus tree directly. v0.9.13 adds promote (project → global
 // corpus, ECC auto-promotion parity); mint stays out because the
 // canonical mint path is via `bough observer run-once`.
+// newInstinctCmd is the namespace for bough's continuous-learning surface —
+// everything that fills, reads, or spends the instinct corpus.
+//
+// The grouping is not invented here: `.bough.yaml` already nests this domain
+// under one `instinct:` key, down to `instinct.observer.autostart`. Only the
+// CLI disagreed, spreading `observer` / `evolve` / `ecc` across the root next
+// to `create` and `remove` as if they were peers of the worktree lifecycle.
+// Mirroring the config the operator already writes means the two vocabularies
+// cannot drift, and it costs the root four entries.
+//
+// The reading verbs keep their spelling (`bough instinct list` was already
+// right); only the three that lived at root moved under it.
 func newInstinctCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "instinct",
-		Short: "Inspect the instinct corpus the bough observer has captured",
-		Long: `bough instinct surfaces the homunculus on stdout so an
-operator can audit what the observer extracted without digging into
-~/.local/share/bough-homunculus/projects/<hash>/instincts/personal/.
-status prints the per-project totals, list enumerates ids /
-triggers / confidence, show prints one file verbatim.`,
+		Short: "The continuous-learning corpus: observe, inspect, evolve, import",
+		Long: `bough instinct is the whole continuous-learning surface, matching
+the instinct: block in .bough.yaml that configures it.
+
+  observer   mint instincts from what the hooks recorded (opt-in;
+             each pass is a claude --print on your subscription)
+  status     per-project totals + confidence histogram
+  list/show  audit the corpus without digging into
+             ~/.local/share/bough-homunculus/projects/<hash>/
+  promote    lift cross-project instincts into the global corpus
+  evolve     cluster the corpus into skills / agents / commands
+  import     migrate an existing everything-claude-code corpus in
+
+Nothing here runs unless instinct.enabled is true in .bough.yaml.`,
 	}
-	cmd.AddCommand(newInstinctStatusCmd(), newInstinctListCmd(), newInstinctShowCmd(), newInstinctPromoteCmd())
+	cmd.AddCommand(
+		// Reading the corpus.
+		newInstinctStatusCmd(), newInstinctListCmd(), newInstinctShowCmd(), newInstinctPromoteCmd(),
+		// Filling it, spending it, seeding it from elsewhere.
+		newObserverCmd(), newEvolveCmd(), newEccImportCmd(),
+	)
 	return cmd
 }
 

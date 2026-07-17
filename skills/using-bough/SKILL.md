@@ -63,4 +63,4 @@ the project the user actually wants observed:
 
 If the user asks to "turn on learning / observation here", point them at
 `bough hook install --scope project`. LLM instinct minting stays opt-in on top of
-that (`bough observer start`, or `.bough.yaml` `instinct.observer.autostart`).
+that (`bough instinct observer start`, or `.bough.yaml` `instinct.observer.autostart`).

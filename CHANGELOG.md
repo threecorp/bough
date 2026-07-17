@@ -29,6 +29,15 @@ respect project scope.
   ships; anything you authored alongside them is left alone. Note that
   CLI-installed commands are flat (`/create`), not namespaced like the plugin's
   (`/bough:create`).
+- **`bough instinct` is the namespace for continuous learning.** `observer`,
+  `evolve` and `ecc` sat at the root next to `create` and `remove`, as if
+  minting an instinct were a peer of bootstrapping a worktree. `.bough.yaml`
+  never agreed — it has always nested the whole domain under one `instinct:`
+  key, down to `instinct.observer.autostart`. The CLI now mirrors the config
+  the operator already writes: `bough instinct observer|evolve|import`, with
+  `list`/`show`/`status`/`promote` keeping their spelling. Root drops from 18
+  advertised commands to 12, and a test pins that bound so the next feature has
+  to choose a namespace rather than defaulting to the root.
 - **`bough-hooks` and `bough-all` plugin variants.** The marketplace now
   publishes three plugins from one tree: `bough` (commands + skill, inert until
   invoked, safe at any scope), `bough-hooks` (the hook loop alone), and
