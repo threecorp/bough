@@ -56,8 +56,28 @@ install broadly; hooks are not, so they default to project scope.`,
 // memory, scripts, and anything an operator already wired into settings.json
 // survive the move. Callers pass the replacement path so the notice tells the
 // operator exactly where the verb went.
+//
+// The mark has to recurse. cobra prints the notice for the command it actually
+// executes, so marking only `hook` would announce the move to someone typing
+// bare `bough hook` — while `bough hook install`, the line that is actually in
+// people's muscle memory and scripts, would move silently and never tell them.
+// Each subcommand gets its own replacement path so the notice names the exact
+// command to type, not just the namespace it moved to.
+//
+// Hidden subcommands are skipped, and `bough hook handle` is why. It is not an
+// operator verb that moved — it is the live dispatcher hooks.CanonicalCommand
+// still wires into settings.json, invoked by Claude Code on every session
+// event. Deprecating it would print a notice to stderr on every event, telling
+// nobody (no human typed it) at the cost of noise in every session. Hidden is
+// exactly the signal for "machine-invoked", so it is the right gate.
 func deprecatedAlias(cmd *cobra.Command, replacement string) *cobra.Command {
 	cmd.Deprecated = "use `" + replacement + "` instead (this alias still works and will be kept for the v0.x line)"
+	for _, sub := range cmd.Commands() {
+		if sub.Hidden {
+			continue
+		}
+		deprecatedAlias(sub, replacement+" "+sub.Name())
+	}
 	return cmd
 }
 
