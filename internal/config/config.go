@@ -273,6 +273,41 @@ type InstinctConfig struct {
 	PoisoningGuard             InstinctPoisoningGuard `yaml:"poisoning_guard"`
 	Observer                   InstinctObserver       `yaml:"observer"`
 	PluginSecurity             InstinctPluginSecurity `yaml:"plugin_security"`
+	Gate                       InstinctGate           `yaml:"gate"`
+}
+
+// InstinctGate configures the deterministic policy gate that screens
+// every newly minted instinct before it becomes injectable. A minted
+// instinct whose propagating surface (trigger + action) matches a
+// command-shaped forbidden action — "never merge unasked", "never
+// force-push", "never rewrite commit identity", … — is HELD: moved to a
+// reversible quarantine dir with a REPORT rather than promoted to the
+// personal corpus. The guard is deliberately narrow (command shapes
+// only); prose-shaped intent is a later LLM-judge concern, so this is a
+// backstop, not a completeness claim.
+type InstinctGate struct {
+	// Enabled is tri-state: a nil pointer (the `gate:` block absent from
+	// .bough.yaml) defaults to ON via GateEnabled(). Unlike the observer
+	// autostart (which spawns claude --print and so must default off for
+	// cost-safety), this gate is pure deterministic regex — zero cost —
+	// and reversible (quarantine is a move, nothing is deleted), so a
+	// safety-on default is the honest posture. Set `enabled: false` to
+	// turn it off explicitly.
+	Enabled *bool `yaml:"enabled"`
+	// AllowIDs exempts instincts whose OWN action IS the rule that forbids
+	// a command (an instinct teaching "never run `git push --force`" names
+	// the command it forbids; quarantining it would be backwards).
+	// Exemption is by id because a false hold is reversible, whereas a
+	// negation heuristic that guessed wrong would silently pass a real
+	// forbidden action.
+	AllowIDs []string `yaml:"allow_ids"`
+}
+
+// GateEnabled reports whether the deterministic policy gate should run.
+// A nil (absent-from-YAML) Enabled defaults to true — see
+// InstinctGate.Enabled for why a reversible, zero-cost guard defaults on.
+func (ic InstinctConfig) GateEnabled() bool {
+	return ic.Gate.Enabled == nil || *ic.Gate.Enabled
 }
 
 // InstinctScopes toggles which of the three scope tiers the

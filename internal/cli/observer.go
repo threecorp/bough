@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/prompts"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
@@ -167,9 +168,22 @@ func newObserverRunOnceCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("observer run-once: %w", err)
 			}
-			emitted, skipped, errs := writeInstinctsFromResult(layout.InstinctsDir(ident.ID), ident, res.Parsed, time.Now().UTC())
-			fmt.Fprintf(stdout, "instincts emitted=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
-				emitted, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
+			// Stage every accepted instinct out of injection's reach, then
+			// screen the batch: cleared ones are promoted into the personal
+			// corpus, command-shaped forbidden actions are quarantined
+			// (reversibly). Staging happens regardless of the gate's enabled
+			// state, so a minted note is never live before it has been checked.
+			now := time.Now().UTC()
+			staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, res.Parsed, now)
+			gate := instinctgate.New(gateConfigFor(cmd, root))
+			outcome := screenAndPromote(layout, ident.ID, staged, gate, now)
+			errs = append(errs, outcome.Errs...)
+			fmt.Fprintf(stdout, "instincts emitted=%d quarantined=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
+				outcome.Emitted, outcome.Quarantined, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
+			if outcome.Quarantined > 0 {
+				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
+					outcome.Quarantined, outcome.BatchDir)
+			}
 			snap := res.Snapshot
 			fmt.Fprintf(stdout, "limiter: session=%d/hour=%d/failures=%d circuit_open=%t\n",
 				snap.SessionN, snap.HourN, snap.Failures, snap.CircuitOpen)
@@ -337,45 +351,16 @@ func renderForPreview(body string, data any) (string, error) {
 	return buf.String(), nil
 }
 
-// writeInstinctsFromResult unpacks the parsed JSON document, runs
-// the host-side safety checks, and persists each entry as a
-// homunculus instinct file. Returns (emitted, skipped, soft-errors).
-// Skipped entries fail validation or hit a known duplicate; the
-// emitted count drives the CLI summary.
+// writeInstinctsFromResult unpacks the parsed JSON document, runs the
+// host-side safety checks, and writes each accepted entry as a
+// homunculus instinct file under dir. Returns (written, skipped,
+// soft-errors). It is the direct-write primitive (used where the
+// destination is already the final dir); the observer run path instead
+// stages then screens via stageInstincts + screenAndPromote, so a
+// minted note passes the policy gate before it becomes injectable.
 func writeInstinctsFromResult(dir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) (int, int, []error) {
-	emitted := 0
-	skipped := 0
-	errs := []error{}
-	raw, ok := parsed["instincts"].([]any)
-	if !ok {
-		return 0, 0, []error{fmt.Errorf("response missing 'instincts' array (got %T)", parsed["instincts"])}
-	}
-	for _, item := range raw {
-		entry, ok := item.(map[string]any)
-		if !ok {
-			skipped++
-			errs = append(errs, fmt.Errorf("entry was not an object: %T", item))
-			continue
-		}
-		in, err := mapToInstinct(entry, ident, now)
-		if err != nil {
-			skipped++
-			errs = append(errs, err)
-			continue
-		}
-		if rule, err := checkInstinctSafety(in); err != nil {
-			skipped++
-			errs = append(errs, fmt.Errorf("instinct %q failed safety check (%s): %w", in.ID, rule, err))
-			continue
-		}
-		if _, werr := homunculus.WriteInstinctFile(dir, in); werr != nil {
-			skipped++
-			errs = append(errs, werr)
-			continue
-		}
-		emitted++
-	}
-	return emitted, skipped, errs
+	staged, skipped, errs := stageInstincts(dir, ident, parsed, now)
+	return len(staged), skipped, errs
 }
 
 func mapToInstinct(m map[string]any, ident homunculus.ProjectIdentity, now time.Time) (*homunculus.Instinct, error) {

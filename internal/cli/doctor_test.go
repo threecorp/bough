@@ -19,10 +19,49 @@ func TestRenderContinuousLearningPosture_LimitsLine(t *testing.T) {
 		"calls/session",
 		"calls/hour",
 		"homunculus root",
+		"policy gate",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("posture output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestPolicyGateLine(t *testing.T) {
+	if _, msg := policyGateLine(false, 0, 0); !strings.Contains(msg, "OFF") {
+		t.Errorf("disabled gate line = %q, want OFF", msg)
+	}
+	if _, msg := policyGateLine(true, 0, 0); !strings.Contains(msg, "0 held") {
+		t.Errorf("enabled/empty gate line = %q, want 0 held", msg)
+	}
+	_, msg := policyGateLine(true, 3, 2)
+	if !strings.Contains(msg, "3 held") || !strings.Contains(msg, "2 batch") {
+		t.Errorf("held gate line = %q, want 3 held across 2 batches", msg)
+	}
+	if !strings.Contains(msg, "reversible") {
+		t.Errorf("held gate line must advertise reversibility: %q", msg)
+	}
+}
+
+func TestCountQuarantined(t *testing.T) {
+	dir := t.TempDir()
+	// One batch with two held instincts + a REPORT.md (not an instinct).
+	batch := dir + "/20260623-120000"
+	if err := os.MkdirAll(batch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a.md", "b.md", "REPORT.md"} {
+		if err := os.WriteFile(batch+"/"+f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held, batches := countQuarantined(dir)
+	if held != 2 || batches != 1 {
+		t.Errorf("countQuarantined = (%d held, %d batches), want (2, 1)", held, batches)
+	}
+	// A non-existent dir is a clean zero, not an error.
+	if h, b := countQuarantined(dir + "/nope"); h != 0 || b != 0 {
+		t.Errorf("missing dir = (%d, %d), want (0, 0)", h, b)
 	}
 }
 
