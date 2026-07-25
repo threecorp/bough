@@ -166,8 +166,22 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	commandsDir := layout.EvolvedCommandsDir(ident.ID)
 
 	skillsWritten := 0
+	skillsBelowBar := 0
 	for _, s := range out.Skills {
 		art := evolve.RenderSkill(s.Label, s.Description, s.Cluster, th, now)
+		// A skill with nothing concrete in it is worse than no skill: it
+		// matches every prompt and teaches none. Failing the bar is a
+		// reported outcome, not a fault — the cluster stays in the corpus
+		// and a later, richer pass can still produce something worth
+		// keeping.
+		if issues := evolve.QualityIssues(art); len(issues) > 0 {
+			skillsBelowBar++
+			fmt.Fprintf(stderr, "  skill %s: below the quality bar, not written\n", s.Label)
+			for _, issue := range issues {
+				fmt.Fprintf(stderr, "      - %s\n", issue)
+			}
+			continue
+		}
 		// Linking is done project-scoped by deployProjectSkills below,
 		// not into the global ~/.claude/skills.
 		if _, err := evolve.WriteSkill(skillsDir, art); err != nil {
@@ -219,6 +233,12 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 
 	fmt.Fprintf(stdout, "\nwrote skills=%d agents=%d commands=%d (rejected clusters=%d)\n",
 		skillsWritten, agentsWritten, commandsWritten, len(out.Rejected))
+	if skillsBelowBar > 0 {
+		// Counted separately from rejected clusters: these PASSED the gates
+		// and the judge, and were then dropped for lacking anything concrete.
+		// Folding them into one number would hide which stage to go fix.
+		fmt.Fprintf(stdout, "%d skill(s) passed the gates but fell below the quality bar (see above)\n", skillsBelowBar)
+	}
 	return nil
 }
 

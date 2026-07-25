@@ -96,10 +96,10 @@ func TestClaudeJudge_RejectsSchemaViolation(t *testing.T) {
 
 func TestSlugify(t *testing.T) {
 	cases := map[string]string{
-		"IO Lives In Data Layer":   "io-lives-in-data-layer",
-		"already-kebab":            "already-kebab",
-		"  weird__chars!! here  ":  "weird-chars-here",
-		"trailing-":                "trailing",
+		"IO Lives In Data Layer":  "io-lives-in-data-layer",
+		"already-kebab":           "already-kebab",
+		"  weird__chars!! here  ": "weird-chars-here",
+		"trailing-":               "trailing",
 	}
 	for in, want := range cases {
 		if got := Slugify(in); got != want {

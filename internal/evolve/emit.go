@@ -45,9 +45,18 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "name: %s\n", label)
 	fmt.Fprintf(&b, "description: %s\n", yamlOneLine(description))
+	// evolved_from carries the id AND the source path. The id alone
+	// answers "which instincts became this skill"; only the path answers
+	// "let me go read one", and a reader auditing a surprising skill wants
+	// the second. The body has carried both for a while — the frontmatter,
+	// which is what tooling reads, carried only the id.
 	b.WriteString("evolved_from:\n")
-	for _, id := range ids {
-		fmt.Fprintf(&b, "  - %s\n", id)
+	for _, m := range sortedMembers(c.Members) {
+		if m.Path != "" {
+			fmt.Fprintf(&b, "  - {id: %s, path: %s}\n", m.ID, m.Path)
+			continue
+		}
+		fmt.Fprintf(&b, "  - {id: %s}\n", m.ID)
 	}
 	fmt.Fprintf(&b, "generated_by: bough-evolve@v0.9.1\n")
 	fmt.Fprintf(&b, "generated_at: %s\n", now.UTC().Format(time.RFC3339))
@@ -71,20 +80,40 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 	}
 }
 
-// WriteSkill persists a SkillArtifact to
-// <skillsDir>/<slug>/SKILL.md atomically and returns the SKILL.md
-// path. Existing skill dirs are overwritten (= re-running evolve
-// refreshes the body without minting a new label). Symlinking the
-// result into project scope is done by cli.deployProjectSkills.
+// WriteSkill persists a SkillArtifact to <skillsDir>/<slug>/SKILL.md
+// atomically and returns the SKILL.md path. Re-running evolve refreshes
+// an existing body — EXCEPT where doing so would destroy a decision the
+// operator already made:
+//
+//   - a file carrying `curated: true` was taken over by hand, and
+//     re-emitting is how that rewrite silently disappears (ErrCurated)
+//   - a slug in the retire registry was rejected, and re-emitting is how
+//     a rejection gets undone by the next run (ErrRetired)
+//
+// Both are returned as errors for the caller to REPORT, not to abort on:
+// they are outcomes of a healthy run, not faults.
+//
+// Symlinking the result into project scope is done by
+// cli.deployProjectSkills.
 func WriteSkill(skillsDir string, art SkillArtifact) (string, error) {
 	if !labelPattern.MatchString(art.Slug) {
 		return "", fmt.Errorf("evolve.WriteSkill: invalid slug %q", art.Slug)
 	}
+	reg, err := LoadRetireRegistry(skillsDir)
+	if err != nil {
+		return "", err
+	}
+	if reg.Retired(art.Slug) {
+		return "", fmt.Errorf("%w: %s (%s)", ErrRetired, art.Slug, reg.Slugs[art.Slug])
+	}
 	dir := filepath.Join(skillsDir, art.Slug)
+	path := filepath.Join(dir, "SKILL.md")
+	if IsCurated(path) {
+		return "", fmt.Errorf("%w: %s", ErrCurated, path)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("evolve.WriteSkill: mkdir %s: %w", dir, err)
 	}
-	path := filepath.Join(dir, "SKILL.md")
 	if err := atomicWriteFile(path, []byte(art.Body)); err != nil {
 		return "", err
 	}
@@ -197,6 +226,16 @@ func memberIDs(c Cluster) []string {
 	return ids
 }
 
+// sortedMembers returns members ordered by id without mutating the
+// caller's slice. The frontmatter provenance list and the source-instinct
+// body block both need this order, and they must agree: a reader
+// cross-checking one against the other should not have to re-sort.
+func sortedMembers(members []*homunculus.Instinct) []*homunculus.Instinct {
+	out := append([]*homunculus.Instinct(nil), members...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // sourceInstinctsBlock renders a "## Source instincts" provenance block:
 // one "- `<id>` — <path>" line per member, sorted by id so a re-emit is
 // byte-stable (and matches the evolved_from frontmatter order). The path
@@ -205,8 +244,7 @@ func memberIDs(c Cluster) []string {
 // homunculus store — can open the originating instinct. A member with no
 // Path (an in-memory / test instinct) degrades to "- `<id>`".
 func sourceInstinctsBlock(members []*homunculus.Instinct) string {
-	sorted := append([]*homunculus.Instinct(nil), members...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	sorted := sortedMembers(members)
 	var b strings.Builder
 	b.WriteString("## Source instincts\n\n")
 	for _, m := range sorted {

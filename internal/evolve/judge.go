@@ -36,15 +36,15 @@ type Judge interface {
 // The numeric gate metrics are passed through verbatim so the LLM
 // sees the same numbers the mechanical gates computed.
 type JudgeInput struct {
-	ProjectName     string
-	MemberCount     int
-	Cohesion        float64
-	LexiconCoverage float64
-	RelIsolation    float64
-	MaxPriorOverlap float64
+	ProjectName       string
+	MemberCount       int
+	Cohesion          float64
+	LexiconCoverage   float64
+	RelIsolation      float64
+	MaxPriorOverlap   float64
 	NearestPriorLabel string
-	Cluster         Cluster
-	Gate            GateVerdict
+	Cluster           Cluster
+	Gate              GateVerdict
 }
 
 // JudgeData is the flat struct the evolve_judge.md template binds

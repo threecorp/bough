@@ -32,7 +32,9 @@ func TestRenderSkill_Frontmatter(t *testing.T) {
 		"name: io-data-layer",
 		"description: Apply when wrapping I/O",
 		"evolved_from:",
-		"- member-a",
+		// Path-less members degrade to id-only; the path form is pinned in
+		// TestRenderSkill_EvolvedFromCarriesPath.
+		"- {id: member-a}",
 		"generated_by: bough-evolve@v0.9.1",
 		"Evolved from 3 instincts.",
 		"## Actions",
