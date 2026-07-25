@@ -10,6 +10,15 @@ type Thresholds struct {
 	CohesionMin        float64 // GATE 2: minimum mean pairwise jaccard
 	LexiconCoverageMax float64 // GATE 3': maximum prior-vocabulary coverage
 	RelIsolationMin    float64 // GATE 4: minimum internal-vs-external isolation
+	// CliqueK is the clique size discovery percolates (see cpm.go). k=2
+	// IS single-linkage — every member of a k=2 community is reachable by
+	// a chain of single edges — so k=2 reproduces the pre-CPM behaviour
+	// and k=3 (default) requires each member to sit in a triangle, which
+	// is what stops a weak bridge from fusing two unrelated groups.
+	// Because a k-clique has k members, a CliqueK above MemberMin raises
+	// the effective member floor; `bough evolve` prints CliqueK next to
+	// the other thresholds so that is never a silent cap.
+	CliqueK int
 }
 
 // DefaultThresholds are the ECC v3 production values. Calibrated
@@ -21,6 +30,7 @@ func DefaultThresholds() Thresholds {
 		CohesionMin:        0.20,
 		LexiconCoverageMax: 0.55,
 		RelIsolationMin:    0.40,
+		CliqueK:            3,
 	}
 }
 
@@ -30,7 +40,7 @@ func DefaultThresholds() Thresholds {
 // sees the same numbers the mechanical gates did.
 type GateVerdict struct {
 	Passed          bool
-	RejectedAt      string  // "" when passed; else "gate1" / "gate2" / "gate3" / "gate4"
+	RejectedAt      string // "" when passed; else "gate1" / "gate2" / "gate3" / "gate4"
 	MemberCount     int
 	Cohesion        float64
 	LexiconCoverage float64

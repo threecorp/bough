@@ -60,7 +60,11 @@ func instinctSurface(in *homunculus.Instinct) string {
 //     an existing cluster).
 //  3. Build a graph over the weak instincts: edge i—j exists when
 //     Jaccard(i, j) >= COH_MIN.
-//  4. Connected components of that graph are the candidate clusters.
+//  4. Clique-percolation communities of that graph (Thresholds.CliqueK,
+//     see cpm.go) are the candidate clusters. Single linkage — the
+//     pre-CPM behaviour, still reachable with CliqueK=2 — merged on one
+//     qualifying edge, so a chain A—B—C—D became one incoherent cluster
+//     even when A and D shared nothing.
 //
 // priors may be nil (= first evolve pass, every instinct is weakly
 // attached). The returned clusters carry their nearest-prior link so
@@ -82,8 +86,8 @@ func Discover(instincts []*homunculus.Instinct, priors []Prior, th Thresholds) [
 		}
 	}
 
-	// Step 3 + 4: connected components over the cohesion graph.
-	components := connectedComponents(weak, th.CohesionMin)
+	// Step 3 + 4: clique-percolation communities over the cohesion graph.
+	components := cliqueCommunities(weak, th.CohesionMin, th.CliqueK)
 
 	clusters := make([]Cluster, 0, len(components))
 	for _, comp := range components {
@@ -129,53 +133,6 @@ func buildCluster(comp []memberToken, priors []Prior) Cluster {
 	c.candidateTokens = union(sets...)
 	c.NearestPrior, c.NearestOverlap = nearestPrior(c.candidateTokens, priors)
 	return c
-}
-
-// connectedComponents builds the cohesion graph (edge when pairwise
-// Jaccard >= cohMin) and returns its connected components via union-
-// find. Singletons (= no qualifying edge) come back as one-member
-// components so GATE 1 can reject them explicitly rather than
-// dropping them silently.
-func connectedComponents(members []memberToken, cohMin float64) [][]memberToken {
-	n := len(members)
-	if n == 0 {
-		return nil
-	}
-	parent := make([]int, n)
-	for i := range parent {
-		parent[i] = i
-	}
-	var find func(int) int //nolint:staticcheck // recursive closure: declaration must precede assignment
-	find = func(x int) int {
-		for parent[x] != x {
-			parent[x] = parent[parent[x]]
-			x = parent[x]
-		}
-		return x
-	}
-	union2 := func(a, b int) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[ra] = rb
-		}
-	}
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if Jaccard(members[i].Tokens, members[j].Tokens) >= cohMin {
-				union2(i, j)
-			}
-		}
-	}
-	groups := map[int][]memberToken{}
-	for i := 0; i < n; i++ {
-		root := find(i)
-		groups[root] = append(groups[root], members[i])
-	}
-	out := make([][]memberToken, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, g)
-	}
-	return out
 }
 
 func maxPriorOverlap(tokens map[string]struct{}, priors []Prior) float64 {
