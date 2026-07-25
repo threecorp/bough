@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
@@ -102,6 +103,57 @@ func renderContinuousLearningPosture(w io.Writer) {
 	fmt.Fprintf(w, "    %s   denylist        %s\n", st.Mark(denyStatus), denyLine)
 	groundStatus, groundLine := groundingLine()
 	fmt.Fprintf(w, "    %s   rule grounding  %s\n", st.Mark(groundStatus), groundLine)
+
+	// The exclusion switch is decided by evidence, not by the config flag
+	// alone. Printing WAIT with the specific missing precondition is the
+	// point: "not ready (0.62)" tells an operator nothing about what to
+	// go do.
+	exStatus, exLines := exclusionReadinessLines()
+	for i, line := range exLines {
+		if i == 0 {
+			fmt.Fprintf(w, "    %s   skill exclusion %s\n", st.Mark(exStatus), line)
+			continue
+		}
+		fmt.Fprintf(w, "          %s\n", line)
+	}
+}
+
+// exclusionReadinessLines renders the readiness verdict for suppressing
+// skill-covered instincts, naming each unmet precondition.
+func exclusionReadinessLines() (termio.Status, []string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return termio.StatusNeutral, []string{"WAIT — cannot resolve the project root"}
+	}
+	root := resolveMonorepoRoot(cwd)
+	ident, ierr := homunculus.DetectIdentity(root)
+	if ierr != nil {
+		return termio.StatusNeutral, []string{"WAIT — no project identity here"}
+	}
+	layout := homunculus.NewLayout()
+	requested := false
+	if cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root)); cerr == nil {
+		requested = cfg.Instinct.ExcludeSkillCovered
+	}
+	r := evolve.ExclusionReadiness(
+		layout.EvolvedSkillsDir(ident.ID),
+		filepath.Join(root, ".claude", "skills"),
+		layout.SkillCoverageFile(ident.ID),
+	)
+	switch {
+	case r.Ready() && requested:
+		return termio.StatusOK, []string{"ON — skill-covered instincts are not also pushed"}
+	case r.Ready():
+		return termio.StatusNeutral, []string{"READY but not requested (set instinct.exclude_skill_covered: true)"}
+	}
+	lines := []string{"WAIT — not safe to stop pushing skill-covered instincts:"}
+	for _, b := range r.Blockers() {
+		lines = append(lines, "- "+b.Name+": "+b.Detail)
+	}
+	if requested {
+		lines = append(lines, "(requested in .bough.yaml, held by the gate — nothing is being suppressed)")
+	}
+	return termio.StatusNeutral, lines
 }
 
 // denylistActive reports whether the denylist sidecar is loaded for the
