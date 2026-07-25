@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,91 @@ func TestQuarantineReport_HasReversibleRestore(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("REPORT.md missing %q\n---\n%s", want, s)
 		}
+	}
+}
+
+// TestPromote_ArchivesSupersededVersion is the archive-never-delete
+// contract. Minting is id-addressed and the writer overwrites in place,
+// so a re-mint under the same id would destroy the prior text with no
+// record. The prior version must survive, whole, with a restore line.
+func TestPromote_ArchivesSupersededVersion(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+
+	// Pass 1 mints the original.
+	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
+	if out := screenAndPromote(layout, ident.ID, staged1, gate, first); out.Superseded != 0 {
+		t.Fatalf("first pass Superseded = %d, want 0 (nothing to supersede)", out.Superseded)
+	}
+	original, err := os.ReadFile(filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md"))
+	if err != nil {
+		t.Fatalf("original missing: %v", err)
+	}
+
+	// Pass 2 re-mints the SAME id with different text.
+	revised := map[string]any{
+		"instincts": []any{
+			map[string]any{
+				"id": "read-before-edit", "trigger": "when editing unfamiliar files",
+				"confidence": 0.9, "domain": "workflow", "scope": "project",
+				"action":   "Read the whole enclosing function, not just the edited line.",
+				"evidence": []any{"observed 9 times"},
+			},
+		},
+	}
+	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
+	out := screenAndPromote(layout, ident.ID, staged2, gate, second)
+
+	if out.Superseded != 1 || out.ArchiveDir == "" {
+		t.Fatalf("Superseded=%d ArchiveDir=%q, want 1 and a dir (errs=%v)", out.Superseded, out.ArchiveDir, out.Errs)
+	}
+	// The prior version survives byte-for-byte in the archive …
+	archived, err := os.ReadFile(filepath.Join(out.ArchiveDir, "read-before-edit.md"))
+	if err != nil {
+		t.Fatalf("archived prior version missing: %v", err)
+	}
+	if !bytes.Equal(archived, original) {
+		t.Errorf("archived copy differs from the original it replaced")
+	}
+	// … and the personal corpus now holds the new text.
+	live, _ := homunculus.ReadInstinctFile(filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md"))
+	if live == nil || !strings.Contains(live.Body, "whole enclosing function") {
+		t.Errorf("personal corpus does not hold the new version: %+v", live)
+	}
+	report, err := os.ReadFile(filepath.Join(out.ArchiveDir, "REPORT.md"))
+	if err != nil {
+		t.Fatalf("archive REPORT.md missing: %v", err)
+	}
+	for _, want := range []string{"superseded", "mv ", "read-before-edit.md"} {
+		if !strings.Contains(string(report), want) {
+			t.Errorf("archive REPORT.md missing %q\n---\n%s", want, report)
+		}
+	}
+}
+
+// TestPromote_IdenticalRemintIsNotArchived keeps the archive signal
+// clean: re-minting identical text is reinforcement, not a supersede,
+// and archiving it would bury real changes under duplicates.
+func TestPromote_IdenticalRemintIsNotArchived(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
+	screenAndPromote(layout, ident.ID, staged1, gate, now)
+	// Same payload, same mint timestamp ⇒ byte-identical rendering.
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
+	out := screenAndPromote(layout, ident.ID, staged2, gate, now)
+
+	if out.Superseded != 0 {
+		t.Errorf("identical re-mint Superseded = %d, want 0", out.Superseded)
+	}
+	if _, err := os.Stat(layout.ArchiveDir(ident.ID)); !os.IsNotExist(err) {
+		t.Errorf("archive dir created for an identical re-mint (err=%v)", err)
 	}
 }
 

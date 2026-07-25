@@ -89,6 +89,16 @@ func (l Layout) QuarantineDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "instincts", ".policy-quarantine")
 }
 
+// ArchiveDir holds superseded versions of instincts. Minting is
+// id-addressed and the writer overwrites in place, so re-minting an
+// existing id would destroy the previous version's text with no
+// record — the same data loss as a delete, just spelled differently.
+// The prior version is moved here first, into a dated batch with a
+// manifest, so a supersede is inspectable and reversible.
+func (l Layout) ArchiveDir(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "instincts", ".archive")
+}
+
 // ObservationsFile is the JSONL trail bough hook handle appends to
 // from PreToolUse / PostToolUse / Stop hooks. observer-loop reads
 // the tail of this file.

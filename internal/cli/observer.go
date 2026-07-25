@@ -184,6 +184,10 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
+			if outcome.Superseded > 0 {
+				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
+					outcome.Superseded, outcome.ArchiveDir)
+			}
 			snap := res.Snapshot
 			fmt.Fprintf(stdout, "limiter: session=%d/hour=%d/failures=%d circuit_open=%t\n",
 				snap.SessionN, snap.HourN, snap.Failures, snap.CircuitOpen)
