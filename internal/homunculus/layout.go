@@ -131,6 +131,23 @@ func (l Layout) EvolvedAgentsDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "evolved", "agents")
 }
 
+// EvolvedRulesDir holds <slug>.md path-scoped rules. These are a
+// COMPLEMENT to retrieval, not a duplicate of it: retrieval only
+// answers "the prompt mentioned this", while a path-scoped rule fires
+// when a file is read — the one moment that reaches a session which
+// never named the subsystem out loud.
+func (l Layout) EvolvedRulesDir(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "evolved", "rules")
+}
+
+// SkillCoverageFile records which instinct ids are already delivered by
+// an evolved skill. It is the single registry behind the double-supply
+// question — the same knowledge pushed into every prompt AND available
+// as a skill the model pulls — with exactly one consumer (the injector).
+func (l Layout) SkillCoverageFile(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "evolved", "skill-coverage.json")
+}
+
 // EvolvedCommandsDir holds <slug>.md slash-command specs.
 func (l Layout) EvolvedCommandsDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "evolved", "commands")
