@@ -1,14 +1,17 @@
 // Package inject builds the context block bough's UserPromptSubmit
 // hook prints to stdout. Claude Code folds that stdout into the next
 // turn's context, so it is billed as input tokens at the operator's
-// subscription rate. The block is therefore capped (= ECC's ~9.5KB
-// default) and confidence-sorted so the most-reliable instincts land
-// in the window before the cap truncates.
+// subscription rate. The block is therefore capped (~9.5KB default) and
+// ordered by RELEVANCE to the current prompt, so the instincts that
+// actually bear on this turn land in the window before the cap
+// truncates. Without a prompt there is nothing to be relevant to, and
+// the confidence order is the fallback.
 //
 // This package is intentionally LLM-free: the UserPromptSubmit hook
 // fires on every prompt, so anything that spawned `claude --print`
 // here would add latency + cost to every keystroke-to-response cycle.
-// Instinct selection is pure filesystem + sort.
+// Selection is pure filesystem plus lexical retrieval (internal/retrieve)
+// — no embeddings, no network, no model call on the prompt hot path.
 package inject
 
 import (
@@ -17,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/retrieve"
 )
 
 // DefaultMaxBytes is the ECC-derived cap on the injected block. The
@@ -46,6 +50,15 @@ type Options struct {
 	MaxBytes      int
 	MaxInstincts  int
 	MinConfidence *float64
+	// Prompt is the user's submitted text. When non-empty, selection is
+	// RELEVANCE-ranked against it (see internal/retrieve) instead of
+	// confidence-ranked. Empty keeps the confidence-ordered fallback,
+	// which is all a caller without a prompt can do.
+	Prompt string
+	// ContextTokens describe where the session is working (sub-project /
+	// package names below the project root). See retrieve.ContextTokens
+	// for why the repo name itself is deliberately not among them.
+	ContextTokens []string
 }
 
 func (o Options) withDefaults() Options {
@@ -62,6 +75,14 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
+// ranked is one candidate instinct plus the scope it came from. It is
+// package scope rather than local to Build because the relevance path
+// hands the pool to a helper and gets it back reordered.
+type ranked struct {
+	in        *homunculus.Instinct
+	isProject bool
+}
+
 // Build assembles the injection block from the project + global
 // instinct corpora. Selection order:
 //
@@ -75,23 +96,23 @@ func (o Options) withDefaults() Options {
 //     copy may have since diverged into independently-valid,
 //     cross-project-validated knowledge (session evaluation only ever
 //     adjusts the project-scope copy's confidence).
-//  3. Sort by confidence descending (= ECC's confidence-sort, the
-//     threecorp improvement over the original alphabetical order
-//     that truncated mid-corpus by filename).
+//  3. Order the survivors. With a prompt, that is relevance (see
+//     internal/retrieve): three channels fused by rank, and a candidate
+//     matching in none of them is DROPPED, so an off-topic prompt
+//     correctly yields nothing. Without a prompt there is no relevance
+//     to compute, so confidence order is the fallback.
 //  4. Take the top MaxInstincts.
 //  5. Render one line per instinct, stopping before the byte cap so
 //     the block never exceeds MaxBytes mid-line.
 //
-// project instincts rank above global ones at equal confidence (=
-// the local repo's learned patterns are more specific). Returns the
+// Confidence still gates entry (step 1) and is still displayed, but it
+// no longer decides ORDER when a prompt is available: measured on this
+// project's live corpus every instinct carries the same confidence, so
+// ordering by it was really ordering by the id tiebreak. Returns the
 // rendered block + the count actually included.
 func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	opts = opts.withDefaults()
 
-	type ranked struct {
-		in        *homunculus.Instinct
-		isProject bool
-	}
 	pool := make([]ranked, 0, len(project)+len(global))
 	// A project ID shadows the same-ID global one ONLY when the project
 	// copy itself clears the confidence floor (= is actually being
@@ -119,16 +140,24 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 			pool = append(pool, ranked{in: in, isProject: false})
 		}
 	}
-	sort.SliceStable(pool, func(i, j int) bool {
-		if pool[i].in.Confidence != pool[j].in.Confidence {
-			return pool[i].in.Confidence > pool[j].in.Confidence
-		}
-		// project before global at equal confidence
-		if pool[i].isProject != pool[j].isProject {
-			return pool[i].isProject
-		}
-		return pool[i].in.ID < pool[j].in.ID
-	})
+	if opts.Prompt != "" {
+		pool = rankByRelevance(pool, opts)
+	} else {
+		// No prompt: there is no relevance to compute, so fall back to
+		// the confidence order. Measured on this project's live corpus
+		// every instinct carries the SAME confidence, which makes this
+		// order effectively alphabetical — a fallback, not a ranking.
+		sort.SliceStable(pool, func(i, j int) bool {
+			if pool[i].in.Confidence != pool[j].in.Confidence {
+				return pool[i].in.Confidence > pool[j].in.Confidence
+			}
+			// project before global at equal confidence
+			if pool[i].isProject != pool[j].isProject {
+				return pool[i].isProject
+			}
+			return pool[i].in.ID < pool[j].in.ID
+		})
+	}
 	if len(pool) > opts.MaxInstincts {
 		pool = pool[:opts.MaxInstincts]
 	}
@@ -152,6 +181,47 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	}
 	_ = header
 	return b.String(), included
+}
+
+// rankByRelevance reorders the pool by how well each instinct matches
+// the prompt, dropping the ones that match it in no channel. That drop
+// is the point: an off-topic prompt should surface nothing rather than
+// fill the block with whatever ranked first on a content-independent
+// order.
+func rankByRelevance(pool []ranked, opts Options) []ranked {
+	docs := make([]retrieve.Doc, 0, len(pool))
+	byID := make(map[string]ranked, len(pool))
+	for _, r := range pool {
+		key := scopedKey(r)
+		byID[key] = r
+		docs = append(docs, retrieve.Doc{
+			ID:         key,
+			Text:       r.in.ID + " " + r.in.Trigger + " " + r.in.Body,
+			ModTime:    r.in.LastSeen,
+			Confidence: r.in.Confidence,
+			IsProject:  r.isProject,
+		})
+	}
+	ranker := retrieve.NewRanker()
+	ranker.MaxResults = opts.MaxInstincts
+	out := make([]ranked, 0, opts.MaxInstincts)
+	for _, res := range ranker.Rank(docs, opts.Prompt, opts.ContextTokens) {
+		if r, ok := byID[res.Doc.ID]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// scopedKey distinguishes a project instinct from a global one carrying
+// the same id. Build already resolved that collision in favour of the
+// project copy, but the retrieval index is keyed by id, so the scope has
+// to travel with it or one entry would shadow the other on lookup.
+func scopedKey(r ranked) string {
+	if r.isProject {
+		return "project/" + r.in.ID
+	}
+	return "global/" + r.in.ID
 }
 
 // renderInstinctLine is the one-instinct rendering used inside the

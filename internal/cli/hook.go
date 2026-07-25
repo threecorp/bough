@@ -349,7 +349,7 @@ func newHookHandleCmd() *cobra.Command {
 			// stays opt-in via the observer daemon.
 			switch event {
 			case string(hooks.EventUserPromptSubmit):
-				dispatchInjectContext(c)
+				dispatchInjectContext(c, extractPrompt(payload))
 				dispatchObserverAutostart(c)
 			case string(hooks.EventSessionEnd):
 				_ = runSessionEnd(c.OutOrStdout(), "", extractSessionID(payload), sessionEndDefaultWindow)
@@ -464,11 +464,33 @@ func rotateIfLarge(obsPath string) {
 // selection errors are swallowed (= a non-git directory or empty
 // corpus must not break the operator's prompt); the block is only
 // emitted when there is something worth injecting.
-func dispatchInjectContext(c *cobra.Command) {
+func dispatchInjectContext(c *cobra.Command, prompt string) {
 	// runInjectContext (internal/cli/inject.go) is shared with `bough
 	// inject-context`'s RunE so the hook path and the manual preview
 	// command cannot silently diverge.
-	_ = runInjectContext(c.OutOrStdout(), "", inject.Options{})
+	//
+	// The prompt is what makes the selection a RANKING rather than an
+	// arbitrary order: it is the only relevance signal available, and
+	// before it was plumbed through, selection ignored what the operator
+	// had actually asked about.
+	_ = runInjectContext(c.OutOrStdout(), "", inject.Options{Prompt: prompt})
+}
+
+// extractPrompt pulls the user's submitted text out of a
+// UserPromptSubmit payload. Mirrors extractSessionID: a payload that
+// does not parse is not an error for a hook — it just means no prompt
+// signal, and selection falls back to the confidence order.
+func extractPrompt(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var probe struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return ""
+	}
+	return probe.Prompt
 }
 
 // dispatchEvolveClaudeMD runs the CLAUDE.md proposer in write mode on

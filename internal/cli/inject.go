@@ -9,6 +9,7 @@ import (
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
+	"github.com/ikeikeikeike/bough/internal/retrieve"
 )
 
 // runInjectContext resolves the current project's instinct pools and
@@ -46,6 +47,13 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	layout := homunculus.NewLayout()
 	project, _ := homunculus.ScanInstincts(layout.InstinctsDir(ident.ID))
 	global, _ := homunculus.ScanInstincts(layout.GlobalInstinctsDir())
+	// Where the session is working is part of the query. Derived
+	// relative to the monorepo root, so the repo name itself — which
+	// matches a large share of the corpus and would drown short prompts
+	// — contributes nothing.
+	if len(opts.ContextTokens) == 0 {
+		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
+	}
 	block, n := inject.Build(project, global, opts)
 	// Human-authored corrections outrank minted instincts and are not
 	// scored, so they are prepended rather than merged into the ranking
@@ -98,6 +106,7 @@ func newInjectContextCmd() *cobra.Command {
 		maxBytes int
 		maxN     int
 		minConf  float64
+		prompt   string
 	)
 	cmd := &cobra.Command{
 		Use:   "inject-context",
@@ -114,6 +123,7 @@ is made — selection is pure filesystem.`,
 			opts := inject.Options{
 				MaxBytes:     maxBytes,
 				MaxInstincts: maxN,
+				Prompt:       prompt,
 			}
 			// Only override MinConfidence when the operator actually
 			// passed the flag: --min-confidence 0 is a legitimate "no
@@ -131,5 +141,6 @@ is made — selection is pure filesystem.`,
 	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the injected block (default 9500)")
 	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to consider (default 40)")
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")
 	return cmd
 }

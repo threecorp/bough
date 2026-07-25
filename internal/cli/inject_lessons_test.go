@@ -96,6 +96,50 @@ func TestInjectContext_LessonsSurviveWhenNothingClearsTheFloor(t *testing.T) {
 	}
 }
 
+// TestInjectContext_PromptSelectsRelevantInstinct pins the plumbing
+// end-to-end: the prompt has to reach selection, or relevance ranking is
+// dead code. Two instincts, one matching the prompt — only that one may
+// be injected.
+func TestInjectContext_PromptSelectsRelevantInstinct(t *testing.T) {
+	repo := injectFixture(t, "0.9") // seeds minted-note ("Do the minted thing")
+	ident, err := homunculus.DetectIdentity(repo)
+	if err != nil {
+		t.Skipf("identity: %v", err)
+	}
+	other := "---\nid: mysql-handshake\ntrigger: when the mysql probe fails\nconfidence: 0.9\nscope: project\n---\n\n" +
+		"## Action\nRetry the mysql handshake for 30 seconds.\n"
+	dir := homunculus.NewLayout().InstinctsDir(ident.ID)
+	if err := os.WriteFile(filepath.Join(dir, "mysql-handshake.md"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runInjectContext(&buf, repo, inject.Options{Prompt: "the mysql handshake keeps failing"}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Retry the mysql handshake") {
+		t.Errorf("the prompt-relevant instinct was not injected:\n%s", out)
+	}
+	if strings.Contains(out, "Do the minted thing") {
+		t.Errorf("an unrelated instinct was injected despite the prompt:\n%s", out)
+	}
+}
+
+// TestInjectContext_OffTopicPromptInjectsNothing pins the drop rule at
+// the CLI boundary: a prompt matching no instinct must produce an empty
+// block, not the corpus's alphabetical head.
+func TestInjectContext_OffTopicPromptInjectsNothing(t *testing.T) {
+	repo := injectFixture(t, "0.9")
+	var buf bytes.Buffer
+	if err := runInjectContext(&buf, repo, inject.Options{Prompt: "photosynthesis in alpine wildflowers"}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("off-topic prompt injected something:\n%s", buf.String())
+	}
+}
+
 // TestInjectContext_NoLessonsNoInstinctsIsCleanNoOp pins the hook
 // contract: with nothing to say, stdout stays empty so the prompt is
 // completely unaffected.
