@@ -36,7 +36,8 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// git repo; each sub-repo has its own origin) the raw-cwd id would
 	// differ from the writer's id, so this injector would read an
 	// empty project and surface nothing — the loop's whole payoff.
-	ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
+	monoRoot := resolveMonorepoRoot(cwd)
+	ident, err := homunculus.DetectIdentity(monoRoot)
 	if err != nil {
 		// A non-git directory is not an error for a hook — just
 		// emit nothing so the prompt is unaffected.
@@ -46,11 +47,37 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	project, _ := homunculus.ScanInstincts(layout.InstinctsDir(ident.ID))
 	global, _ := homunculus.ScanInstincts(layout.GlobalInstinctsDir())
 	block, n := inject.Build(project, global, opts)
-	if n == 0 {
-		return nil // no qualifying instincts → clean no-op
+	// Human-authored corrections outrank minted instincts and are not
+	// scored, so they are prepended rather than merged into the ranking
+	// — and they are emitted even when nothing cleared the confidence
+	// floor, since ground truth does not depend on the corpus having
+	// anything to say.
+	// Both the config lookup and the file lookup anchor on the SAME
+	// monorepo root the identity resolved from. Passing the raw `root`
+	// parameter here would read a different (possibly empty) directory,
+	// so an operator's configured path would be silently ignored when the
+	// hook fires from a sub-repo.
+	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
+	if lessons == "" && n == 0 {
+		return nil // nothing to say → clean no-op
 	}
-	fmt.Fprint(out, block)
+	fmt.Fprint(out, lessons)
+	if n > 0 {
+		fmt.Fprint(out, block)
+	}
 	return nil
+}
+
+// lessonsPaths reads the operator's lessons-file locations from
+// .bough.yaml, falling back to the conventional set. A missing or
+// unreadable config is not an error: the hook fires on every prompt, so
+// it degrades to the conventions rather than failing the turn.
+func lessonsPaths(root string) []string {
+	cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
+	if err != nil {
+		return nil
+	}
+	return cfg.Instinct.Lessons.Paths
 }
 
 // newInjectContextCmd wires `bough inject-context` — the
