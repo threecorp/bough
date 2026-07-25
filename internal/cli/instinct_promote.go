@@ -3,12 +3,14 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/instinctgate"
 )
 
 // Promotion thresholds — faithful port of ECC continuous-learning-v2
@@ -26,6 +28,10 @@ type promoteOptions struct {
 	minProjects   int
 	minConfidence float64
 	dryRun        bool
+	// gate screens candidates before they reach global scope. nil means
+	// no screening — used only by tests that are exercising the
+	// thresholds rather than the guard.
+	gate *instinctgate.Gate
 }
 
 // promoteEntry is one project's copy of a shared instinct id.
@@ -48,9 +54,40 @@ type promoteCandidate struct {
 type promoteResult struct {
 	promoted      []promoteCandidate
 	skippedGlobal []promoteCandidate // id already in the global corpus
-	belowThresh   int                // cross-project but under the gate
-	writeErrs     []error
-	dryRun        bool
+	belowThresh   int                // cross-project but under the confidence threshold
+	// gateHeld are candidates the policy gate refused to promote. They
+	// are reported rather than counted: a silent refusal at the widest
+	// blast radius in the system is the last place to hide a decision.
+	gateHeld  []gateHold
+	writeErrs []error
+	dryRun    bool
+}
+
+// gateHold names one candidate the gate kept out of global scope.
+type gateHold struct {
+	id   string
+	rule string
+}
+
+// screenPromotion runs the gate over one promotion candidate. The
+// screened surface is the same one the mint path screens — trigger plus
+// the first action line — so an instinct cannot be judged by one
+// standard on the way in and a different one on the way up.
+func screenPromotion(gate *instinctgate.Gate, cand promoteCandidate) (instinctgate.Decision, bool) {
+	if gate == nil {
+		return instinctgate.Decision{}, false
+	}
+	best := bestEntry(cand.entries).instinct
+	res := gate.Screen([]instinctgate.Candidate{{
+		ID:      cand.id,
+		Trigger: best.Trigger,
+		Action:  firstActionLine(best.Body),
+		Body:    best.Body,
+	}})
+	if len(res.Held) == 1 {
+		return res.Held[0], true
+	}
+	return instinctgate.Decision{}, false
 }
 
 // promoteInstincts scans every registered project's personal +
@@ -95,6 +132,16 @@ func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Tim
 		}
 		if cand.avgConfidence < opt.minConfidence {
 			res.belowThresh++
+			continue
+		}
+		// Promotion is the widest blast radius in the system: a global
+		// instinct is injected into EVERY project, so a forbidden action
+		// that reaches global scope is recommended everywhere at once.
+		// Screen it with the same matcher the mint path uses — one
+		// implementation, several call sites, so the two cannot drift into
+		// disagreeing about what is allowed.
+		if d, held := screenPromotion(opt.gate, cand); held {
+			res.gateHeld = append(res.gateHeld, gateHold{id: cand.id, rule: d.Rule})
 			continue
 		}
 		if !opt.dryRun {
@@ -223,6 +270,12 @@ project instincts are left untouched and ids already global are skipped
 (idempotent). Previews by default (--dry-run); pass --apply (or
 --dry-run=false) to write into the global corpus.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Global scope reaches every project, so promotion is screened by
+			// the same gate the mint path uses. Resolving it here (rather than
+			// inside promoteInstincts) keeps that function a pure function of
+			// its options, which is what the threshold tests rely on.
+			cwd, _ := os.Getwd()
+			opt.gate = instinctgate.New(gateConfigFor(cmd, resolveMonorepoRoot(cwd)))
 			res, err := promoteInstincts(homunculus.NewLayout(), opt, time.Now())
 			if err != nil {
 				return err
@@ -249,7 +302,7 @@ project instincts are left untouched and ids already global are skipped
 }
 
 func renderPromote(w io.Writer, res promoteResult) {
-	if len(res.promoted) == 0 && len(res.skippedGlobal) == 0 && res.belowThresh == 0 {
+	if len(res.promoted) == 0 && len(res.skippedGlobal) == 0 && res.belowThresh == 0 && len(res.gateHeld) == 0 {
 		fmt.Fprintln(w, "(no cross-project instincts found — need an id present in 2+ projects)")
 		return
 	}
@@ -265,7 +318,15 @@ func renderPromote(w io.Writer, res promoteResult) {
 		fmt.Fprintf(w, "skipped %d already-global id(s)\n", len(res.skippedGlobal))
 	}
 	if res.belowThresh > 0 {
-		fmt.Fprintf(w, "%d cross-project id(s) below the promotion gate\n", res.belowThresh)
+		fmt.Fprintf(w, "%d cross-project id(s) below the confidence threshold\n", res.belowThresh)
+	}
+	// A refusal at the widest blast radius in the system is the last place
+	// to hide a decision, so every held id is named with its rule.
+	if len(res.gateHeld) > 0 {
+		fmt.Fprintf(w, "policy gate withheld %d id(s) from global scope:\n", len(res.gateHeld))
+		for _, h := range res.gateHeld {
+			fmt.Fprintf(w, "  %-44s %s\n", truncate(h.id, 44), h.rule)
+		}
 	}
 	if res.dryRun {
 		fmt.Fprintln(w, "(dry-run: no files written)")

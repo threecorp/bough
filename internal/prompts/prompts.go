@@ -35,6 +35,8 @@ const (
 	TemplateLabel    = "evolve_label"
 	TemplateAgent    = "evolve_agent"
 	TemplateCommand  = "evolve_command"
+	// TemplateInstinctGate is the generation-gate judge (instinctgate).
+	TemplateInstinctGate = "instinct_gate"
 )
 
 // Template holds one resolved prompt body plus the metadata bough
@@ -118,7 +120,7 @@ func readFile(path string) (string, string, bool) {
 func isKnownTemplate(name string) bool {
 	switch name {
 	case TemplateObserver, TemplateJudge, TemplateLabel,
-		TemplateAgent, TemplateCommand:
+		TemplateAgent, TemplateCommand, TemplateInstinctGate:
 		return true
 	}
 	return false

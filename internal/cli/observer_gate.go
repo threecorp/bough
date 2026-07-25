@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +86,12 @@ type promoteOutcome struct {
 	// ArchiveDir rather than overwritten away.
 	Superseded int
 	ArchiveDir string
-	Errs       []error
+	// Reviewed and ReviewFailed report the LLM layer's coverage. "0 held"
+	// is meaningless without them: a judge that could not run at all
+	// produces the same held count as a corpus with nothing wrong.
+	Reviewed     int
+	ReviewFailed int
+	Errs         []error
 }
 
 // movedRecord is one file this pass relocated instead of destroying:
@@ -103,7 +109,7 @@ type movedRecord struct {
 // dated batch dir with a REPORT. Every transition is a move, never a
 // delete, so a held instinct is always recoverable — a false hold costs
 // an operator glance, not data.
-func screenAndPromote(layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, now time.Time) promoteOutcome {
+func screenAndPromote(layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, reviewer *instinctgate.Reviewer, now time.Time) promoteOutcome {
 	out := promoteOutcome{}
 	if len(staged) == 0 {
 		return out
@@ -121,6 +127,32 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 		})
 	}
 	res := gate.Screen(cands)
+	// The LLM layer runs LAST, on what the deterministic layers already
+	// cleared, so a model outage can never un-catch a command-shaped
+	// violation. It fails open and reports, because a guard that silently
+	// held everything would stop the corpus growing while looking like a
+	// clean pass.
+	if reviewer != nil && len(res.Cleared) > 0 {
+		judged, reviewed, failed, jerr := reviewer.ReviewBatch(context.Background(), res.Cleared)
+		out.Reviewed, out.ReviewFailed = reviewed, failed
+		if jerr != nil {
+			out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", failed, jerr))
+		}
+		if len(judged) > 0 {
+			flagged := make(map[string]bool, len(judged))
+			for _, d := range judged {
+				flagged[d.ID] = true
+			}
+			kept := res.Cleared[:0]
+			for _, c := range res.Cleared {
+				if !flagged[c.ID] {
+					kept = append(kept, c)
+				}
+			}
+			res.Cleared = kept
+			res.Held = append(res.Held, judged...)
+		}
+	}
 
 	personalDir := layout.InstinctsDir(projectID)
 	if err := os.MkdirAll(personalDir, 0o755); err != nil {

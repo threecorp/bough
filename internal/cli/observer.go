@@ -67,6 +67,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 		out        string
 		model      string
 		maxCalls   int
+		judge      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run-once",
@@ -176,13 +177,26 @@ func newObserverRunOnceCmd() *cobra.Command {
 			now := time.Now().UTC()
 			staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, res.Parsed, now)
 			gate := instinctgate.New(gateConfigFor(cmd, root))
-			outcome := screenAndPromote(layout, ident.ID, staged, gate, now)
+			// The judge is opt-in per pass: it spends LLM calls, so an
+			// operator who wants only the free deterministic layers passes
+			// --no-judge rather than having to reason about cost every run.
+			var reviewer *instinctgate.Reviewer
+			if judge {
+				reviewer = newGateReviewer(model, maxCalls)
+			}
+			outcome := screenAndPromote(layout, ident.ID, staged, gate, reviewer, now)
 			errs = append(errs, outcome.Errs...)
 			fmt.Fprintf(stdout, "instincts emitted=%d quarantined=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
 				outcome.Emitted, outcome.Quarantined, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
 			if outcome.Quarantined > 0 {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
+			}
+			if reviewer != nil {
+				// "0 held" says nothing without the coverage behind it: a judge
+				// that could not run produces the same held count as a clean batch.
+				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",
+					outcome.Reviewed, outcome.ReviewFailed)
 			}
 			if outcome.Superseded > 0 {
 				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
@@ -203,6 +217,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "with --dry-run, write the rendered prompt to this path instead of stdout")
 	cmd.Flags().StringVar(&model, "model", "", "override the claude model (default: haiku)")
 	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "override the per-session LLM call cap (default: 10)")
+	cmd.Flags().BoolVar(&judge, "judge", true, "run the LLM layer of the generation gate (catches prose-shaped violations the patterns cannot; --judge=false spends no extra LLM calls)")
 	return cmd
 }
 
