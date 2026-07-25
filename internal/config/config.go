@@ -315,6 +315,20 @@ type InstinctGate struct {
 	// negation heuristic that guessed wrong would silently pass a real
 	// forbidden action.
 	AllowIDs []string `yaml:"allow_ids"`
+	// DenylistPath points at an UNTRACKED sidecar listing terms that must
+	// never propagate out of a session (client names, internal hostnames,
+	// unreleased codenames). It is a path rather than an inline list
+	// because committing those strings would publish exactly what the
+	// guard exists to contain. Empty falls back to the conventional
+	// location; a missing file leaves the layer inert.
+	DenylistPath string `yaml:"denylist_path"`
+	// GovernancePaths are the project's rule documents. An instinct that
+	// CLAIMS to cite a rule must share a contiguous run of words with
+	// them, which is what catches a confidently-invented policy. Empty
+	// falls back to the conventional set; nothing readable leaves the
+	// layer inert, since with no governance every citation would look
+	// unfounded.
+	GovernancePaths []string `yaml:"governance_paths"`
 }
 
 // GateEnabled reports whether the deterministic policy gate should run.

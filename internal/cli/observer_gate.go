@@ -297,10 +297,66 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
-		return instinctgate.Config{Enabled: true}
+		return instinctgate.Config{
+			Enabled:    true,
+			Denylist:   loadDenylistQuiet(root, ""),
+			Governance: instinctgate.LoadGovernance(governancePaths(root, nil)),
+		}
 	}
 	return instinctgate.Config{
-		Enabled:  cfg.Instinct.GateEnabled(),
-		AllowIDs: cfg.Instinct.Gate.AllowIDs,
+		Enabled:    cfg.Instinct.GateEnabled(),
+		AllowIDs:   cfg.Instinct.Gate.AllowIDs,
+		Denylist:   loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
+		Governance: instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths)),
 	}
+}
+
+// DefaultDenylistPath is where bough looks for the untracked denylist
+// sidecar when the operator has not configured one. It sits under the
+// repo's own .bough/ directory (gitignored) so the file lives beside the
+// project it describes without ever being committed.
+const DefaultDenylistPath = ".bough/denylist.txt"
+
+// defaultGovernancePaths are the conventional locations of a project's
+// rule documents. Both are checked because teams split governance
+// differently, and grounding against only one would flag the other's
+// rules as invented.
+var defaultGovernancePaths = []string{"CLAUDE.md", ".claude/rules"}
+
+// loadDenylistQuiet resolves and loads the denylist sidecar. A load
+// error is downgraded to an inert list here rather than failing the
+// mint: the observer runs unattended, and a broken sidecar must not cost
+// the operator the whole extraction pass. `bough doctor` reports the
+// resulting posture, so "off" stays visible.
+func loadDenylistQuiet(root, configured string) *instinctgate.Denylist {
+	path := configured
+	if path == "" {
+		path = DefaultDenylistPath
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	d, err := instinctgate.LoadDenylist(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bough: WARNING denylist %s unreadable (%v) — that layer is OFF for this pass\n", path, err)
+		return nil
+	}
+	return d
+}
+
+// governancePaths resolves the rule-document locations against the
+// monorepo root, falling back to the conventional set.
+func governancePaths(root string, configured []string) []string {
+	paths := configured
+	if len(paths) == 0 {
+		paths = defaultGovernancePaths
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+		out = append(out, p)
+	}
+	return out
 }
