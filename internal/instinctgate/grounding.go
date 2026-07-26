@@ -47,7 +47,13 @@ var ruleClaimMarkers = []string{
 // say what an instinct was grounded against — "we found no rule" is
 // only actionable if the operator knows which documents were read.
 type Governance struct {
-	words   []string
+	words []string
+	// index maps each governance word to every position it occupies, so a
+	// candidate run can jump straight to its possible starts. It is built
+	// ONCE with the corpus rather than per Grounded call: the corpus is a
+	// few thousand words and a batch screens many candidates, so rebuilding
+	// it per call re-tokenized the whole corpus once per instinct.
+	index   map[string][]int
 	Sources []string
 }
 
@@ -88,6 +94,10 @@ func LoadGovernance(paths []string) *Governance {
 		}
 	}
 	g.words = normalizeWords(b.String())
+	g.index = make(map[string][]int, len(g.words))
+	for i, w := range g.words {
+		g.index[w] = append(g.index[w], i)
+	}
 	return g
 }
 
@@ -121,12 +131,8 @@ func (g *Governance) Grounded(text string) bool {
 	if len(claim) < groundingRunLength {
 		return true
 	}
-	index := map[string][]int{}
-	for i, w := range g.words {
-		index[w] = append(index[w], i)
-	}
 	for i := 0; i+groundingRunLength <= len(claim); i++ {
-		for _, start := range index[claim[i]] {
+		for _, start := range g.index[claim[i]] {
 			if runMatches(g.words, claim[i:i+groundingRunLength], start) {
 				return true
 			}
