@@ -141,6 +141,35 @@ func TestCliqueCommunitiesPartitionsMembers(t *testing.T) {
 	}
 }
 
+// TestCommunitiesSharingTheirLowestMemberStaySeparate is the regression
+// net for a partition-labelling defect: communities were labelled by
+// their smallest member index, so two communities that never percolated
+// but happened to share their LOWEST-indexed node (a hub) collapsed into
+// one label — re-fusing exactly the chain CPM exists to break, and
+// silently, since the count still looked plausible.
+//
+// Here the hub is member "a" at index 0: {a,b,c} and {a,d,e} are both
+// triangles, share only one node (percolation needs k-1 = 2), and both
+// have minIdx 0.
+func TestCommunitiesSharingTheirLowestMemberStaySeparate(t *testing.T) {
+	members := []memberToken{
+		tokenMember("a", "g1", "g2", "g3", "h1", "h2", "h3"), // hub, lowest index
+		tokenMember("b", "g1", "g2", "g3"),
+		tokenMember("c", "g1", "g2", "g3"),
+		tokenMember("d", "h1", "h2", "h3"),
+		tokenMember("e", "h1", "h2", "h3"),
+	}
+	got := componentIDs(cliqueCommunities(members, 0.20, 3))
+	if len(got) != 2 {
+		t.Fatalf("two triangles sharing one node = %v, want 2 separate communities", got)
+	}
+	// The hub is assigned to exactly one of them (partition invariant);
+	// the other keeps its remaining members rather than vanishing.
+	if got[0] != "a+b+c" || got[1] != "d+e" {
+		t.Errorf("components = %v, want [a+b+c d+e]", got)
+	}
+}
+
 // TestCliqueCommunitiesEmptyAndSingleton pins the degenerate inputs the
 // discovery step can legitimately hand over.
 func TestCliqueCommunitiesEmptyAndSingleton(t *testing.T) {

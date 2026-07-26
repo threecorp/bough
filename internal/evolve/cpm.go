@@ -94,16 +94,18 @@ func cliqueCommunities(members []memberToken, cohMin float64, k int) [][]memberT
 	for node, owner := range assigned {
 		grouped[owner] = append(grouped[owner], node)
 	}
-	owners := make([]int, 0, len(grouped))
-	for owner := range grouped {
-		owners = append(owners, owner)
-	}
-	sort.Ints(owners)
-
-	out := make([][]memberToken, 0, len(owners)+n)
-	for _, owner := range owners {
-		nodes := grouped[owner]
+	// The owner label is a union-find root, which carries no ordering
+	// meaning, so order the communities by the smallest member each
+	// actually KEPT after the exclusive assignment above.
+	communities := make([][]int, 0, len(grouped))
+	for _, nodes := range grouped {
 		sort.Ints(nodes)
+		communities = append(communities, nodes)
+	}
+	sort.Slice(communities, func(i, j int) bool { return communities[i][0] < communities[j][0] })
+
+	out := make([][]memberToken, 0, len(communities)+n)
+	for _, nodes := range communities {
 		comp := make([]memberToken, 0, len(nodes))
 		for _, idx := range nodes {
 			comp = append(comp, members[idx])
@@ -195,8 +197,12 @@ func sharedNodes(a, b []int) int {
 
 // resolveToPartition maps each node to exactly one community root.
 // A node in several overlapping communities goes to the largest; ties
-// break on the community's smallest member index so the outcome does
-// not depend on map iteration order.
+// break on the community's smallest member index and then on its root,
+// so the outcome does not depend on map iteration order.
+//
+// The returned value is the community's ROOT, which identifies the
+// community uniquely. It is a label, not an ordering key: roots come
+// from union-find and say nothing about member order.
 func resolveToPartition(communityNodes map[int]map[int]struct{}) map[int]int {
 	type community struct {
 		root   int
@@ -218,13 +224,25 @@ func resolveToPartition(communityNodes map[int]map[int]struct{}) map[int]int {
 		if comms[i].size != comms[j].size {
 			return comms[i].size > comms[j].size
 		}
-		return comms[i].minIdx < comms[j].minIdx
+		if comms[i].minIdx != comms[j].minIdx {
+			return comms[i].minIdx < comms[j].minIdx
+		}
+		// Two communities can be the same size AND share their lowest
+		// member (a hub belonging to both), so root is the final tiebreak
+		// that makes the order total rather than merely stable.
+		return comms[i].root < comms[j].root
 	})
 	assigned := map[int]int{}
 	for _, c := range comms {
 		for node := range c.nodes {
 			if _, taken := assigned[node]; !taken {
-				assigned[node] = c.minIdx
+				// Label by ROOT, not by minIdx. Two communities that never
+				// percolated can still share their lowest-indexed node — a hub
+				// in both — and labelling by minIdx would give them one label,
+				// silently re-merging exactly the chain CPM exists to break.
+				// Root is unique per community by construction (it is the
+				// union-find key these node sets were collected under).
+				assigned[node] = c.root
 			}
 		}
 	}
