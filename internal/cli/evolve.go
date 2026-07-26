@@ -196,6 +196,10 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 
 	skillsWritten := 0
 	skillsBelowBar := 0
+	// Counted apart from skillsBelowBar: an unreadable registry is an I/O
+	// fault, not a quality problem, and the summary must not send the
+	// operator off rewriting cluster descriptions to fix a permissions bug.
+	skillsRegistryBlocked := 0
 	rulesWritten := 0
 	for _, s := range out.Skills {
 		art := evolve.RenderSkill(s.Label, s.Description, s.Cluster, th, now)
@@ -221,7 +225,7 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		if rerr != nil {
 			// Retirement could not be checked, so writing would risk
 			// resurrecting a rejected slug. Reported per skill, as before.
-			skillsBelowBar++
+			skillsRegistryBlocked++
 			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: retire registry unreadable, not written\n", s.Label)
 			continue
@@ -304,6 +308,12 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		// and the judge, and were then dropped for lacking anything concrete.
 		// Folding them into one number would hide which stage to go fix.
 		fmt.Fprintf(stdout, "%d skill(s) passed the gates but fell below the quality bar (see above)\n", skillsBelowBar)
+	}
+	if skillsRegistryBlocked > 0 {
+		// Named apart from the quality bar: this is an I/O fault the
+		// operator fixes on disk, not a prompt they rewrite.
+		fmt.Fprintf(stdout, "%d skill(s) were NOT written because the retire registry could not be read (see above) — fix %s and re-run\n",
+			skillsRegistryBlocked, filepath.Join(skillsDir, ".retired.json"))
 	}
 	return nil
 }

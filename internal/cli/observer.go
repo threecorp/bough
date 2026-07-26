@@ -234,7 +234,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 				// the one they can.
 				need := outcome.ReviewCandidates * outcome.ReviewVotes
 				fmt.Fprintf(stdout,
-					"judge: reviewed=%d unreviewed=%d (SELF-DoS CEILING reached, not a model outage — %d candidate(s) x %d votes needs %d calls, ceiling is %d; re-run with --judge-max-calls %d to review the rest. The unreviewed ones were cleared unjudged)\n",
+					"judge: reviewed=%d unreviewed=%d (SELF-DoS CEILING reached, not a model outage — %d candidate(s) x %d votes needs %d calls, ceiling is %d. The unreviewed ones were left STAGED, not promoted; re-run with --judge-max-calls %d to finish judging them)\n",
 					outcome.Reviewed, outcome.ReviewFailed, outcome.ReviewCandidates, outcome.ReviewVotes, need, judgeCallCeiling, need)
 			case outcome.ReviewCandidates > 0:
 				// "0 held" says nothing without the coverage behind it: a judge

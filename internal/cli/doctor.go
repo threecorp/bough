@@ -178,11 +178,13 @@ func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
 	}
 	layout := homunculus.NewLayout()
 	requested := env.cfg != nil && env.cfg.Instinct.ExcludeSkillCovered
+	// doctor RENDERS the advisory drift line, so it asks for it here. The
+	// injector deliberately does not.
 	r := evolve.ExclusionReadiness(
 		layout.EvolvedSkillsDir(env.ident.ID),
 		filepath.Join(env.root, ".claude", "skills"),
 		layout.SkillCoverageFile(env.ident.ID),
-	)
+	).WithAdvisory()
 	switch {
 	case r.Ready() && requested:
 		return termio.StatusOK, []string{"ON — skill-covered instincts are not also pushed"}

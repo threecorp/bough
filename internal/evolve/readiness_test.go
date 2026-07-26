@@ -100,10 +100,19 @@ func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
 		"a": {"i1"}, "b": {"i2"}, "c": {"i3"}, "deleted-skill": {"i9"},
 	})
 
+	// WithAdvisory: the drift check costs an os.Stat per registered skill,
+	// so it is computed only where it is rendered — never on the injector's
+	// per-prompt path, which reads Ready() and Coverage only.
 	r := ExclusionReadiness(skillsDir, skillsDir, cov)
 	if !r.Ready() {
 		t.Errorf("stale coverage must not block: %v", detailsOf(r.Blockers()))
 	}
+	for _, c := range r.Checks {
+		if strings.Contains(c.Detail, "deleted-skill") {
+			t.Error("the advisory check must NOT be computed until WithAdvisory is called")
+		}
+	}
+	r = r.WithAdvisory()
 	var found bool
 	for _, c := range r.Checks {
 		if !c.Blocking && !c.Passed && strings.Contains(c.Detail, "deleted-skill") {

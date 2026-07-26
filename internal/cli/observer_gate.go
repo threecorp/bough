@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -128,6 +129,27 @@ func adoptStrandedStaged(stagingDir string, fresh []stagedInstinct) ([]stagedIns
 		adopted = append(adopted, stagedInstinct{in: in, action: actionBlock(in.Body), path: path})
 	}
 	return adopted, errs
+}
+
+// withoutIDs drops every candidate whose id is in remove, filtering in
+// place. One helper rather than the same six lines per reason, so a fix
+// to the compaction cannot land on only one of the paths — they are
+// exercised by different tests, and a half-applied fix would go unnoticed.
+func withoutIDs(cands []instinctgate.Candidate, remove []string) []instinctgate.Candidate {
+	if len(remove) == 0 {
+		return cands
+	}
+	drop := make(map[string]bool, len(remove))
+	for _, id := range remove {
+		drop[id] = true
+	}
+	kept := cands[:0]
+	for _, c := range cands {
+		if !drop[c.ID] {
+			kept = append(kept, c)
+		}
+	}
+	return kept
 }
 
 // actionBlock returns everything under "## Action" up to the next heading
@@ -272,7 +294,13 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			// The self-DoS cap is the operator's own setting, so exhausting it
 			// is a different fact from the model being unreachable — and the
 			// only one of the two they can act on.
-			out.ReviewCapped = errors.Is(br.FirstErr, claudecli.ErrSelfDoSLimit)
+			// Scan EVERY vote error: which one happened to be first is an
+			// artefact of goroutine indexing, and a budget trip on vote 1
+			// hidden behind a transient failure on vote 0 would be reported
+			// as a model outage — the one cause the operator cannot fix.
+			out.ReviewCapped = slices.ContainsFunc(br.Errs, func(e error) bool {
+				return errors.Is(e, claudecli.ErrSelfDoSLimit)
+			})
 			switch {
 			case br.Cancelled:
 				out.Errs = append(out.Errs, fmt.Errorf("judge: interrupted with %d candidate(s) unreviewed — they stay staged, not promoted: %w", br.Failed, br.FirstErr))
@@ -281,34 +309,23 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			case br.FirstErr != nil:
 				out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", br.Failed, br.FirstErr))
 			}
-			// Cancellation is not a verdict. Fail-open covers a model that
-			// could not answer; it must not cover an operator who interrupted
-			// the run, or the whole tail of the batch lands unjudged.
-			if br.Cancelled {
-				unreviewed := make(map[string]bool, len(br.Unreviewed))
-				for _, id := range br.Unreviewed {
-					unreviewed[id] = true
-				}
-				kept := res.Cleared[:0]
-				for _, c := range res.Cleared {
-					if !unreviewed[c.ID] {
-						kept = append(kept, c)
-					}
-				}
-				res.Cleared = kept
+			// Neither an interrupt nor an exhausted budget is a verdict.
+			// Fail-open covers a model that could not ANSWER; it must not
+			// cover a run the operator stopped, or one that ran out of the
+			// operator's own call budget. Both leave the candidates staged,
+			// which is what makes "re-run to review the rest" true — the
+			// next pass adopts them (adoptStrandedStaged) and judges them.
+			// Promoting them here would make that instruction a lie: nothing
+			// ever re-screens a file already in the personal corpus.
+			if br.Cancelled || out.ReviewCapped {
+				res.Cleared = withoutIDs(res.Cleared, br.Unreviewed)
 			}
 			if len(br.Held) > 0 {
-				flagged := make(map[string]bool, len(br.Held))
+				heldIDs := make([]string, 0, len(br.Held))
 				for _, d := range br.Held {
-					flagged[d.ID] = true
+					heldIDs = append(heldIDs, d.ID)
 				}
-				kept := res.Cleared[:0]
-				for _, c := range res.Cleared {
-					if !flagged[c.ID] {
-						kept = append(kept, c)
-					}
-				}
-				res.Cleared = kept
+				res.Cleared = withoutIDs(res.Cleared, heldIDs)
 				res.Held = append(res.Held, br.Held...)
 			}
 		}

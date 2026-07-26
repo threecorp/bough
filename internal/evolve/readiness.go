@@ -40,6 +40,20 @@ type Readiness struct {
 	// registry could not be read, which is already a failed blocking check,
 	// so a Ready() verdict always carries a usable registry.
 	Coverage *SkillCoverage
+	// advisory computes the non-blocking drift check on demand. It is
+	// never needed to decide Ready(), so the work is not done unless a
+	// caller is going to show it.
+	advisory func() ReadinessCheck
+}
+
+// WithAdvisory materialises the deferred non-blocking checks. Call it
+// only where the result is rendered — the verdict itself never needs them.
+func (r Readiness) WithAdvisory() Readiness {
+	if r.advisory != nil {
+		r.Checks = append(r.Checks, r.advisory())
+		r.advisory = nil
+	}
+	return r
 }
 
 // Ready reports whether every BLOCKING check passed.
@@ -109,13 +123,21 @@ func ExclusionReadiness(skillsDir, deployedSkillsDir, coveragePath string) Readi
 		})
 		// Advisory: a coverage entry naming ids that no longer exist as
 		// skills means the registry has drifted from the portfolio.
-		stale := staleCoverageSlugs(cov, skillsDir)
-		r.Checks = append(r.Checks, ReadinessCheck{
-			Name:     "coverage registry matches the skills on disk",
-			Passed:   len(stale) == 0,
-			Blocking: false,
-			Detail:   staleDetail(stale),
-		})
+		//
+		// Deferred, because this costs one os.Stat PER REGISTERED SKILL and
+		// the injector calls ExclusionReadiness on every prompt while
+		// reading only Ready() and Coverage. Paying that walk on the
+		// interactive path for a line nobody renders there is latency spent
+		// on nothing; doctor calls WithAdvisory when it is about to print it.
+		r.advisory = func() ReadinessCheck {
+			stale := staleCoverageSlugs(cov, skillsDir)
+			return ReadinessCheck{
+				Name:     "coverage registry matches the skills on disk",
+				Passed:   len(stale) == 0,
+				Blocking: false,
+				Detail:   staleDetail(stale),
+			}
+		}
 	}
 	r.Coverage = cov
 	return r

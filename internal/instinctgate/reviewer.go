@@ -94,6 +94,12 @@ type ReviewResult struct {
 	Rule      string
 	Reason    string
 	Failed    bool
+	// Errs holds EVERY vote's error, not just the first. Which vote index
+	// happened to fail first says nothing about which failure matters: an
+	// unrelated transient error on vote 0 would otherwise hide a rate-limit
+	// trip on vote 1, and the caller — the only layer that knows the
+	// provider's sentinel errors — could not classify what went wrong.
+	Errs []error
 	// Cancelled marks a Failed result caused by ctx cancellation rather
 	// than by the judge being unable to answer. The two must not be
 	// conflated: fail-open is for a model outage, and silently promoting
@@ -156,28 +162,22 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 
 	violations := 0
 	usable := 0
-	var firstErr error
+	var errs []error
 	var rule, reason string
 	for _, res := range results {
 		if res.err != nil {
-			if firstErr == nil {
-				firstErr = res.err
-			}
+			errs = append(errs, res.err)
 			continue
 		}
 		var v reviewVerdict
 		if err := json.Unmarshal(res.raw, &v); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("parse verdict: %w (raw=%q)", err, res.raw)
-			}
+			errs = append(errs, fmt.Errorf("parse verdict: %w (raw=%q)", err, res.raw))
 			continue
 		}
 		if v.Violation == nil {
 			// Parsed, but not a verdict — no `violation` key. Counting this
 			// as a pass is how a broken judge reports a clean corpus.
-			if firstErr == nil {
-				firstErr = fmt.Errorf("verdict has no %q field (raw=%q)", "violation", res.raw)
-			}
+			errs = append(errs, fmt.Errorf("verdict has no %q field (raw=%q)", "violation", res.raw))
 			continue
 		}
 		usable++
@@ -192,7 +192,7 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	// Not enough usable votes to reach the agreement threshold either
 	// way ⇒ no verdict. Clear it and say so.
 	if usable < agree {
-		return ReviewResult{ID: c.ID, Failed: true, Err: firstErr}
+		return ReviewResult{ID: c.ID, Failed: true, Err: firstOf(errs), Errs: errs}
 	}
 	if violations >= agree {
 		if rule == "" {
@@ -219,6 +219,20 @@ type BatchResult struct {
 	Unreviewed []string
 	Cancelled  bool
 	FirstErr   error
+	// Errs is every vote error across the batch. The caller classifies
+	// them — it is the layer that knows the provider's sentinels — and a
+	// single FirstErr cannot carry that: whichever vote index failed first
+	// would decide, hiding a budget trip behind an unrelated hiccup.
+	Errs []error
+}
+
+// firstOf returns the first error or nil, so a single-error field can
+// still be offered alongside the full list.
+func firstOf(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs[0]
 }
 
 // ReviewBatch votes on every candidate and partitions them. Cleared
@@ -232,6 +246,7 @@ func (r *Reviewer) ReviewBatch(ctx context.Context, cands []Candidate) BatchResu
 	var out BatchResult
 	for i, c := range cands {
 		res := r.Review(ctx, c)
+		out.Errs = append(out.Errs, res.Errs...)
 		if res.Cancelled {
 			out.Cancelled = true
 			if out.FirstErr == nil {
