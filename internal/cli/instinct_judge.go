@@ -19,21 +19,32 @@ import (
 // anything got reviewed — the guard would quietly stop running exactly
 // when it had the most to check.
 //
-// Returns nil when the judge cannot be constructed, which the caller
-// treats as "layer off" rather than as a failure: the deterministic
-// layers already ran, and refusing to mint because a model is
-// unreachable would stop the corpus growing over an optional check.
+// A nil reviewer means "layer off" rather than a hard failure: the
+// deterministic layers already ran, and refusing to mint because a model
+// is unreachable would stop the corpus growing over an optional check.
+// But the REASON is returned so the caller can say so — a pass where the
+// judge never ran must not print the same thing as a pass where it ran
+// and found nothing.
 //
 // The provider is returned alongside the reviewer so the caller can print
 // ITS limiter snapshot too. Because this budget is separate from the
 // minting one, a run with the judge on spends against two caps; reporting
 // only the minting one would understate the pass's real cost, and a cap
 // nobody can see is the silent kind.
-func newGateReviewer(model string, maxCalls int) (*instinctgate.Reviewer, *claudecli.Provider) {
+func newGateReviewer(model string, maxCalls int) (*instinctgate.Reviewer, *claudecli.Provider, error) {
 	resolver := prompts.NewResolver()
 	tpl, err := resolver.Get(prompts.TemplateInstinctGate)
 	if err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("instinct gate: prompt template unavailable: %w", err)
+	}
+	// Parse the template ONCE, here, rather than discovering a malformed
+	// override inside the first vote. Rendering happens inside Generate,
+	// which acquires a limiter slot and records a failure before it ever
+	// reaches the template — so a prompt that does not parse used to burn
+	// 3 judge slots per candidate and could trip the circuit breaker,
+	// reported as if the model were down.
+	if _, rerr := renderGatePrompt(tpl.Body, "probe", "probe"); rerr != nil {
+		return nil, nil, rerr
 	}
 	prov := claudecli.NewProvider()
 	if model != "" {
@@ -65,14 +76,19 @@ func newGateReviewer(model string, maxCalls int) (*instinctgate.Reviewer, *claud
 		// A provider that returned no usable document has told us nothing;
 		// surfacing it as an error keeps the vote from counting silence
 		// as a clean verdict. The prompt size is rendered only here, on the
-		// path that reports it.
-		body, rerr := renderGatePrompt(tpl.Body, trigger, action)
-		if rerr != nil {
-			return nil, rerr
+		// path that reports it — and a render failure ANNOTATES that error
+		// rather than replacing it: the empty response is the finding, and
+		// swapping in the render error would hide the very condition this
+		// branch exists to report.
+		size := "unknown size"
+		if body, rerr := renderGatePrompt(tpl.Body, trigger, action); rerr == nil {
+			size = fmt.Sprintf("%d bytes", len(body))
+		} else {
+			size = "size unavailable: " + rerr.Error()
 		}
-		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %d bytes)", len(body))
+		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %s)", size)
 	}
-	return instinctgate.NewReviewer(review), prov
+	return instinctgate.NewReviewer(review), prov, nil
 }
 
 // gatePromptData is the template's view of one candidate: only the

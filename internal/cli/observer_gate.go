@@ -91,7 +91,15 @@ type promoteOutcome struct {
 	// produces the same held count as a corpus with nothing wrong.
 	Reviewed     int
 	ReviewFailed int
-	Errs         []error
+	// ReviewCancelled says the unreviewed candidates were left unjudged by
+	// an interrupt, not by the judge failing. They are NOT promoted.
+	ReviewCancelled bool
+	// JudgeOff says the LLM layer was requested but could not be built, so
+	// nothing was judged. Without it a pass that never ran the judge is
+	// indistinguishable on stdout from one where the judge found nothing.
+	JudgeOff       bool
+	JudgeOffReason string
+	Errs           []error
 }
 
 // movedRecord is one file this pass relocated instead of destroying:
@@ -109,7 +117,12 @@ type movedRecord struct {
 // dated batch dir with a REPORT. Every transition is a move, never a
 // delete, so a held instinct is always recoverable — a false hold costs
 // an operator glance, not data.
-func screenAndPromote(layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, reviewer *instinctgate.Reviewer, now time.Time) promoteOutcome {
+// ctx is the caller's cancellation scope — the interrupt-derived context
+// cobra hands the command. It must be threaded here rather than replaced
+// with context.Background(): the judge fan-out blocks on it, so with a
+// detached context Ctrl-C did nothing for as long as the provider timeout
+// allowed while the run kept spending the operator's budget.
+func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, reviewer *instinctgate.Reviewer, now time.Time) promoteOutcome {
 	out := promoteOutcome{}
 	if len(staged) == 0 {
 		return out
@@ -133,14 +146,34 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 	// held everything would stop the corpus growing while looking like a
 	// clean pass.
 	if reviewer != nil && len(res.Cleared) > 0 {
-		judged, reviewed, failed, jerr := reviewer.ReviewBatch(context.Background(), res.Cleared)
-		out.Reviewed, out.ReviewFailed = reviewed, failed
-		if jerr != nil {
-			out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", failed, jerr))
+		br := reviewer.ReviewBatch(ctx, res.Cleared)
+		out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
+		out.ReviewCancelled = br.Cancelled
+		switch {
+		case br.Cancelled:
+			out.Errs = append(out.Errs, fmt.Errorf("judge: interrupted with %d candidate(s) unreviewed — they stay staged, not promoted: %w", br.Failed, br.FirstErr))
+		case br.FirstErr != nil:
+			out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", br.Failed, br.FirstErr))
 		}
-		if len(judged) > 0 {
-			flagged := make(map[string]bool, len(judged))
-			for _, d := range judged {
+		// Cancellation is not a verdict. Fail-open covers a model that
+		// could not answer; it must not cover an operator who interrupted
+		// the run, or the whole tail of the batch lands unjudged.
+		if br.Cancelled {
+			unreviewed := make(map[string]bool, len(br.Unreviewed))
+			for _, id := range br.Unreviewed {
+				unreviewed[id] = true
+			}
+			kept := res.Cleared[:0]
+			for _, c := range res.Cleared {
+				if !unreviewed[c.ID] {
+					kept = append(kept, c)
+				}
+			}
+			res.Cleared = kept
+		}
+		if len(br.Held) > 0 {
+			flagged := make(map[string]bool, len(br.Held))
+			for _, d := range br.Held {
 				flagged[d.ID] = true
 			}
 			kept := res.Cleared[:0]
@@ -150,7 +183,7 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 				}
 			}
 			res.Cleared = kept
-			res.Held = append(res.Held, judged...)
+			res.Held = append(res.Held, br.Held...)
 		}
 	}
 

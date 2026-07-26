@@ -182,10 +182,20 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// --no-judge rather than having to reason about cost every run.
 			var reviewer *instinctgate.Reviewer
 			var judgeProv *claudecli.Provider
+			var judgeOffReason string
 			if judge {
-				reviewer, judgeProv = newGateReviewer(model, maxCalls)
+				var jerr error
+				reviewer, judgeProv, jerr = newGateReviewer(model, maxCalls)
+				if jerr != nil {
+					// The layer stays off (the deterministic layers already
+					// ran), but it must not stay QUIET: a pass that never
+					// judged anything otherwise prints exactly what a pass
+					// that judged everything and found nothing prints.
+					judgeOffReason = jerr.Error()
+				}
 			}
-			outcome := screenAndPromote(layout, ident.ID, staged, gate, reviewer, now)
+			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, reviewer, now)
+			outcome.JudgeOff, outcome.JudgeOffReason = judge && reviewer == nil, judgeOffReason
 			errs = append(errs, outcome.Errs...)
 			fmt.Fprintf(stdout, "instincts emitted=%d quarantined=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
 				outcome.Emitted, outcome.Quarantined, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
@@ -193,7 +203,15 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
-			if reviewer != nil {
+			switch {
+			case outcome.JudgeOff:
+				// Requested but unusable. Saying so is the whole point: a
+				// silent skip is indistinguishable from a clean review.
+				fmt.Fprintf(stdout, "judge: NOT RUN — %s (the deterministic layers still ran; nothing was LLM-screened)\n", outcome.JudgeOffReason)
+			case outcome.ReviewCancelled:
+				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (INTERRUPTED — unreviewed candidates were left staged, not promoted)\n",
+					outcome.Reviewed, outcome.ReviewFailed)
+			case reviewer != nil:
 				// "0 held" says nothing without the coverage behind it: a judge
 				// that could not run produces the same held count as a clean batch.
 				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",

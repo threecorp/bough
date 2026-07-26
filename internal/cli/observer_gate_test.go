@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,7 +90,7 @@ func TestScreenAndPromote_ClearedPromoted_HeldQuarantined(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	if out.Emitted != 1 || out.Quarantined != 1 {
 		t.Fatalf("emitted=%d quarantined=%d, want 1/1 (errs=%v)", out.Emitted, out.Quarantined, out.Errs)
@@ -137,7 +138,7 @@ func TestQuarantineReport_HasReversibleRestore(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	report, err := os.ReadFile(filepath.Join(out.BatchDir, "REPORT.md"))
 	if err != nil {
@@ -169,7 +170,7 @@ func TestPromote_ArchivesSupersededVersion(t *testing.T) {
 	// Pass 1 mints the original.
 	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
-	if out := screenAndPromote(layout, ident.ID, staged1, gate, nil, first); out.Superseded != 0 {
+	if out := screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first); out.Superseded != 0 {
 		t.Fatalf("first pass Superseded = %d, want 0 (nothing to supersede)", out.Superseded)
 	}
 	original, err := os.ReadFile(filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md"))
@@ -190,7 +191,7 @@ func TestPromote_ArchivesSupersededVersion(t *testing.T) {
 	}
 	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
 	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, second)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, second)
 
 	if out.Superseded != 1 || out.ArchiveDir == "" {
 		t.Fatalf("Superseded=%d ArchiveDir=%q, want 1 and a dir (errs=%v)", out.Superseded, out.ArchiveDir, out.Errs)
@@ -229,10 +230,10 @@ func TestPromote_IdenticalRemintIsNotArchived(t *testing.T) {
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 
 	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
-	screenAndPromote(layout, ident.ID, staged1, gate, nil, now)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, now)
 	// Same payload, same mint timestamp ⇒ byte-identical rendering.
 	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, now)
 
 	if out.Superseded != 0 {
 		t.Errorf("identical re-mint Superseded = %d, want 0", out.Superseded)
@@ -260,7 +261,7 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 
 	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
-	screenAndPromote(layout, ident.ID, staged1, gate, nil, first)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first)
 
 	live := filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md")
 	original, err := os.ReadFile(live)
@@ -284,7 +285,7 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 	}
 	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
 	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, second)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, second)
 
 	if len(out.Errs) == 0 {
 		t.Error("an unreadable prior version must be reported, not swallowed")
@@ -319,7 +320,7 @@ func TestScreenAndPromote_GateDisabled_AllPromoted(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: false})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	if out.Emitted != 2 || out.Quarantined != 0 {
 		t.Fatalf("emitted=%d quarantined=%d, want 2/0", out.Emitted, out.Quarantined)

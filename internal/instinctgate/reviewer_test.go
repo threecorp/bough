@@ -192,17 +192,53 @@ func TestReviewBatchReportsReviewedAndFailed(t *testing.T) {
 		boom(), boom(), boom(),
 	}
 	fn, _ := scriptedReviewer(seq...)
-	held, reviewed, failed, err := NewReviewer(fn).ReviewBatch(context.Background(), []Candidate{
+	got := NewReviewer(fn).ReviewBatch(context.Background(), []Candidate{
 		cand("clean", "when tests are flaky", "re-run with a fixed seed"),
 		proseCandidate(),
 	})
-	if len(held) != 0 {
-		t.Errorf("held = %+v, want none", held)
+	if len(got.Held) != 0 {
+		t.Errorf("held = %+v, want none", got.Held)
 	}
-	if reviewed != 1 || failed != 1 {
-		t.Errorf("reviewed=%d failed=%d, want 1/1", reviewed, failed)
+	if got.Reviewed != 1 || got.Failed != 1 {
+		t.Errorf("reviewed=%d failed=%d, want 1/1", got.Reviewed, got.Failed)
 	}
-	if err == nil {
+	if got.FirstErr == nil {
 		t.Error("the first failure must be surfaced")
+	}
+	// The unreviewed candidate is NAMED, not just counted — a caller that
+	// only gets a number cannot act on it.
+	if len(got.Unreviewed) != 1 || got.Unreviewed[0] != "tidy-stale-branch" {
+		t.Errorf("Unreviewed = %v, want the prose candidate's id", got.Unreviewed)
+	}
+	if got.Cancelled {
+		t.Error("a provider failure is not a cancellation")
+	}
+}
+
+// TestCancellationIsNotFailOpen is the invariant that keeps an interrupt
+// from silently promoting the rest of a batch. Fail-open exists so a model
+// outage cannot stop the corpus growing; an operator pressing Ctrl-C has
+// not asked for every remaining candidate to be accepted unjudged.
+func TestCancellationIsNotFailOpen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fn, calls := scriptedReviewer(ok(false, ""))
+	got := NewReviewer(fn).ReviewBatch(ctx, []Candidate{
+		cand("a", "when tests are flaky", "re-run with a fixed seed"),
+		cand("b", "when the build is slow", "profile the slowest package"),
+		proseCandidate(),
+	})
+	if !got.Cancelled {
+		t.Fatalf("a cancelled context must be reported as cancelled: %+v", got)
+	}
+	if got.Reviewed != 0 || got.Failed != 3 {
+		t.Errorf("reviewed=%d failed=%d, want 0/3 — nothing was judged", got.Reviewed, got.Failed)
+	}
+	if len(got.Unreviewed) != 3 {
+		t.Errorf("every candidate must be named unreviewed, got %v", got.Unreviewed)
+	}
+	// And it must not have spent a single provider call doing it.
+	if n := calls.count(); n != 0 {
+		t.Errorf("calls = %d, want 0 — a dead context must not burn budget", n)
 	}
 }
