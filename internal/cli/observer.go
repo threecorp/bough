@@ -176,7 +176,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// state, so a minted note is never live before it has been checked.
 			now := time.Now().UTC()
 			stagingDir := layout.StagingDir(ident.ID)
-			staged, skipped, errs := stageInstincts(stagingDir, ident, res.Parsed, now)
+			staged, skipped, errs := stageInstincts(stagingDir, layout.InstinctsDir(ident.ID), ident, res.Parsed, now)
 			// Pick up anything a previous pass left staged (its prior
 			// version could not be archived, or the run was interrupted
 			// before the judge reached it). Nothing else ever reads this
@@ -419,7 +419,9 @@ func renderForPreview(body string, data any) (string, error) {
 // stages then screens via stageInstincts + screenAndPromote, so a
 // minted note passes the policy gate before it becomes injectable.
 func writeInstinctsFromResult(dir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) (int, int, []error) {
-	staged, skipped, errs := stageInstincts(dir, ident, parsed, now)
+	// dir IS the destination here, so it doubles as the prior-version
+	// source for the first-seen carry-forward.
+	staged, skipped, errs := stageInstincts(dir, dir, ident, parsed, now)
 	return len(staged), skipped, errs
 }
 

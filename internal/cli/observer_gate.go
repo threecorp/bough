@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +35,10 @@ type stagedInstinct struct {
 // live-before-check window structurally, independent of whether the
 // gate is enabled. Returns the staged items, the skipped count, and
 // per-entry soft errors.
-func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) ([]stagedInstinct, int, []error) {
+// personalDir is where the promoted corpus lives. It is consulted only to
+// carry an existing instinct's first-seen stamp forward onto the re-mint;
+// nothing is read from it for screening.
+func stageInstincts(stagingDir, personalDir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) ([]stagedInstinct, int, []error) {
 	staged := []stagedInstinct{}
 	skipped := 0
 	errs := []error{}
@@ -60,6 +63,9 @@ func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed 
 			skipped++
 			errs = append(errs, fmt.Errorf("instinct %q failed safety check (%s): %w", in.ID, rule, err))
 			continue
+		}
+		if personalDir != "" {
+			carryForwardFirstSeen(filepath.Join(personalDir, in.ID+".md"), in)
 		}
 		path, werr := homunculus.WriteInstinctFile(stagingDir, in)
 		if werr != nil {
@@ -303,26 +309,37 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 
 // archiveIfSuperseded moves the instinct currently at dst into a dated
 // archive batch when the incoming staged file at srcPath carries
-// DIFFERENT text. It returns nil when there is nothing at dst (a fresh
-// instinct) or when the two files are byte-identical (a re-mint that
-// reinforces rather than supersedes — archiving those would bury the
-// real changes in noise).
+// DIFFERENT knowledge. It returns nil when there is nothing at dst (a
+// fresh instinct) or when the two say the same thing (a re-mint that
+// reinforces rather than supersedes — archiving those would bury the real
+// changes in noise).
+//
+// "The same thing" is decided on CONTENT, not on bytes. Every rendered
+// instinct embeds first_seen / last_seen stamped at mint time, so a byte
+// comparison reports every re-mint as a change: measured against the real
+// binary, an unchanged instinct was archived on every pass, and the whole
+// corpus accumulated a copy per run — exactly the noise the "identical
+// re-mints are NOT archived" line in the archive REPORT promises to avoid.
 func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath string, now time.Time) (*movedRecord, error) {
-	prior, err := os.ReadFile(dst)
+	priorInstinct, err := homunculus.ReadInstinctFile(dst)
 	switch {
-	case os.IsNotExist(err):
+	// errors.Is, not os.IsNotExist: ReadInstinctFile WRAPS the syscall
+	// error, and os.IsNotExist does not unwrap. Using it here silently
+	// classified "file absent" as "file unreadable", which turned every
+	// first mint of an id into a refusal to promote.
+	case errors.Is(err, os.ErrNotExist):
 		return nil, nil // fresh instinct: nothing to supersede
 	case err != nil:
 		// The file EXISTS and could not be read (permission, transient IO,
-		// a lock). Treating that as "absent" would let the caller's rename
-		// overwrite a prior version that was never archived — the silent
-		// destruction this whole function exists to prevent. Surface it and
-		// let the caller skip the promotion instead.
+		// a lock) — or it parses as something this code does not model.
+		// Treating that as "absent" would let the caller's rename overwrite
+		// a prior version that was never archived: the silent destruction
+		// this whole function exists to prevent. Surface it and let the
+		// caller skip the promotion instead.
 		return nil, fmt.Errorf("archive: read prior %s: %w", id, err)
 	}
-	incoming, err := os.ReadFile(srcPath)
-	if err == nil && bytes.Equal(prior, incoming) {
-		return nil, nil // identical re-mint: reinforcement, not a supersede
+	if incoming, ierr := homunculus.ReadInstinctFile(srcPath); ierr == nil && sameKnowledge(priorInstinct, incoming) {
+		return nil, nil // reinforcement, not a supersede
 	}
 	batchDir := filepath.Join(layout.ArchiveDir(projectID), now.Format("20060102-150405"))
 	if err := os.MkdirAll(batchDir, 0o755); err != nil {
@@ -333,6 +350,43 @@ func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath s
 		return nil, fmt.Errorf("archive: move superseded %s: %w", id, err)
 	}
 	return &movedRecord{id: id, reason: "superseded by a newer mint", path: archived}, nil
+}
+
+// sameKnowledge reports whether two versions of an instinct say the same
+// thing. It deliberately ignores the volatile bookkeeping — FirstSeen,
+// LastSeen, Observed — because those change on every mint and comparing
+// them makes "unchanged" impossible to observe.
+//
+// Confidence IS compared: it is the value the session evaluator adjusts,
+// and a confidence move is a real change to what the corpus asserts.
+func sameKnowledge(a, b *homunculus.Instinct) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.ID == b.ID &&
+		a.Trigger == b.Trigger &&
+		a.Body == b.Body &&
+		a.Domain == b.Domain &&
+		a.Scope == b.Scope &&
+		a.Confidence == b.Confidence
+}
+
+// carryForwardFirstSeen preserves the ORIGINAL first-seen stamp when an id
+// is re-minted. mapToInstinct stamps both timestamps with the mint time, so
+// without this an instinct observed for months reports as first seen today
+// — the provenance an operator uses to judge whether a note has earned its
+// place is silently rewritten on every pass.
+//
+// Missing or unreadable prior version ⇒ leave the fresh stamp alone; this
+// is provenance repair, not a precondition for minting.
+func carryForwardFirstSeen(dst string, in *homunculus.Instinct) {
+	prior, err := homunculus.ReadInstinctFile(dst)
+	if err != nil || prior == nil || prior.FirstSeen.IsZero() {
+		return
+	}
+	if in.FirstSeen.IsZero() || prior.FirstSeen.Before(in.FirstSeen) {
+		in.FirstSeen = prior.FirstSeen
+	}
 }
 
 // reportSpec is the per-batch prose of a move report: the title, the
