@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // The deterministic layers catch command SHAPES. They cannot catch
@@ -94,22 +95,43 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		agree = (votes / 2) + 1
 	}
 
+	// The votes are independent by construction, so they are taken
+	// CONCURRENTLY: run serially, a 3-vote review costs three round trips
+	// per candidate and the gate's latency is what an operator feels on
+	// every mint. Results are collected into a fixed-index slice and
+	// tallied in vote order afterwards, so the verdict — including which
+	// rule and reason are reported — does not depend on completion order.
+	type voteResult struct {
+		raw []byte
+		err error
+	}
+	results := make([]voteResult, votes)
+	var wg sync.WaitGroup
+	for i := 0; i < votes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			raw, err := r.review(ctx, c.Trigger, c.Action)
+			results[i] = voteResult{raw: raw, err: err}
+		}(i)
+	}
+	wg.Wait()
+
 	violations := 0
 	usable := 0
 	var firstErr error
 	var rule, reason string
-	for i := 0; i < votes; i++ {
-		raw, err := r.review(ctx, c.Trigger, c.Action)
-		if err != nil {
+	for _, res := range results {
+		if res.err != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = res.err
 			}
 			continue
 		}
 		var v reviewVerdict
-		if err := json.Unmarshal(raw, &v); err != nil {
+		if err := json.Unmarshal(res.raw, &v); err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("parse verdict: %w (raw=%q)", err, raw)
+				firstErr = fmt.Errorf("parse verdict: %w (raw=%q)", err, res.raw)
 			}
 			continue
 		}
@@ -117,7 +139,7 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 			// Parsed, but not a verdict — no `violation` key. Counting this
 			// as a pass is how a broken judge reports a clean corpus.
 			if firstErr == nil {
-				firstErr = fmt.Errorf("verdict has no %q field (raw=%q)", "violation", raw)
+				firstErr = fmt.Errorf("verdict has no %q field (raw=%q)", "violation", res.raw)
 			}
 			continue
 		}

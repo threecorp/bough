@@ -3,6 +3,7 @@ package instinctgate
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -16,18 +17,34 @@ func verdictJSON(violation bool, rule string) []byte {
 
 // scriptedReviewer returns a ReviewFunc that replays the given answers
 // in order, so a test can state the vote sequence directly instead of
-// simulating a model.
-func scriptedReviewer(answers ...func() ([]byte, error)) (ReviewFunc, *int) {
-	calls := 0
+// simulating a model. The votes for one candidate are taken CONCURRENTLY,
+// so the cursor is mutex-guarded; which goroutine draws which answer is
+// then unspecified, and every assertion here is on the tally rather than
+// on a per-vote position.
+type scriptedCalls struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (s *scriptedCalls) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
+func scriptedReviewer(answers ...func() ([]byte, error)) (ReviewFunc, *scriptedCalls) {
+	calls := &scriptedCalls{}
 	fn := func(_ context.Context, _, _ string) ([]byte, error) {
-		i := calls
-		calls++
+		calls.mu.Lock()
+		i := calls.n
+		calls.n++
+		calls.mu.Unlock()
 		if i >= len(answers) {
 			i = len(answers) - 1
 		}
 		return answers[i]()
 	}
-	return fn, &calls
+	return fn, calls
 }
 
 func ok(v bool, rule string) func() ([]byte, error) {
@@ -69,8 +86,8 @@ func TestConsensusMajorityHolds(t *testing.T) {
 	if !got.Violation || got.Rule != "never-discard-wip" {
 		t.Errorf("2-of-3 violation votes should hold: %+v", got)
 	}
-	if *calls != 3 {
-		t.Errorf("calls = %d, want 3 independent votes", *calls)
+	if got := calls.count(); got != 3 {
+		t.Errorf("calls = %d, want 3 independent votes", got)
 	}
 }
 
