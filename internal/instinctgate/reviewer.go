@@ -37,8 +37,15 @@ type ReviewFunc func(ctx context.Context, trigger, action string) (raw []byte, e
 // reviewVerdict is the model's structured answer. Violation names the
 // forbidden action the instinct recommends; Reason is shown to the
 // operator in the quarantine report.
+//
+// Violation is a POINTER so an absent key is distinguishable from an
+// explicit false. JSON decoding ignores unknown fields, so any
+// well-formed JSON that simply is not a verdict — a provider envelope, an
+// error document, a truncated response — would otherwise decode cleanly
+// as "no violation" and the judge would report a full review while
+// having judged nothing. A missing key is no answer, not a pass.
 type reviewVerdict struct {
-	Violation bool   `json:"violation"`
+	Violation *bool  `json:"violation"`
 	Rule      string `json:"rule"`
 	Reason    string `json:"reason"`
 }
@@ -106,8 +113,16 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 			}
 			continue
 		}
+		if v.Violation == nil {
+			// Parsed, but not a verdict — no `violation` key. Counting this
+			// as a pass is how a broken judge reports a clean corpus.
+			if firstErr == nil {
+				firstErr = fmt.Errorf("verdict has no %q field (raw=%q)", "violation", raw)
+			}
+			continue
+		}
 		usable++
-		if v.Violation {
+		if *v.Violation {
 			violations++
 			if rule == "" {
 				rule, reason = v.Rule, v.Reason

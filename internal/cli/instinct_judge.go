@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
@@ -44,10 +45,18 @@ func newGateReviewer(model string, maxCalls int) *instinctgate.Reviewer {
 		if gerr != nil {
 			return nil, gerr
 		}
-		if len(res.Raw) > 0 {
-			return res.Raw, nil
+		// Return the UNWRAPPED document, not res.Raw. Raw is the CLI's
+		// envelope ({"type":"result", …, "result":"```json…```"}); the
+		// verdict lives inside it, and the provider has already unwrapped
+		// it into Parsed. Handing the envelope to the verdict decoder
+		// parses fine — JSON ignores unknown fields — and yields
+		// violation=false, so the judge silently clears everything while
+		// reporting a full review. That is the failure this layer exists
+		// to prevent, so it must not be how the layer itself fails.
+		if len(res.Parsed) > 0 {
+			return json.Marshal(res.Parsed)
 		}
-		// A provider that returned no raw payload has told us nothing;
+		// A provider that returned no usable document has told us nothing;
 		// surfacing it as an error keeps the vote from counting silence
 		// as a clean verdict.
 		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %d bytes)", len(body))

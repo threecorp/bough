@@ -114,6 +114,46 @@ func TestUnparseableVotesDoNotCountAsClean(t *testing.T) {
 	}
 }
 
+// TestProviderEnvelopeIsNotAPass is the regression net for a real defect
+// found only by running the binary end-to-end: the CLI wrapper returned
+// the provider's ENVELOPE ({"type":"result", …}) instead of the
+// unwrapped verdict. JSON decoding ignores unknown fields, so it parsed
+// cleanly as violation=false — the judge reported a full review while
+// having judged nothing, and every prose-shaped violation sailed through.
+//
+// A document with no `violation` key is no answer, so it must fail open
+// LOUDLY rather than read as a pass.
+func TestProviderEnvelopeIsNotAPass(t *testing.T) {
+	// The provider's envelope: well-formed JSON, carries the real verdict
+	// only INSIDE .result, and has no `violation` key of its own.
+	envelope := func() ([]byte, error) {
+		return []byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false," +
+			"\"result\":\"```json\\n{\\\"violation\\\":true}\\n```\"}"), nil
+	}
+	fn, _ := scriptedReviewer(envelope, envelope, envelope)
+	got := NewReviewer(fn).Review(context.Background(), proseCandidate())
+	if !got.Failed {
+		t.Errorf("an envelope must not count as a verdict: %+v", got)
+	}
+	if got.Err == nil {
+		t.Error("the unusable verdict must be reported")
+	}
+}
+
+// TestExplicitFalseIsStillAVerdict pins the other side of the pointer:
+// an explicit violation:false is a real answer and must be counted,
+// otherwise every clean instinct would fail open instead of clearing.
+func TestExplicitFalseIsStillAVerdict(t *testing.T) {
+	fn, _ := scriptedReviewer(ok(false, ""), ok(false, ""), ok(false, ""))
+	got := NewReviewer(fn).Review(context.Background(), proseCandidate())
+	if got.Failed {
+		t.Errorf("explicit false is a verdict, not a failure: %+v", got)
+	}
+	if got.Violation {
+		t.Errorf("three clean votes must clear: %+v", got)
+	}
+}
+
 // TestPartialFailureStillReachesVerdict pins that one flaky call does
 // not discard the whole review when the surviving votes already settle
 // it.
