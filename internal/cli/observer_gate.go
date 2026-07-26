@@ -13,6 +13,7 @@ import (
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
+	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
 )
 
 // stagedInstinct is one minted instinct written to the staging dir but
@@ -147,13 +148,40 @@ type promoteOutcome struct {
 	// ReviewCancelled says the unreviewed candidates were left unjudged by
 	// an interrupt, not by the judge failing. They are NOT promoted.
 	ReviewCancelled bool
+	// ReviewCapped says the unreviewed candidates ran out of SELF-DoS
+	// BUDGET rather than hitting a model outage. The distinction is the
+	// whole point: "unreviewed=4" reads as "the model was down" when the
+	// real cause is a cap the operator set and can raise. Candidates and
+	// Votes carry the arithmetic so the report can name the value that
+	// would have covered the batch.
+	ReviewCapped     bool
+	ReviewCandidates int
+	ReviewVotes      int
 	// JudgeOff says the LLM layer was requested but could not be built, so
 	// nothing was judged. Without it a pass that never ran the judge is
 	// indistinguishable on stdout from one where the judge found nothing.
 	JudgeOff       bool
 	JudgeOffReason string
-	Errs           []error
+	// JudgeProvider is the judge's provider, so the caller can print ITS
+	// limiter snapshot. The judge holds a budget separate from minting;
+	// reporting only the minting one understates what the pass spent.
+	JudgeProvider *claudecli.Provider
+	Errs          []error
 }
+
+// judgeFactory builds the LLM reviewer once the CANDIDATE COUNT is known,
+// so the judge's budget can be sized to the batch instead of a fixed
+// number that truncates it mid-review.
+//
+// Measured on the real binary: with the provider default (10 calls) and
+// 3 votes, a 7-candidate batch judged 3 and admitted the remaining 4
+// unjudged — including a prose-shaped violation that the judge quarantines
+// correctly when the budget covers it. A batch of 4+ judge candidates is
+// the ordinary case for a mint, so a fixed cap made the layer unreliable
+// exactly when it had the most to check.
+//
+// nil disables the LLM layer.
+type judgeFactory func(candidates int) (*instinctgate.Reviewer, *claudecli.Provider, error)
 
 // movedRecord is one file this pass relocated instead of destroying:
 // which instinct, why it moved, and where it now lives so a report can
@@ -175,7 +203,7 @@ type movedRecord struct {
 // with context.Background(): the judge fan-out blocks on it, so with a
 // detached context Ctrl-C did nothing for as long as the provider timeout
 // allowed while the run kept spending the operator's budget.
-func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, reviewer *instinctgate.Reviewer, now time.Time) promoteOutcome {
+func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, newJudge judgeFactory, now time.Time) promoteOutcome {
 	out := promoteOutcome{}
 	if len(staged) == 0 {
 		return out
@@ -198,45 +226,62 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 	// violation. It fails open and reports, because a guard that silently
 	// held everything would stop the corpus growing while looking like a
 	// clean pass.
-	if reviewer != nil && len(res.Cleared) > 0 {
-		br := reviewer.ReviewBatch(ctx, res.Cleared)
-		out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
-		out.ReviewCancelled = br.Cancelled
+	if newJudge != nil && len(res.Cleared) > 0 {
+		reviewer, judgeProv, jerr := newJudge(len(res.Cleared))
+		out.JudgeProvider = judgeProv
 		switch {
-		case br.Cancelled:
-			out.Errs = append(out.Errs, fmt.Errorf("judge: interrupted with %d candidate(s) unreviewed — they stay staged, not promoted: %w", br.Failed, br.FirstErr))
-		case br.FirstErr != nil:
-			out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", br.Failed, br.FirstErr))
+		case jerr != nil:
+			out.JudgeOff, out.JudgeOffReason = true, jerr.Error()
+		case reviewer == nil:
+			out.JudgeOff, out.JudgeOffReason = true, "reviewer unavailable"
 		}
-		// Cancellation is not a verdict. Fail-open covers a model that
-		// could not answer; it must not cover an operator who interrupted
-		// the run, or the whole tail of the batch lands unjudged.
-		if br.Cancelled {
-			unreviewed := make(map[string]bool, len(br.Unreviewed))
-			for _, id := range br.Unreviewed {
-				unreviewed[id] = true
+		if reviewer != nil {
+			out.ReviewCandidates, out.ReviewVotes = len(res.Cleared), reviewer.Votes
+			br := reviewer.ReviewBatch(ctx, res.Cleared)
+			out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
+			out.ReviewCancelled = br.Cancelled
+			// The self-DoS cap is the operator's own setting, so exhausting it
+			// is a different fact from the model being unreachable — and the
+			// only one of the two they can act on.
+			out.ReviewCapped = errors.Is(br.FirstErr, claudecli.ErrSelfDoSLimit)
+			switch {
+			case br.Cancelled:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: interrupted with %d candidate(s) unreviewed — they stay staged, not promoted: %w", br.Failed, br.FirstErr))
+			case out.ReviewCapped:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: self-DoS budget exhausted after %d of %d candidate(s): %w", br.Reviewed, out.ReviewCandidates, br.FirstErr))
+			case br.FirstErr != nil:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", br.Failed, br.FirstErr))
 			}
-			kept := res.Cleared[:0]
-			for _, c := range res.Cleared {
-				if !unreviewed[c.ID] {
-					kept = append(kept, c)
+			// Cancellation is not a verdict. Fail-open covers a model that
+			// could not answer; it must not cover an operator who interrupted
+			// the run, or the whole tail of the batch lands unjudged.
+			if br.Cancelled {
+				unreviewed := make(map[string]bool, len(br.Unreviewed))
+				for _, id := range br.Unreviewed {
+					unreviewed[id] = true
 				}
-			}
-			res.Cleared = kept
-		}
-		if len(br.Held) > 0 {
-			flagged := make(map[string]bool, len(br.Held))
-			for _, d := range br.Held {
-				flagged[d.ID] = true
-			}
-			kept := res.Cleared[:0]
-			for _, c := range res.Cleared {
-				if !flagged[c.ID] {
-					kept = append(kept, c)
+				kept := res.Cleared[:0]
+				for _, c := range res.Cleared {
+					if !unreviewed[c.ID] {
+						kept = append(kept, c)
+					}
 				}
+				res.Cleared = kept
 			}
-			res.Cleared = kept
-			res.Held = append(res.Held, br.Held...)
+			if len(br.Held) > 0 {
+				flagged := make(map[string]bool, len(br.Held))
+				for _, d := range br.Held {
+					flagged[d.ID] = true
+				}
+				kept := res.Cleared[:0]
+				for _, c := range res.Cleared {
+					if !flagged[c.ID] {
+						kept = append(kept, c)
+					}
+				}
+				res.Cleared = kept
+				res.Held = append(res.Held, br.Held...)
+			}
 		}
 	}
 

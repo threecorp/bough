@@ -72,9 +72,16 @@ type Reviewer struct {
 	Agree int
 }
 
-// NewReviewer wires a ReviewFunc into a 3-vote / 2-agree reviewer.
+// DefaultVotes is how many independent samples NewReviewer takes per
+// candidate. Exported because a caller sizing an LLM budget has to
+// multiply by it, and hard-coding 3 at the call site is how the two drift
+// apart — which is exactly the arithmetic that silently truncated a
+// review batch.
+const DefaultVotes = 3
+
+// NewReviewer wires a 3-vote / 2-agree reviewer.
 func NewReviewer(review ReviewFunc) *Reviewer {
-	return &Reviewer{review: review, Votes: 3, Agree: 2}
+	return &Reviewer{review: review, Votes: DefaultVotes, Agree: 2}
 }
 
 // ReviewResult is one candidate's outcome. Failed records that the layer
