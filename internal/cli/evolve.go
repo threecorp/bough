@@ -179,9 +179,19 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	// One registry for the whole pass: retirement is a property of the
 	// corpus, so every skill in this emit must be judged against the same
 	// snapshot rather than against whatever the file said at its turn.
+	//
+	// An unreadable registry must NOT abort the pass — by the time this
+	// runs, `--generate` has already spent its GATE-5 judge calls, and
+	// throwing the pass away discards paid work over a sidecar. It must
+	// also NOT degrade to an empty registry the way the coverage one
+	// above does: empty means "nothing is retired", which would resurrect
+	// every slug the operator rejected. So it degrades the only safe way
+	// — no skill is written this pass, while agents, commands, rules and
+	// labels still land. That is exactly what happened before the load
+	// was hoisted out of WriteSkill.
 	retired, rerr := evolve.LoadRetireRegistry(skillsDir)
 	if rerr != nil {
-		return rerr
+		fmt.Fprintf(stderr, "  retire registry: %v (no skill written this pass; agents/commands/labels still land)\n", rerr)
 	}
 
 	skillsWritten := 0
@@ -204,6 +214,13 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		}
 		// Linking is done project-scoped by deployProjectSkills below,
 		// not into the global ~/.claude/skills.
+		if rerr != nil {
+			// Retirement could not be checked, so writing would risk
+			// resurrecting a rejected slug. Reported per skill, as before.
+			skillsBelowBar++
+			fmt.Fprintf(stderr, "  skill %s: retire registry unreadable, not written\n", s.Label)
+			continue
+		}
 		if _, err := evolve.WriteSkill(skillsDir, art, retired); err != nil {
 			fmt.Fprintf(stderr, "  skill %s: %v\n", s.Label, err)
 			continue
