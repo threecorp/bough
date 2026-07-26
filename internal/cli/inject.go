@@ -175,10 +175,12 @@ func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout
 	coveragePath := layout.SkillCoverageFile(projectID)
 	// The gate reads the coverage registry to judge it, so take the copy
 	// it already parsed rather than reading the same file a second time
-	// on the prompt hot path.
-	ready, cov := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
-	if !ready.Ready() || cov == nil {
+	// on the prompt hot path. A non-Ready verdict already covers the
+	// unreadable case — that check is Blocking — so there is no separate
+	// nil test to make here.
+	ready := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
+	if !ready.Ready() {
 		return nil
 	}
-	return cov.CoveredIDs()
+	return ready.Coverage.CoveredIDs()
 }

@@ -45,7 +45,7 @@ func TestExclusionBlockedWithoutDeployedSkills(t *testing.T) {
 	deployed := t.TempDir() // nothing deployed
 	cov := coverageFile(t, t.TempDir(), map[string][]string{"a": {"i1"}})
 
-	r, _ := ExclusionReadiness(skillsDir, deployed, cov)
+	r := ExclusionReadiness(skillsDir, deployed, cov)
 	if r.Ready() {
 		t.Fatal("exclusion must NOT be ready with no deployed skills")
 	}
@@ -67,7 +67,7 @@ func TestExclusionBlockedWithEmptyCoverage(t *testing.T) {
 	deploySkills(t, skillsDir, "a", "b", "c")
 	cov := coverageFile(t, t.TempDir(), nil)
 
-	if r, _ := ExclusionReadiness(skillsDir, skillsDir, cov); r.Ready() {
+	if r := ExclusionReadiness(skillsDir, skillsDir, cov); r.Ready() {
 		t.Error("an empty coverage registry must block the switch")
 	}
 }
@@ -82,7 +82,7 @@ func TestExclusionReadyWhenBothHold(t *testing.T) {
 		"a": {"i1"}, "b": {"i2"}, "c": {"i3"},
 	})
 
-	r, _ := ExclusionReadiness(skillsDir, skillsDir, cov)
+	r := ExclusionReadiness(skillsDir, skillsDir, cov)
 	if !r.Ready() {
 		t.Errorf("expected ready, blockers: %v", detailsOf(r.Blockers()))
 	}
@@ -100,7 +100,7 @@ func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
 		"a": {"i1"}, "b": {"i2"}, "c": {"i3"}, "deleted-skill": {"i9"},
 	})
 
-	r, _ := ExclusionReadiness(skillsDir, skillsDir, cov)
+	r := ExclusionReadiness(skillsDir, skillsDir, cov)
 	if !r.Ready() {
 		t.Errorf("stale coverage must not block: %v", detailsOf(r.Blockers()))
 	}
@@ -119,7 +119,7 @@ func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
 // that says "not ready (0.62)" tells the operator nothing about what to
 // go do, so every blocker carries a concrete detail.
 func TestReadinessNamesTheMissingThing(t *testing.T) {
-	r, _ := ExclusionReadiness(t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "missing.json"))
+	r := ExclusionReadiness(t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "missing.json"))
 	for _, b := range r.Blockers() {
 		if strings.TrimSpace(b.Detail) == "" {
 			t.Errorf("blocker %q has no detail", b.Name)

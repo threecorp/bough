@@ -111,7 +111,7 @@ func TestExclusionNotAppliedWithoutRequest(t *testing.T) {
 // the doctor boundary: WAIT must come with the specific missing
 // precondition, not a bare refusal.
 func TestExclusionReadinessLineNamesBlockers(t *testing.T) {
-	_, lines := exclusionReadinessLines(resolveGateEnv())
+	_, lines := exclusionReadinessLines(newGateEnv())
 	if len(lines) == 0 {
 		t.Fatal("the readiness line must say something")
 	}

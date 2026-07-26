@@ -33,6 +33,13 @@ type ReadinessCheck struct {
 // Readiness is the verdict for the exclusion switch.
 type Readiness struct {
 	Checks []ReadinessCheck
+	// Coverage is the registry the checks parsed. It travels with the
+	// verdict so a caller acting on Ready() does not read and parse the
+	// same file again — the injector runs on EVERY prompt, and that second
+	// read is paid on the interactive hot path. It is nil exactly when the
+	// registry could not be read, which is already a failed blocking check,
+	// so a Ready() verdict always carries a usable registry.
+	Coverage *SkillCoverage
 }
 
 // Ready reports whether every BLOCKING check passed.
@@ -71,13 +78,7 @@ const minDeployedSkills = 3
 //
 // The one check this deliberately does NOT make is "does the corpus look
 // big enough": size is not evidence that delivery works.
-//
-// The loaded coverage registry is returned alongside the verdict so the
-// caller does not read and parse the same file again to act on it — the
-// injector runs on EVERY prompt, and a second read there is paid on the
-// hot path. It is nil when the registry could not be read, which is
-// already a blocking failed check.
-func ExclusionReadiness(skillsDir, deployedSkillsDir, coveragePath string) (Readiness, *SkillCoverage) {
+func ExclusionReadiness(skillsDir, deployedSkillsDir, coveragePath string) Readiness {
 	var r Readiness
 
 	deployed := countSkillDirs(deployedSkillsDir)
@@ -96,7 +97,7 @@ func ExclusionReadiness(skillsDir, deployedSkillsDir, coveragePath string) (Read
 			Name: "coverage registry readable", Passed: false, Blocking: true,
 			Detail: fmt.Sprintf("%v — without it there is no record of what a skill delivers", err),
 		})
-		return r, nil
+		return r
 	default:
 		n := len(cov.CoveredIDs())
 		r.Checks = append(r.Checks, ReadinessCheck{
@@ -116,7 +117,8 @@ func ExclusionReadiness(skillsDir, deployedSkillsDir, coveragePath string) (Read
 			Detail:   staleDetail(stale),
 		})
 	}
-	return r, cov
+	r.Coverage = cov
+	return r
 }
 
 // countSkillDirs counts the deployed skill entries. Both a directory

@@ -93,7 +93,7 @@ func renderContinuousLearningPosture(w io.Writer) {
 	// monorepo root, the project identity, and the config. Resolve them
 	// once here: derived four times they were four chances to disagree
 	// about which project doctor is reporting on.
-	env := resolveGateEnv()
+	env := newGateEnv()
 
 	// Policy gate posture + how many minted instincts are currently held.
 	// Surfacing the held count is deliberate (invariant: a silent hold is
@@ -131,29 +131,38 @@ func renderContinuousLearningPosture(w io.Writer) {
 // cannot disagree about their subject and the same files are not walked
 // four times.
 //
-// A zero value is the honest "could not resolve" state: hasRoot and
-// hasIdent record which parts are usable, so each line can degrade on
-// its own rather than the whole block failing.
+// A zero value is the honest "could not resolve" state; hasRoot /
+// hasIdent report which parts are usable so each line degrades on its
+// own rather than the whole block failing.
 type gateEnv struct {
-	root     string
-	hasRoot  bool
-	ident    homunculus.ProjectIdentity
-	hasIdent bool
-	cfg      *config.Config
+	// root is empty exactly when the cwd could not be resolved, and
+	// ident.ID is empty exactly when identity detection failed — so the
+	// two are their own presence flags. Separate booleans would have to
+	// be kept in lockstep by hand at every assignment, and a flag that
+	// drifts from its value produces a posture line describing a project
+	// that was never resolved: the disagreement this type prevents.
+	root  string
+	ident homunculus.ProjectIdentity
+	cfg   *config.Config
 }
 
-func resolveGateEnv() gateEnv {
+func (e gateEnv) hasRoot() bool  { return e.root != "" }
+func (e gateEnv) hasIdent() bool { return e.ident.ID != "" }
+
+// newGateEnv is the constructor for the type above, not a shared helper:
+// it exists so the resolution happens exactly once per doctor run.
+func newGateEnv() gateEnv {
 	var env gateEnv
 	cwd, err := os.Getwd()
 	if err != nil {
 		return env
 	}
-	env.root, env.hasRoot = resolveMonorepoRoot(cwd), true
+	env.root = resolveMonorepoRoot(cwd)
 	if cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, env.root)); cerr == nil {
 		env.cfg = cfg
 	}
 	if ident, ierr := homunculus.DetectIdentity(env.root); ierr == nil {
-		env.ident, env.hasIdent = ident, true
+		env.ident = ident
 	}
 	return env
 }
@@ -161,15 +170,15 @@ func resolveGateEnv() gateEnv {
 // exclusionReadinessLines renders the readiness verdict for suppressing
 // skill-covered instincts, naming each unmet precondition.
 func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
-	if !env.hasRoot {
+	if !env.hasRoot() {
 		return termio.StatusNeutral, []string{"WAIT — cannot resolve the project root"}
 	}
-	if !env.hasIdent {
+	if !env.hasIdent() {
 		return termio.StatusNeutral, []string{"WAIT — no project identity here"}
 	}
 	layout := homunculus.NewLayout()
 	requested := env.cfg != nil && env.cfg.Instinct.ExcludeSkillCovered
-	r, _ := evolve.ExclusionReadiness(
+	r := evolve.ExclusionReadiness(
 		layout.EvolvedSkillsDir(env.ident.ID),
 		filepath.Join(env.root, ".claude", "skills"),
 		layout.SkillCoverageFile(env.ident.ID),
@@ -193,7 +202,7 @@ func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
 // denylistActive reports whether the denylist sidecar is loaded for the
 // resolved monorepo.
 func denylistActive(env gateEnv) bool {
-	if !env.hasRoot {
+	if !env.hasRoot() {
 		return false
 	}
 	configured := ""
@@ -217,7 +226,7 @@ func denylistLine(active bool) (termio.Status, string) {
 // with, and names the documents it read: "we found no rule" is only
 // actionable if the operator knows which files were consulted.
 func groundingLine(env gateEnv) (termio.Status, string) {
-	if !env.hasRoot {
+	if !env.hasRoot() {
 		return termio.StatusNeutral, "OFF — cannot resolve the project root"
 	}
 	root := env.root
@@ -250,7 +259,7 @@ func policyGateState(env gateEnv) (enabled bool, held, batches int) {
 	if env.cfg != nil {
 		enabled = env.cfg.Instinct.GateEnabled()
 	}
-	if !env.hasIdent {
+	if !env.hasIdent() {
 		return enabled, 0, 0
 	}
 	held, batches = countQuarantined(homunculus.NewLayout().QuarantineDir(env.ident.ID))

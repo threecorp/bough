@@ -206,6 +206,10 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		// keeping.
 		if issues := evolve.QualityIssues(art); len(issues) > 0 {
 			skillsBelowBar++
+			// Nothing delivers this slug's ids now, so it must stop
+			// counting as covered or they stay suppressed from every
+			// prompt with no skill behind them.
+			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: below the quality bar, not written\n", s.Label)
 			for _, issue := range issues {
 				fmt.Fprintf(stderr, "      - %s\n", issue)
@@ -218,10 +222,14 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 			// Retirement could not be checked, so writing would risk
 			// resurrecting a rejected slug. Reported per skill, as before.
 			skillsBelowBar++
+			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: retire registry unreadable, not written\n", s.Label)
 			continue
 		}
 		if _, err := evolve.WriteSkill(skillsDir, art, retired); err != nil {
+			// Retired or curated: bough did not write this body, so it
+			// cannot vouch for what the slug delivers. Drop the claim.
+			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: %v\n", s.Label, err)
 			continue
 		}
