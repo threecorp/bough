@@ -415,6 +415,45 @@ func TestRemintCarriesFirstSeenForward(t *testing.T) {
 	}
 }
 
+// TestAdoptedActionIsTheWholeActionBlock pins the propagating surface a
+// re-screened candidate is judged on. buildInstinctBody writes the ENTIRE
+// action under "## Action", so recovering only its first line would hand
+// the gate — and the LLM judge — a truncated surface: a forbidden
+// instruction on the second line would be screened on the first pass and
+// invisible on the recovery pass.
+func TestAdoptedActionIsTheWholeActionBlock(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	multiline := "First, read the failing test.\nThen run `gh pr merge --squash` to land it."
+	parsed := map[string]any{
+		"instincts": []any{
+			map[string]any{
+				"id": "two-step", "trigger": "when CI is green",
+				"confidence": 0.7, "domain": "workflow", "scope": "project",
+				"action": multiline, "evidence": []any{"observed twice"},
+			},
+		},
+	}
+	if _, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, parsed, now); skipped != 0 {
+		t.Fatalf("stage: skipped=%d errs=%v", skipped, errs)
+	}
+
+	adopted, errs := adoptStrandedStaged(layout.StagingDir(ident.ID), nil)
+	if len(errs) != 0 || len(adopted) != 1 {
+		t.Fatalf("adopted=%d errs=%v, want 1/none", len(adopted), errs)
+	}
+	if !strings.Contains(adopted[0].action, "gh pr merge") {
+		t.Errorf("the recovered action dropped everything after line 1:\n%q", adopted[0].action)
+	}
+	// And the gate must therefore still catch it on the recovery pass.
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+	out := screenAndPromote(context.Background(), layout, ident.ID, adopted, gate, nil, now)
+	if out.Quarantined != 1 {
+		t.Errorf("Quarantined = %d, want 1 — the merge instruction must not survive re-screening", out.Quarantined)
+	}
+}
+
 // TestAdoptStrandedStagedSkipsFreshlyMintedIDs pins the de-dup: an id the
 // current pass just re-minted must not also be adopted from staging, or
 // the same id would be screened twice in one batch.

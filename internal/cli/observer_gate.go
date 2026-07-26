@@ -119,12 +119,41 @@ func adoptStrandedStaged(stagingDir string, fresh []stagedInstinct) ([]stagedIns
 			errs = append(errs, fmt.Errorf("staging leftover %s is unreadable and stays staged: %v", e.Name(), rerr))
 			continue
 		}
-		// The raw action string is not persisted separately, so the gate
-		// screens the rendered action line — the same propagating surface,
-		// recovered from the file.
-		adopted = append(adopted, stagedInstinct{in: in, action: firstActionLine(in.Body), path: path})
+		// The raw action string is not persisted separately, so it is
+		// recovered from the body. It must be the WHOLE action block, not
+		// its first line: buildInstinctBody writes multi-line actions
+		// verbatim, and screening only line 1 would hand both the pattern
+		// layer and the judge a truncated surface — an instruction to merge
+		// on line 2 would be caught on the first pass and invisible here.
+		adopted = append(adopted, stagedInstinct{in: in, action: actionBlock(in.Body), path: path})
 	}
 	return adopted, errs
+}
+
+// actionBlock returns everything under "## Action" up to the next heading
+// — the exact inverse of buildInstinctBody. Falls back to the whole body
+// when the heading is absent, because screening too MUCH is safe and
+// screening too little is the failure being avoided.
+func actionBlock(body string) string {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.EqualFold(strings.TrimSpace(l), "## Action") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return strings.TrimSpace(body)
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
+			end = i
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start:end], "\n"))
 }
 
 // promoteOutcome is the result of screening one staged batch. Emitted
