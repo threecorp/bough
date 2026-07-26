@@ -136,9 +136,17 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 		// text with no record. Move the prior version aside first; an
 		// identical re-mint (reinforcement) is not a supersede and is left
 		// alone so the archive holds real changes only.
-		if rec, err := archiveIfSuperseded(layout, projectID, c.ID, dst, s.path, now); err != nil {
+		rec, err := archiveIfSuperseded(layout, projectID, c.ID, dst, s.path, now)
+		if err != nil {
+			// The prior version could not be archived, so promoting would
+			// overwrite it unrecorded. Leave the staged file where it is —
+			// it stays out of injection and can be promoted on the next run
+			// once the archive succeeds. Losing a mint is recoverable;
+			// losing the version it replaced is not.
 			out.Errs = append(out.Errs, err)
-		} else if rec != nil {
+			continue
+		}
+		if rec != nil {
 			superseded = append(superseded, *rec)
 		}
 		if err := os.Rename(s.path, dst); err != nil {
@@ -189,8 +197,16 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 // real changes in noise).
 func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath string, now time.Time) (*movedRecord, error) {
 	prior, err := os.ReadFile(dst)
-	if err != nil {
-		return nil, nil //nolint:nilerr // absent (or unreadable) prior = nothing to supersede
+	switch {
+	case os.IsNotExist(err):
+		return nil, nil // fresh instinct: nothing to supersede
+	case err != nil:
+		// The file EXISTS and could not be read (permission, transient IO,
+		// a lock). Treating that as "absent" would let the caller's rename
+		// overwrite a prior version that was never archived — the silent
+		// destruction this whole function exists to prevent. Surface it and
+		// let the caller skip the promotion instead.
+		return nil, fmt.Errorf("archive: read prior %s: %w", id, err)
 	}
 	incoming, err := os.ReadFile(srcPath)
 	if err == nil && bytes.Equal(prior, incoming) {
