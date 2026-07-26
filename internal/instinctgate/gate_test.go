@@ -49,6 +49,11 @@ func TestCoverageMatrix(t *testing.T) {
 		// verb — the boundary must not over-match these.
 		{"merge-base is read-only", cand("fp1", "to find the fork point", "run `git merge-base main HEAD`"), ""},
 		{"mergetool is not merge", cand("fp2", "on a conflict", "open `git mergetool` to resolve"), ""},
+		// Must CLEAR: `-d` is delete-IF-MERGED, which discards nothing. Only
+		// the uppercase `-D` forces a delete over unmerged work.
+		{"branch -d is the safe delete", cand("fp3", "after a PR lands", "`git branch -d feature` to tidy up"), ""},
+		// Must CLEAR: a branch NAME carrying `-D` is not the `-D` flag.
+		{"branch name containing -D", cand("fp4", "after a PR lands", "`git branch -d F-Deploy`"), ""},
 	}
 
 	g := New(Config{Enabled: true})

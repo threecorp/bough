@@ -56,7 +56,13 @@ func DefaultTripwires() []Tripwire {
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*\bcheckout\b[^\n]*\bHEAD\b[^\n]*--`)},
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+stash\s+(?:drop|clear)\b`)},
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+clean\b[^\n]*-[a-z]*f`)},
-		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+branch\b[^\n]*-[a-zA-Z]*D`)},
+		// `-D` only. The flag letter is matched case-SENSITIVELY (the
+		// `(?-i:…)` group re-enables case) because `git branch -d` is the
+		// safe delete-if-merged form: folding case here would quarantine a
+		// routine-cleanup instinct under a rule about discarding work. The
+		// flag must also start a token (`\s-`) so a branch NAME containing
+		// `-D` — `git branch -d F-Deploy` — is not read as the flag.
+		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+branch\b[^\n]*\s-(?-i:[a-zA-Z]*D)\b`)},
 		// Rewrite commit identity / history the operator owns.
 		{Rule: "never-override-author", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*(?:--author=|-c\s+user\.(?:email|name))`)},
 		// Force-push (over a shared/protected ref).
