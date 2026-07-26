@@ -260,7 +260,7 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 
 	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
-	screenAndPromote(layout, ident.ID, staged1, gate, first)
+	screenAndPromote(layout, ident.ID, staged1, gate, nil, first)
 
 	live := filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md")
 	original, err := os.ReadFile(live)
@@ -284,7 +284,7 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 	}
 	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
 	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, second)
+	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, second)
 
 	if len(out.Errs) == 0 {
 		t.Error("an unreadable prior version must be reported, not swallowed")
