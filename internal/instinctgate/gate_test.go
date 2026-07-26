@@ -31,6 +31,14 @@ func TestCoverageMatrix(t *testing.T) {
 		{"stash drop", cand("d3", "after debugging", "`git stash drop` to tidy"), "never-discard-wip"},
 		{"clean -fd", cand("d4", "to reset the worktree", "`git clean -fd`"), "never-discard-wip"},
 		{"branch -D", cand("d5", "when a feature is done", "`git branch -D feature`"), "never-discard-wip"},
+		// The force letter inside a combined cluster, in EITHER position —
+		// git's option parser accepts both, so anchoring D at the end of
+		// the cluster silently missed the first of these.
+		{"branch -Dq", cand("d6", "when a feature is done", "`git branch -Dq feature`"), "never-discard-wip"},
+		{"branch -qD", cand("d7", "when a feature is done", "`git branch -qD feature`"), "never-discard-wip"},
+		// The LONG spelling of the same thing, in either flag order.
+		{"branch --delete --force", cand("d8", "after a rebase", "run `git branch --delete --force wip/foo`"), "never-discard-wip"},
+		{"branch --force --delete", cand("d9", "after a rebase", "run `git branch --force --delete wip/foo`"), "never-discard-wip"},
 		// never-override-author — both the --author and the -c forms.
 		{"author flag", cand("a1", "to fix attribution", "`git commit --author=\"x <y>\"`"), "never-override-author"},
 		{"-c user.email", cand("a2", "when committing", "`git -c user.email=z commit`"), "never-override-author"},
