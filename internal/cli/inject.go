@@ -173,11 +173,11 @@ func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout
 	skillsDir := layout.EvolvedSkillsDir(projectID)
 	deployedDir := filepath.Join(monoRoot, ".claude", "skills")
 	coveragePath := layout.SkillCoverageFile(projectID)
-	if !evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath).Ready() {
-		return nil
-	}
-	cov, cerr := evolve.LoadSkillCoverage(coveragePath)
-	if cerr != nil {
+	// The gate reads the coverage registry to judge it, so take the copy
+	// it already parsed rather than reading the same file a second time
+	// on the prompt hot path.
+	ready, cov := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
+	if !ready.Ready() || cov == nil {
 		return nil
 	}
 	return cov.CoveredIDs()
