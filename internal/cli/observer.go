@@ -181,8 +181,9 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// operator who wants only the free deterministic layers passes
 			// --no-judge rather than having to reason about cost every run.
 			var reviewer *instinctgate.Reviewer
+			var judgeProv *claudecli.Provider
 			if judge {
-				reviewer = newGateReviewer(model, maxCalls)
+				reviewer, judgeProv = newGateReviewer(model, maxCalls)
 			}
 			outcome := screenAndPromote(layout, ident.ID, staged, gate, reviewer, now)
 			errs = append(errs, outcome.Errs...)
@@ -203,8 +204,17 @@ func newObserverRunOnceCmd() *cobra.Command {
 					outcome.Superseded, outcome.ArchiveDir)
 			}
 			snap := res.Snapshot
-			fmt.Fprintf(stdout, "limiter: session=%d/hour=%d/failures=%d circuit_open=%t\n",
+			fmt.Fprintf(stdout, "limiter[mint]: session=%d/hour=%d/failures=%d circuit_open=%t\n",
 				snap.SessionN, snap.HourN, snap.Failures, snap.CircuitOpen)
+			if judgeProv != nil {
+				// The judge runs on its OWN limiter, so its spend is a second
+				// budget --max-calls applies to independently. Print it: an
+				// operator who capped calls at N and saw one counter would
+				// reasonably read the pass as having cost N at most.
+				jsnap := judgeProv.Limiter.Snapshot()
+				fmt.Fprintf(stdout, "limiter[judge]: session=%d/hour=%d/failures=%d circuit_open=%t\n",
+					jsnap.SessionN, jsnap.HourN, jsnap.Failures, jsnap.CircuitOpen)
+			}
 			for _, e := range errs {
 				fmt.Fprintf(cmd.ErrOrStderr(), "  soft: %s\n", e)
 			}
@@ -216,7 +226,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "render the prompt and exit without spawning claude --print")
 	cmd.Flags().StringVar(&out, "out", "", "with --dry-run, write the rendered prompt to this path instead of stdout")
 	cmd.Flags().StringVar(&model, "model", "", "override the claude model (default: haiku)")
-	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "override the per-session LLM call cap (default: 10)")
+	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "per-session LLM call cap, applied to EACH budget separately: minting and the gate judge hold their own (default: 10 each; --judge=false leaves only the minting one)")
 	cmd.Flags().BoolVar(&judge, "judge", true, "run the LLM layer of the generation gate (catches prose-shaped violations the patterns cannot; --judge=false spends no extra LLM calls)")
 	return cmd
 }

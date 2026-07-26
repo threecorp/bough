@@ -23,11 +23,17 @@ import (
 // treats as "layer off" rather than as a failure: the deterministic
 // layers already ran, and refusing to mint because a model is
 // unreachable would stop the corpus growing over an optional check.
-func newGateReviewer(model string, maxCalls int) *instinctgate.Reviewer {
+//
+// The provider is returned alongside the reviewer so the caller can print
+// ITS limiter snapshot too. Because this budget is separate from the
+// minting one, a run with the judge on spends against two caps; reporting
+// only the minting one would understate the pass's real cost, and a cap
+// nobody can see is the silent kind.
+func newGateReviewer(model string, maxCalls int) (*instinctgate.Reviewer, *claudecli.Provider) {
 	resolver := prompts.NewResolver()
 	tpl, err := resolver.Get(prompts.TemplateInstinctGate)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	prov := claudecli.NewProvider()
 	if model != "" {
@@ -37,10 +43,10 @@ func newGateReviewer(model string, maxCalls int) *instinctgate.Reviewer {
 		prov.Limiter.MaxCallsPerSession = maxCalls
 	}
 	review := func(ctx context.Context, trigger, action string) ([]byte, error) {
-		body, rerr := renderGatePrompt(tpl.Body, trigger, action)
-		if rerr != nil {
-			return nil, rerr
-		}
+		// The template is rendered by Generate. Rendering it here as well
+		// would double the work on every vote (3 per candidate) for a byte
+		// count only the empty-response error ever reads, so that render is
+		// deferred to the error path below.
 		res, gerr := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: gatePromptData{Trigger: trigger, Action: action}})
 		if gerr != nil {
 			return nil, gerr
@@ -58,10 +64,15 @@ func newGateReviewer(model string, maxCalls int) *instinctgate.Reviewer {
 		}
 		// A provider that returned no usable document has told us nothing;
 		// surfacing it as an error keeps the vote from counting silence
-		// as a clean verdict.
+		// as a clean verdict. The prompt size is rendered only here, on the
+		// path that reports it.
+		body, rerr := renderGatePrompt(tpl.Body, trigger, action)
+		if rerr != nil {
+			return nil, rerr
+		}
 		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %d bytes)", len(body))
 	}
-	return instinctgate.NewReviewer(review)
+	return instinctgate.NewReviewer(review), prov
 }
 
 // gatePromptData is the template's view of one candidate: only the
