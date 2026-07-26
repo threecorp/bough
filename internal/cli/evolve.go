@@ -165,6 +165,14 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	agentsDir := layout.EvolvedAgentsDir(ident.ID)
 	commandsDir := layout.EvolvedCommandsDir(ident.ID)
 
+	// One registry for the whole pass: retirement is a property of the
+	// corpus, so every skill in this emit must be judged against the same
+	// snapshot rather than against whatever the file said at its turn.
+	retired, rerr := evolve.LoadRetireRegistry(skillsDir)
+	if rerr != nil {
+		return rerr
+	}
+
 	skillsWritten := 0
 	skillsBelowBar := 0
 	for _, s := range out.Skills {
@@ -184,7 +192,7 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		}
 		// Linking is done project-scoped by deployProjectSkills below,
 		// not into the global ~/.claude/skills.
-		if _, err := evolve.WriteSkill(skillsDir, art); err != nil {
+		if _, err := evolve.WriteSkill(skillsDir, art, retired); err != nil {
 			fmt.Fprintf(stderr, "  skill %s: %v\n", s.Label, err)
 			continue
 		}

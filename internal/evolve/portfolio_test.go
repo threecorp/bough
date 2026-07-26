@@ -32,7 +32,7 @@ func TestCuratedSkillSurvivesReEmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := WriteSkill(skillsDir, skillArtifact(slug, "regenerated", "---\nname: "+slug+"\n---\n\ngenerated\n"))
+	_, err := WriteSkill(skillsDir, skillArtifact(slug, "regenerated", "---\nname: "+slug+"\n---\n\ngenerated\n"), nil)
 	if !errors.Is(err, ErrCurated) {
 		t.Fatalf("WriteSkill err = %v, want ErrCurated", err)
 	}
@@ -51,10 +51,10 @@ func TestCuratedSkillSurvivesReEmit(t *testing.T) {
 func TestUncuratedSkillIsRefreshed(t *testing.T) {
 	skillsDir := t.TempDir()
 	slug := "io-data-layer"
-	if _, err := WriteSkill(skillsDir, skillArtifact(slug, "v1", "---\nname: "+slug+"\n---\n\nfirst\n")); err != nil {
+	if _, err := WriteSkill(skillsDir, skillArtifact(slug, "v1", "---\nname: "+slug+"\n---\n\nfirst\n"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteSkill(skillsDir, skillArtifact(slug, "v2", "---\nname: "+slug+"\n---\n\nsecond\n")); err != nil {
+	if _, err := WriteSkill(skillsDir, skillArtifact(slug, "v2", "---\nname: "+slug+"\n---\n\nsecond\n"), nil); err != nil {
 		t.Fatalf("refreshing an uncurated skill must work: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(skillsDir, slug, "SKILL.md"))
@@ -70,7 +70,7 @@ func TestRetiredSlugIsNotResurrected(t *testing.T) {
 	skillsDir := t.TempDir()
 	slug := "noisy-skill"
 	art := skillArtifact(slug, "d", "---\nname: "+slug+"\n---\n\nbody\n")
-	if _, err := WriteSkill(skillsDir, art); err != nil {
+	if _, err := WriteSkill(skillsDir, art, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +86,13 @@ func TestRetiredSlugIsNotResurrected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = WriteSkill(skillsDir, art)
+	// The next pass loads the registry fresh, which is where the
+	// retirement recorded above takes effect.
+	nextPass, lerr := LoadRetireRegistry(skillsDir)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	_, err = WriteSkill(skillsDir, art, nextPass)
 	if !errors.Is(err, ErrRetired) {
 		t.Fatalf("WriteSkill err = %v, want ErrRetired", err)
 	}

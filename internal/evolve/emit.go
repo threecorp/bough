@@ -93,15 +93,17 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 // Both are returned as errors for the caller to REPORT, not to abort on:
 // they are outcomes of a healthy run, not faults.
 //
+// The retire registry is passed IN rather than loaded here: an emit pass
+// writes many skills against one registry, so loading it per call
+// re-read and re-parsed the same file once per skill — and worse, a
+// registry that changed mid-pass would apply to some skills and not
+// others. A nil registry retires nothing (see RetireRegistry.Retired).
+//
 // Symlinking the result into project scope is done by
 // cli.deployProjectSkills.
-func WriteSkill(skillsDir string, art SkillArtifact) (string, error) {
+func WriteSkill(skillsDir string, art SkillArtifact, reg *RetireRegistry) (string, error) {
 	if !labelPattern.MatchString(art.Slug) {
 		return "", fmt.Errorf("evolve.WriteSkill: invalid slug %q", art.Slug)
-	}
-	reg, err := LoadRetireRegistry(skillsDir)
-	if err != nil {
-		return "", err
 	}
 	if reg.Retired(art.Slug) {
 		return "", fmt.Errorf("%w: %s (%s)", ErrRetired, art.Slug, reg.Slugs[art.Slug])
