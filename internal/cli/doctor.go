@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
@@ -88,27 +89,33 @@ func renderContinuousLearningPosture(w io.Writer) {
 	fmt.Fprintf(w, "    %s homunculus root   %s\n", st.Mark(rootStatus), rootLine)
 	fmt.Fprintf(w, "    %s observer daemon   %s\n", st.Mark(daemonStatus), daemonLine)
 
+	// Every gate line below is computed from the same three facts — the
+	// monorepo root, the project identity, and the config. Resolve them
+	// once here: derived four times they were four chances to disagree
+	// about which project doctor is reporting on.
+	env := resolveGateEnv()
+
 	// Policy gate posture + how many minted instincts are currently held.
 	// Surfacing the held count is deliberate (invariant: a silent hold is
 	// indistinguishable from data loss); the count in the message IS the
 	// signal that a command-shaped instinct was withheld for review.
-	gateEnabled, gateHeld, gateBatches := policyGateState()
+	gateEnabled, gateHeld, gateBatches := policyGateState(env)
 	gateStatus, gateLine := policyGateLine(gateEnabled, gateHeld, gateBatches)
 	fmt.Fprintf(w, "    %s policy gate       %s\n", st.Mark(gateStatus), gateLine)
 
 	// The optional layers report their own posture. Both are inert
 	// without local files, and an operator who assumes a guard is running
 	// when it is not is worse off than one who knows it is off.
-	denyStatus, denyLine := denylistLine(denylistActive())
+	denyStatus, denyLine := denylistLine(denylistActive(env))
 	fmt.Fprintf(w, "    %s   denylist        %s\n", st.Mark(denyStatus), denyLine)
-	groundStatus, groundLine := groundingLine()
+	groundStatus, groundLine := groundingLine(env)
 	fmt.Fprintf(w, "    %s   rule grounding  %s\n", st.Mark(groundStatus), groundLine)
 
 	// The exclusion switch is decided by evidence, not by the config flag
 	// alone. Printing WAIT with the specific missing precondition is the
 	// point: "not ready (0.62)" tells an operator nothing about what to
 	// go do.
-	exStatus, exLines := exclusionReadinessLines()
+	exStatus, exLines := exclusionReadinessLines(env)
 	for i, line := range exLines {
 		if i == 0 {
 			fmt.Fprintf(w, "    %s   skill exclusion %s\n", st.Mark(exStatus), line)
@@ -118,27 +125,54 @@ func renderContinuousLearningPosture(w io.Writer) {
 	}
 }
 
-// exclusionReadinessLines renders the readiness verdict for suppressing
-// skill-covered instincts, naming each unmet precondition.
-func exclusionReadinessLines() (termio.Status, []string) {
+// gateEnv is the environment every continuous-learning posture line is
+// computed from: which monorepo, which project, and what the config
+// says. Resolved once per doctor run and passed down, so the lines
+// cannot disagree about their subject and the same files are not walked
+// four times.
+//
+// A zero value is the honest "could not resolve" state: hasRoot and
+// hasIdent record which parts are usable, so each line can degrade on
+// its own rather than the whole block failing.
+type gateEnv struct {
+	root     string
+	hasRoot  bool
+	ident    homunculus.ProjectIdentity
+	hasIdent bool
+	cfg      *config.Config
+}
+
+func resolveGateEnv() gateEnv {
+	var env gateEnv
 	cwd, err := os.Getwd()
 	if err != nil {
+		return env
+	}
+	env.root, env.hasRoot = resolveMonorepoRoot(cwd), true
+	if cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, env.root)); cerr == nil {
+		env.cfg = cfg
+	}
+	if ident, ierr := homunculus.DetectIdentity(env.root); ierr == nil {
+		env.ident, env.hasIdent = ident, true
+	}
+	return env
+}
+
+// exclusionReadinessLines renders the readiness verdict for suppressing
+// skill-covered instincts, naming each unmet precondition.
+func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
+	if !env.hasRoot {
 		return termio.StatusNeutral, []string{"WAIT — cannot resolve the project root"}
 	}
-	root := resolveMonorepoRoot(cwd)
-	ident, ierr := homunculus.DetectIdentity(root)
-	if ierr != nil {
+	if !env.hasIdent {
 		return termio.StatusNeutral, []string{"WAIT — no project identity here"}
 	}
 	layout := homunculus.NewLayout()
-	requested := false
-	if cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root)); cerr == nil {
-		requested = cfg.Instinct.ExcludeSkillCovered
-	}
-	r := evolve.ExclusionReadiness(
-		layout.EvolvedSkillsDir(ident.ID),
-		filepath.Join(root, ".claude", "skills"),
-		layout.SkillCoverageFile(ident.ID),
+	requested := env.cfg != nil && env.cfg.Instinct.ExcludeSkillCovered
+	r, _ := evolve.ExclusionReadiness(
+		layout.EvolvedSkillsDir(env.ident.ID),
+		filepath.Join(env.root, ".claude", "skills"),
+		layout.SkillCoverageFile(env.ident.ID),
 	)
 	switch {
 	case r.Ready() && requested:
@@ -157,19 +191,16 @@ func exclusionReadinessLines() (termio.Status, []string) {
 }
 
 // denylistActive reports whether the denylist sidecar is loaded for the
-// monorepo at the current cwd.
-func denylistActive() bool {
-	cwd, err := os.Getwd()
-	if err != nil {
+// resolved monorepo.
+func denylistActive(env gateEnv) bool {
+	if !env.hasRoot {
 		return false
 	}
-	root := resolveMonorepoRoot(cwd)
-	cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
 	configured := ""
-	if cerr == nil {
-		configured = cfg.Instinct.Gate.DenylistPath
+	if env.cfg != nil {
+		configured = env.cfg.Instinct.Gate.DenylistPath
 	}
-	return loadDenylistQuiet(root, configured).Active()
+	return loadDenylistQuiet(env.root, configured).Active()
 }
 
 // denylistLine renders the denylist posture. Inert is neutral, never an
@@ -185,16 +216,14 @@ func denylistLine(active bool) (termio.Status, string) {
 // groundingLine reports whether rule grounding has governance to work
 // with, and names the documents it read: "we found no rule" is only
 // actionable if the operator knows which files were consulted.
-func groundingLine() (termio.Status, string) {
-	cwd, err := os.Getwd()
-	if err != nil {
+func groundingLine(env gateEnv) (termio.Status, string) {
+	if !env.hasRoot {
 		return termio.StatusNeutral, "OFF — cannot resolve the project root"
 	}
-	root := resolveMonorepoRoot(cwd)
-	cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
+	root := env.root
 	var configured []string
-	if cerr == nil {
-		configured = cfg.Instinct.Gate.GovernancePaths
+	if env.cfg != nil {
+		configured = env.cfg.Instinct.Gate.GovernancePaths
 	}
 	g := instinctgate.LoadGovernance(governancePaths(root, configured))
 	if !g.Active() {
@@ -216,21 +245,15 @@ func groundingLine() (termio.Status, string) {
 // minted instincts sit in quarantine right now (held whole, never
 // deleted). Best-effort — no config / no project reports the default-on
 // posture with a zero held count.
-func policyGateState() (enabled bool, held, batches int) {
+func policyGateState(env gateEnv) (enabled bool, held, batches int) {
 	enabled = true
-	cwd, err := os.Getwd()
-	if err != nil {
+	if env.cfg != nil {
+		enabled = env.cfg.Instinct.GateEnabled()
+	}
+	if !env.hasIdent {
 		return enabled, 0, 0
 	}
-	root := resolveMonorepoRoot(cwd)
-	if cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root)); err == nil {
-		enabled = cfg.Instinct.GateEnabled()
-	}
-	ident, err := homunculus.DetectIdentity(root)
-	if err != nil {
-		return enabled, 0, 0
-	}
-	held, batches = countQuarantined(homunculus.NewLayout().QuarantineDir(ident.ID))
+	held, batches = countQuarantined(homunculus.NewLayout().QuarantineDir(env.ident.ID))
 	return enabled, held, batches
 }
 
