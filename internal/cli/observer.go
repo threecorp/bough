@@ -175,7 +175,20 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// (reversibly). Staging happens regardless of the gate's enabled
 			// state, so a minted note is never live before it has been checked.
 			now := time.Now().UTC()
-			staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, res.Parsed, now)
+			stagingDir := layout.StagingDir(ident.ID)
+			staged, skipped, errs := stageInstincts(stagingDir, ident, res.Parsed, now)
+			// Pick up anything a previous pass left staged (its prior
+			// version could not be archived, or the run was interrupted
+			// before the judge reached it). Nothing else ever reads this
+			// directory, so without this the file would be stranded and
+			// invisible for good.
+			if stranded, serrs := adoptStrandedStaged(stagingDir, staged); len(stranded) > 0 || len(serrs) > 0 {
+				errs = append(errs, serrs...)
+				if len(stranded) > 0 {
+					fmt.Fprintf(stdout, "re-screening %d instinct(s) left staged by an earlier run\n", len(stranded))
+					staged = append(staged, stranded...)
+				}
+			}
 			gate := instinctgate.New(gateConfigFor(cmd, root))
 			// The judge is opt-in per pass: it spends LLM calls, so an
 			// operator who wants only the free deterministic layers passes

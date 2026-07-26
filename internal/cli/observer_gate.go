@@ -73,6 +73,53 @@ func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed 
 	return staged, skipped, errs
 }
 
+// adoptStrandedStaged returns staged instincts left behind by a PREVIOUS
+// run so this pass screens them again.
+//
+// Without it, `.staging` is write-only: the promote loop skips a mint
+// whose prior version could not be archived, and nothing ever looks at
+// the directory again — `ScanInstincts` skips it by design, the doctor
+// counts only quarantine, and neither REPORT.md restore path knows about
+// it. The mint would be stranded forever, which is the "a silent hold is
+// indistinguishable from data loss" failure the whole move-never-delete
+// design exists to prevent.
+//
+// Ids this pass already re-minted are skipped: the fresh file has already
+// replaced the stale one on disk, and adopting both would screen the same
+// id twice in one batch.
+func adoptStrandedStaged(stagingDir string, fresh []stagedInstinct) ([]stagedInstinct, []error) {
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return nil, nil // no staging dir yet ⇒ nothing stranded
+	}
+	minted := make(map[string]bool, len(fresh))
+	for _, s := range fresh {
+		minted[s.in.ID] = true
+	}
+	var adopted []stagedInstinct
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".md")
+		if minted[id] {
+			continue
+		}
+		path := filepath.Join(stagingDir, e.Name())
+		in, rerr := homunculus.ReadInstinctFile(path)
+		if rerr != nil || in == nil {
+			errs = append(errs, fmt.Errorf("staging leftover %s is unreadable and stays staged: %v", e.Name(), rerr))
+			continue
+		}
+		// The raw action string is not persisted separately, so the gate
+		// screens the rendered action line — the same propagating surface,
+		// recovered from the file.
+		adopted = append(adopted, stagedInstinct{in: in, action: firstActionLine(in.Body), path: path})
+	}
+	return adopted, errs
+}
+
 // promoteOutcome is the result of screening one staged batch. Emitted
 // were cleared and moved to the personal corpus; Quarantined were held
 // and moved to a dated batch under the quarantine dir with a REPORT.

@@ -303,10 +303,60 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 	if !bytes.Equal(after, original) {
 		t.Error("the prior version was overwritten despite never being archived")
 	}
-	// The mint itself is not lost either — it is still staged, so the next
-	// run can promote it once the archive succeeds.
+	// The mint itself is not lost either — it is still staged …
 	if _, err := os.Stat(staged2[0].path); err != nil {
-		t.Errorf("the staged mint should survive for the next run: %v", err)
+		t.Fatalf("the staged mint should survive for the next run: %v", err)
+	}
+	// … and "survives" only counts if something ever picks it up again.
+	// A file nobody re-reads is stranded, not preserved, so the next
+	// pass must actually adopt it.
+	adopted, aerrs := adoptStrandedStaged(layout.StagingDir(ident.ID), nil)
+	if len(aerrs) != 0 {
+		t.Errorf("unexpected adoption errors: %v", aerrs)
+	}
+	var found bool
+	for _, a := range adopted {
+		if a.in.ID == "read-before-edit" {
+			found = true
+			if a.action == "" {
+				t.Error("the adopted candidate has no action line, so the gate would screen an empty surface")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the stranded mint was not adopted by the next pass: %+v", adopted)
+	}
+
+	// Once the prior version is readable again, the adopted mint promotes.
+	if err := os.Chmod(live, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	third := time.Date(2026, 6, 25, 9, 0, 0, 0, time.UTC)
+	out3 := screenAndPromote(context.Background(), layout, ident.ID, adopted, gate, nil, third)
+	if out3.Emitted != 1 {
+		t.Errorf("Emitted = %d, want 1 — the recovered mint should land (errs=%v)", out3.Emitted, out3.Errs)
+	}
+	recovered, _ := homunculus.ReadInstinctFile(live)
+	if recovered == nil || !strings.Contains(recovered.Body, "whole enclosing function") {
+		t.Errorf("the personal corpus does not hold the recovered mint: %+v", recovered)
+	}
+}
+
+// TestAdoptStrandedStagedSkipsFreshlyMintedIDs pins the de-dup: an id the
+// current pass just re-minted must not also be adopted from staging, or
+// the same id would be screened twice in one batch.
+func TestAdoptStrandedStagedSkipsFreshlyMintedIDs(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	staged := stagedFromResult(t, layout, ident, now)
+
+	adopted, errs := adoptStrandedStaged(layout.StagingDir(ident.ID), staged)
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+	if len(adopted) != 0 {
+		t.Errorf("ids minted this pass must not be adopted again, got %d", len(adopted))
 	}
 }
 

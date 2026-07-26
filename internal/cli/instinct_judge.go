@@ -80,10 +80,9 @@ func newGateReviewer(model string, maxCalls int) (*instinctgate.Reviewer, *claud
 		// rather than replacing it: the empty response is the finding, and
 		// swapping in the render error would hide the very condition this
 		// branch exists to report.
-		size := "unknown size"
-		if body, rerr := renderGatePrompt(tpl.Body, trigger, action); rerr == nil {
-			size = fmt.Sprintf("%d bytes", len(body))
-		} else {
+		body, rerr := renderGatePrompt(tpl.Body, trigger, action)
+		size := fmt.Sprintf("%d bytes", len(body))
+		if rerr != nil {
 			size = "size unavailable: " + rerr.Error()
 		}
 		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %s)", size)
