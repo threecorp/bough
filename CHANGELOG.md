@@ -1,5 +1,117 @@
 # Changelog
 
+## v0.20.0
+
+Put a check between minting an instinct and injecting one, and stop ranking what
+gets injected by a number the writer chose for itself.
+
+Until now the loop was open at both ends: whatever the minting model wrote
+landed straight in the injectable directory, `bough instinct promote` copied it
+to the global corpus without reading it, and the injector delivered the corpus
+sorted by `confidence` — a field the same model assigns to its own output. A
+learner with no check and a self-scored ranking will happily teach itself a
+forbidden action and then rank it first. This release closes both.
+
+### Added
+
+- **A generation gate between minting and injection** (`internal/instinctgate`).
+  A freshly minted instinct is written to a `.staging` directory and only moves
+  into the injectable one after clearing four layers, cheapest first: pattern
+  **tripwires** over command-shaped forbidden actions (never merge unasked,
+  never discard working state, never rewrite commit identity, never force-push,
+  never delete a remote branch), an operator **denylist**, an **LLM judge** that
+  takes three votes and needs two to agree, and **rule grounding** that requires
+  a five-word verbatim run from the governance files before an instinct may
+  claim a rule backs it. The gate **fails open, loudly**: if the judge cannot
+  run, the instinct is still promoted and the run says so by name — a learner
+  that cannot learn is worse than one that occasionally learns something the
+  patterns miss. The pattern layer is honest about its reach: it is measured
+  against command-shaped violations, not paraphrase, which is exactly why the
+  judge exists above it.
+- **Held instincts are quarantined reversibly, never deleted.** A held candidate
+  is `mv`d to a dated `.policy-quarantine/<batch>/` beside the corpus with a
+  `REPORT.md` naming the rule that held it and the one-liner that restores it.
+  A silent hold is indistinguishable from data loss.
+- **`bough instinct promote` runs the same gate.** Promoting project knowledge
+  to the global corpus previously wrote through unread; it now clears at least
+  the deterministic layers first.
+- **Relevance ranking for injection** (`internal/retrieve`). Three independent
+  channels — exact identifier/path hits, BM25 over the corpus, and recency —
+  are fused with reciprocal rank fusion (k=60). A candidate that no lexical
+  channel found is dropped even if recency ranks it highly, so an off-topic
+  prompt correctly gets nothing. `confidence` is kept as audit data and is no
+  longer a ranking key. The hook passes the real prompt through a new
+  `--prompt` flag; with no prompt the old confidence order still applies.
+- **The operator's lessons file outranks minted instincts.** `instinct.lessons`
+  points at hand-written corrections; a person recording what went wrong is
+  ground truth, and it is now delivered above anything a model minted from tool
+  traces.
+- **Evolved skills are a portfolio, not an output directory.** New skills must
+  clear a mechanical quality bar (verbatim identifiers, size cap, description
+  budget), a skill marked `curated: true` is never overwritten by a pass, and a
+  retire/merge registry keeps a retired slug from being resurrected by the next
+  clustering run.
+- **Path-scoped rules.** Mega-themes are also emitted as `.claude/rules/*.md`
+  with a `paths:` glob — the one delivery path that fires the moment a file is
+  read, rather than waiting for a prompt to mention it.
+- **The skill-exclusion switch is gated on evidence, not on a flag.**
+  `exclude_skill_covered` stops push-injecting knowledge a deployed skill
+  already covers, but flipping it early makes that knowledge vanish from *both*
+  paths. `bough claude doctor` now prints a numeric PASS/WAIT readiness verdict
+  and the switch honours it.
+- **Budget and posture are visible.** `--judge-max-calls` sizes the judge's own
+  call budget (the minting cap and the judging cap no longer eat each other),
+  `--judge=false` turns the LLM layer off and spends nothing, and doctor grew
+  gate-posture lines: gate on/off, denylist loaded or not, grounding sources,
+  and quarantine counts.
+
+### Changed
+
+- **Clustering percolates k-cliques instead of walking single-linkage
+  components.** Single linkage fuses two unrelated themes as soon as one
+  instinct sits between them; percolation keeps them apart.
+- **A superseded instinct is archived, not overwritten.** Re-minting an id moves
+  the prior version to an archive directory with provenance instead of
+  clobbering it, and a re-mint whose *knowledge* is unchanged is not archived at
+  all — the comparison is on content, ignoring the timestamps the render embeds.
+  `first_seen` is carried forward across re-mints.
+- **The three consensus votes run concurrently**, and the governance word index
+  is built once per corpus rather than once per candidate.
+
+### Fixed
+
+- The judge decoded the provider's result envelope rather than the document
+  inside it. The envelope parses cleanly as "no violation", so every candidate
+  passed — the layer was inert while reporting success.
+- A judge that never ran was reported as a clean pass. It now names why it did
+  not run, and Ctrl-C is honoured: cancellation stops the fan-out immediately
+  and nothing unjudged is promoted.
+- Exhausting the judge's call budget promoted the un-reviewed remainder while
+  the message said to re-run for the rest. Those candidates are now held back in
+  staging, and the run prints how many calls the batch actually needs.
+- Instincts a previous run left in `.staging` were never re-screened. They are
+  adopted and screened on the next run, over the whole action block — an earlier
+  recovery read only its first line, so a two-step action was screened with the
+  forbidden step removed.
+- Making the branch-delete tripwire case-sensitive (so the safe `git branch -d`
+  stops being quarantined) silently dropped `--delete --force` and `-Dq`, which
+  the old pattern had matched only by accident. Both spellings are covered again.
+- `os.IsNotExist` does not unwrap, so a wrapped "file absent" read as
+  "unreadable" and the *first* mint of every id was refused promotion.
+- An unreadable retire registry aborted the whole evolve pass after its LLM
+  calls had already been spent. It now degrades: no skill is written, everything
+  else still lands, and the summary names the file.
+- Community labelling picked the smallest member index rather than the root, so
+  two communities sharing their lowest member were reported as one.
+
+### Notes
+
+- An interrupted run exits `0`. It reports the interruption clearly, but a
+  non-zero code would be more conventional for a partial run.
+- Cancelled votes are recorded as failures, so an interrupted run's judge
+  limiter prints `circuit_open=true` on the way out. The limiter is
+  per-process, so nothing carries over.
+
 ## v0.19.0
 
 ### Changed
