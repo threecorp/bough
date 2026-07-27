@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
 	"github.com/ikeikeikeike/bough/internal/termio"
@@ -92,6 +94,69 @@ func renderContinuousLearningPosture(w io.Writer) {
 	gateEnabled, gateHeld, gateBatches := policyGateState()
 	gateStatus, gateLine := policyGateLine(gateEnabled, gateHeld, gateBatches)
 	fmt.Fprintf(w, "    %s policy gate       %s\n", st.Mark(gateStatus), gateLine)
+
+	// The optional layers report their own posture. Both are inert
+	// without local files, and an operator who assumes a guard is running
+	// when it is not is worse off than one who knows it is off.
+	denyStatus, denyLine := denylistLine(denylistActive())
+	fmt.Fprintf(w, "    %s   denylist        %s\n", st.Mark(denyStatus), denyLine)
+	groundStatus, groundLine := groundingLine()
+	fmt.Fprintf(w, "    %s   rule grounding  %s\n", st.Mark(groundStatus), groundLine)
+}
+
+// denylistActive reports whether the denylist sidecar is loaded for the
+// monorepo at the current cwd.
+func denylistActive() bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	root := resolveMonorepoRoot(cwd)
+	cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
+	configured := ""
+	if cerr == nil {
+		configured = cfg.Instinct.Gate.DenylistPath
+	}
+	return loadDenylistQuiet(root, configured).Active()
+}
+
+// denylistLine renders the denylist posture. Inert is neutral, never an
+// error: the layer is opt-in by having a file, and most projects never
+// need one.
+func denylistLine(active bool) (termio.Status, string) {
+	if !active {
+		return termio.StatusNeutral, "OFF — no " + DefaultDenylistPath + " (optional; see docs/denylist.template.txt)"
+	}
+	return termio.StatusOK, "ON — terms loaded from the untracked sidecar"
+}
+
+// groundingLine reports whether rule grounding has governance to work
+// with, and names the documents it read: "we found no rule" is only
+// actionable if the operator knows which files were consulted.
+func groundingLine() (termio.Status, string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return termio.StatusNeutral, "OFF — cannot resolve the project root"
+	}
+	root := resolveMonorepoRoot(cwd)
+	cfg, cerr := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
+	var configured []string
+	if cerr == nil {
+		configured = cfg.Instinct.Gate.GovernancePaths
+	}
+	g := instinctgate.LoadGovernance(governancePaths(root, configured))
+	if !g.Active() {
+		return termio.StatusNeutral, "OFF — no rule documents found (checked " + strings.Join(defaultGovernancePaths, ", ") + ")"
+	}
+	names := make([]string, 0, len(g.Sources))
+	for _, s := range g.Sources {
+		if rel, rerr := filepath.Rel(root, s); rerr == nil {
+			names = append(names, rel)
+			continue
+		}
+		names = append(names, s)
+	}
+	return termio.StatusOK, "ON — grounded against " + strings.Join(names, ", ")
 }
 
 // policyGateState resolves the deterministic policy-gate posture for the

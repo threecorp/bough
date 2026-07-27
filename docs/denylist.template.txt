@@ -1,0 +1,16 @@
+# bough instinct-gate denylist (TEMPLATE)
+#
+# Copy to .bough/denylist.txt — that path is gitignored on purpose.
+# This file names the strings that must never propagate out of a
+# session, so committing the real list would publish exactly what the
+# guard exists to contain.
+#
+# One term per line. Matching is case-insensitive and substring-based,
+# so `acme` also catches `acme-prod-01`. Blank lines and lines starting
+# with # are ignored. A missing file leaves this layer inert.
+#
+# Replace the placeholders below with your own terms:
+
+# <client-or-customer-name>
+# <internal-hostname>
+# <unreleased-product-codename>

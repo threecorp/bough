@@ -24,3 +24,8 @@ result-*
 
 # Plugin sockets
 /tmp/bough-plugin-*.sock
+
+# Instinct-gate denylist sidecar — names the very strings the guard
+# exists to contain, so it must never be committed. Ship the template
+# (docs/denylist.template.txt), keep the real list local.
+/.bough/denylist.txt

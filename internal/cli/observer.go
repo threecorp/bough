@@ -67,6 +67,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 		out        string
 		model      string
 		maxCalls   int
+		judge      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run-once",
@@ -176,7 +177,15 @@ func newObserverRunOnceCmd() *cobra.Command {
 			now := time.Now().UTC()
 			staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, res.Parsed, now)
 			gate := instinctgate.New(gateConfigFor(cmd, root))
-			outcome := screenAndPromote(layout, ident.ID, staged, gate, now)
+			// The judge is opt-in per pass: it spends LLM calls, so an
+			// operator who wants only the free deterministic layers passes
+			// --no-judge rather than having to reason about cost every run.
+			var reviewer *instinctgate.Reviewer
+			var judgeProv *claudecli.Provider
+			if judge {
+				reviewer, judgeProv = newGateReviewer(model, maxCalls)
+			}
+			outcome := screenAndPromote(layout, ident.ID, staged, gate, reviewer, now)
 			errs = append(errs, outcome.Errs...)
 			fmt.Fprintf(stdout, "instincts emitted=%d quarantined=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
 				outcome.Emitted, outcome.Quarantined, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
@@ -184,13 +193,28 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
+			if reviewer != nil {
+				// "0 held" says nothing without the coverage behind it: a judge
+				// that could not run produces the same held count as a clean batch.
+				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",
+					outcome.Reviewed, outcome.ReviewFailed)
+			}
 			if outcome.Superseded > 0 {
 				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
 					outcome.Superseded, outcome.ArchiveDir)
 			}
 			snap := res.Snapshot
-			fmt.Fprintf(stdout, "limiter: session=%d/hour=%d/failures=%d circuit_open=%t\n",
+			fmt.Fprintf(stdout, "limiter[mint]: session=%d/hour=%d/failures=%d circuit_open=%t\n",
 				snap.SessionN, snap.HourN, snap.Failures, snap.CircuitOpen)
+			if judgeProv != nil {
+				// The judge runs on its OWN limiter, so its spend is a second
+				// budget --max-calls applies to independently. Print it: an
+				// operator who capped calls at N and saw one counter would
+				// reasonably read the pass as having cost N at most.
+				jsnap := judgeProv.Limiter.Snapshot()
+				fmt.Fprintf(stdout, "limiter[judge]: session=%d/hour=%d/failures=%d circuit_open=%t\n",
+					jsnap.SessionN, jsnap.HourN, jsnap.Failures, jsnap.CircuitOpen)
+			}
 			for _, e := range errs {
 				fmt.Fprintf(cmd.ErrOrStderr(), "  soft: %s\n", e)
 			}
@@ -202,7 +226,8 @@ func newObserverRunOnceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "render the prompt and exit without spawning claude --print")
 	cmd.Flags().StringVar(&out, "out", "", "with --dry-run, write the rendered prompt to this path instead of stdout")
 	cmd.Flags().StringVar(&model, "model", "", "override the claude model (default: haiku)")
-	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "override the per-session LLM call cap (default: 10)")
+	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "per-session LLM call cap, applied to EACH budget separately: minting and the gate judge hold their own (default: 10 each; --judge=false leaves only the minting one)")
+	cmd.Flags().BoolVar(&judge, "judge", true, "run the LLM layer of the generation gate (catches prose-shaped violations the patterns cannot; --judge=false spends no extra LLM calls)")
 	return cmd
 }
 
