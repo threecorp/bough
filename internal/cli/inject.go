@@ -122,13 +122,21 @@ func newInjectContextCmd() *cobra.Command {
 		Use:   "inject-context",
 		Short: "Print the confidence-ranked instinct block for the UserPromptSubmit hook",
 		Long: `bough inject-context is the UserPromptSubmit hook handler. It
-prints the highest-confidence instincts for the current project (+
-global scope) so Claude Code folds them into the next turn's context.
+prints the instincts most relevant to the prompt, for the current
+project (+ global scope), so Claude Code folds them into the next
+turn's context.
+
+Ranking is by relevance to --prompt, which the hook always passes:
+three channels (exact identifier/path hits, BM25 over the corpus, and
+recency) are fused, and a candidate no lexical channel found is
+dropped even when it is recent — so an off-topic prompt correctly gets
+nothing. Confidence is audit data, not a ranking key. Run by hand
+WITHOUT --prompt and there is nothing to rank against, so it falls
+back to confidence order.
 
 The block is byte-capped (default ~9.5 KB) because the stdout is
-billed as input tokens; instincts are confidence-sorted so the most
-reliable ones land before the cap truncates. No claude --print call
-is made — selection is pure filesystem.`,
+billed as input tokens. No claude --print call is made — selection is
+pure filesystem.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts := inject.Options{
 				MaxBytes:     maxBytes,

@@ -48,7 +48,7 @@ are listed, and NO claude --print call is made. Pass --generate to
 run GATE 5 (= one claude --print per gate-passing cluster, inside
 your Claude Code subscription) and write evolved/skills/<slug>/SKILL.md,
 evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
-<repo>/.claude/{skills,agents,commands} symlinks (project scope).`,
+<repo>/.claude/{skills,agents,commands,rules} symlinks (project scope).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
@@ -130,7 +130,7 @@ evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
 	cmd.Flags().BoolVar(&generate, "generate", false, "run GATE 5 (claude --print) + write artifacts (default: preview only)")
 	cmd.Flags().StringVar(&judge, "judge", "claude", "GATE 5 backend: claude (= claude --print)")
 	cmd.Flags().StringVar(&model, "model", "", "override the claude model for GATE 5 (default: sonnet — a stronger judge than the observer's haiku)")
-	cmd.Flags().BoolVar(&noSymlink, "no-symlink", false, "do not symlink generated skills/agents/commands into <repo>/.claude (project scope)")
+	cmd.Flags().BoolVar(&noSymlink, "no-symlink", false, "do not symlink generated skills/agents/commands/rules into <repo>/.claude (project scope)")
 	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "override the per-session GATE 5 call cap")
 	return cmd
 }
@@ -288,13 +288,13 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	}
 
 	// Deploy the evolved skills/agents/commands into the monorepo's PROJECT-scoped
-	// .claude/{skills,agents,commands} (not the global ~/.claude/*): a
+	// .claude/{skills,agents,commands,rules} (not the global ~/.claude/*): a
 	// bough-evolved artifact is specific to the repo it was learned from, so
 	// global linking would pollute every repo and let a generic slug from one
 	// project silently clobber another's same-named artifact. Homunculus stays
 	// the single source of truth (symlinks, no copies).
 	if !noSymlink {
-		deployProjectArtifacts(stdout, stderr, skillsDir, agentsDir, commandsDir, ident.Root)
+		deployProjectArtifacts(stdout, stderr, skillsDir, agentsDir, commandsDir, rulesDir, ident.Root)
 	}
 
 	if err := coverage.Save(coveragePath, now); err != nil {
@@ -318,20 +318,23 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	return nil
 }
 
-// deployProjectArtifacts symlinks every evolved skill, agent, and command
-// into the monorepo's PROJECT-scoped .claude/{skills,agents,commands} (not
-// the global ~/.claude/*): a bough-evolved artifact is specific to the repo
+// deployProjectArtifacts symlinks every evolved skill, agent, command and
+// rule into the monorepo's PROJECT-scoped .claude/{skills,agents,commands,rules}
+// (not the global ~/.claude/*): a bough-evolved artifact is specific to the repo
 // it was learned from. Skills are directories (WriteSkill's
-// <dir>/<slug>/SKILL.md); agents and commands are flat files (WriteAgent /
-// WriteCommand's <dir>/<slug>.md) — deployProjectSkills and
+// <dir>/<slug>/SKILL.md); agents, commands and rules are flat files (WriteAgent /
+// WriteCommand / WriteRule's <dir>/<slug>.md) — deployProjectSkills and
 // deployProjectFiles mirror that same evolved/ layout on the deploy side.
 // Before this, only skills were deployed: every evolved agent/command was
 // written and then orphaned, since no Claude session reads the homunculus
-// tree directly (#62).
-func deployProjectArtifacts(stdout, stderr io.Writer, skillsDir, agentsDir, commandsDir, monorepoRoot string) {
+// tree directly (#62). Rules arrived later and repeated that mistake: a rule
+// only fires when the host loads it from .claude/rules, so one left in the
+// homunculus tree is inert — the delivery path it exists for never runs.
+func deployProjectArtifacts(stdout, stderr io.Writer, skillsDir, agentsDir, commandsDir, rulesDir, monorepoRoot string) {
 	deployProjectSkills(stdout, stderr, skillsDir, monorepoRoot)
 	deployProjectFiles(stdout, stderr, "agent", agentsDir, filepath.Join(monorepoRoot, ".claude", "agents"))
 	deployProjectFiles(stdout, stderr, "command", commandsDir, filepath.Join(monorepoRoot, ".claude", "commands"))
+	deployProjectFiles(stdout, stderr, "rule", rulesDir, filepath.Join(monorepoRoot, ".claude", "rules"))
 }
 
 // deployProjectFiles symlinks every flat-file evolved artifact (agents,

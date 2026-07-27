@@ -113,27 +113,33 @@ func TestDeployProjectFiles(t *testing.T) {
 
 // TestDeployProjectArtifacts is the regression for #62: before this, only
 // skills were deployed to project scope — every evolved agent/command was
-// written and then orphaned. It verifies all three evolved kinds land under
-// <monorepoRoot>/.claude/{skills,agents,commands}.
+// written and then orphaned. Rules later repeated the same mistake, and a
+// rule that is not under .claude/rules never fires at all — the path-scoped
+// delivery it exists for is the only thing it does. It verifies all four
+// evolved kinds land under <monorepoRoot>/.claude/{skills,agents,commands,rules}.
 func TestDeployProjectArtifacts(t *testing.T) {
 	tmp := t.TempDir()
 	skillsDir := filepath.Join(tmp, "evolved", "skills")
 	agentsDir := filepath.Join(tmp, "evolved", "agents")
 	commandsDir := filepath.Join(tmp, "evolved", "commands")
+	rulesDir := filepath.Join(tmp, "evolved", "rules")
 	_ = os.MkdirAll(filepath.Join(skillsDir, "s1"), 0o755)
 	_ = os.WriteFile(filepath.Join(skillsDir, "s1", "SKILL.md"), []byte("# s1\n"), 0o644)
 	_ = os.MkdirAll(agentsDir, 0o755)
 	_ = os.WriteFile(filepath.Join(agentsDir, "a1.md"), []byte("# a1\n"), 0o644)
 	_ = os.MkdirAll(commandsDir, 0o755)
 	_ = os.WriteFile(filepath.Join(commandsDir, "c1.md"), []byte("# c1\n"), 0o644)
+	_ = os.MkdirAll(rulesDir, 0o755)
+	_ = os.WriteFile(filepath.Join(rulesDir, "r1.md"), []byte("# r1\n"), 0o644)
 
 	root := filepath.Join(tmp, "mono")
-	deployProjectArtifacts(io.Discard, io.Discard, skillsDir, agentsDir, commandsDir, root)
+	deployProjectArtifacts(io.Discard, io.Discard, skillsDir, agentsDir, commandsDir, rulesDir, root)
 
 	for _, want := range []struct{ kind, name, wantTarget string }{
 		{"skills", "s1", filepath.Join(skillsDir, "s1")},
 		{"agents", "a1.md", filepath.Join(agentsDir, "a1.md")},
 		{"commands", "c1.md", filepath.Join(commandsDir, "c1.md")},
+		{"rules", "r1.md", filepath.Join(rulesDir, "r1.md")},
 	} {
 		got, err := os.Readlink(filepath.Join(root, ".claude", want.kind, want.name))
 		if err != nil || got != want.wantTarget {

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.20.1
+
+Two things v0.20.0's own post-install verification caught by running the
+released binary rather than the test suite.
+
+### Fixed
+
+- **An evolved rule was written and then orphaned, so it never fired.**
+  `bough instinct evolve --generate` emitted `evolved/rules/<slug>.md` into the
+  homunculus tree but deployed only skills, agents and commands into
+  `<repo>/.claude/`. A rule's entire delivery mechanism is the host loading it
+  from `.claude/rules` and matching its `paths:` glob — one left in the
+  homunculus tree does nothing at all, and nothing said so: the run printed
+  `rules=1`. Rules now deploy alongside the other three. This is the same
+  mistake #62 fixed for agents and commands, repeated by a kind added later, so
+  the regression test now covers all four.
+- **`bough inject-context --help` described the ranking it replaced.** It said
+  the command "prints the highest-confidence instincts" and that they are
+  "confidence-sorted" — the pre-v0.20.0 behaviour — while sitting next to the
+  `--prompt` flag that the hook always passes and that selects by relevance
+  instead. The help now describes the three-channel ranking and names
+  confidence-order as what happens only when there is no prompt to rank against.
+
 ## v0.20.0
 
 Put a check between minting an instinct and injecting one, and stop ranking what
