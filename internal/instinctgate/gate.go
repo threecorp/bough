@@ -1,0 +1,104 @@
+package instinctgate
+
+import "slices"
+
+// Candidate is one minted instinct under review. Only Trigger and Action —
+// the "propagating surface", i.e. the text a future prompt would actually
+// inject — are scanned; Body/Path are carried so the caller can quarantine
+// the file and the judge (a later unit) can read the whole note. Scanning
+// only the surface is deliberate: a note may legitimately CITE a forbidden
+// command in its provenance/evidence without RECOMMENDING it.
+type Candidate struct {
+	ID      string
+	Trigger string
+	Action  string
+	Body    string
+	Path    string
+}
+
+// Decision records why a candidate was held. Rule is the tripwire name
+// (not the regex), so a quarantine REPORT reads as the governance it
+// enforces.
+type Decision struct {
+	ID   string
+	Rule string
+}
+
+// Result is one gate pass. Cleared may be promoted out of staging; Held
+// must be quarantined (moved, never deleted). The split is the whole
+// contract — the caller does the filesystem moves, this package only decides.
+type Result struct {
+	Cleared []Candidate
+	Held    []Decision
+}
+
+// Config is value-typed so the CLI can build it from .bough.yaml without
+// this package importing config. Later units add the denylist + judge
+// fields; Unit A is the deterministic tripwire layer plus its exemptions.
+type Config struct {
+	// Enabled gates the whole deterministic layer. Off ⇒ every candidate
+	// clears (byte-for-byte the pre-gate behaviour), so the gate is a safe
+	// default-off flip if an operator wants it.
+	Enabled bool
+	// AllowIDs exempts instincts whose own action IS the rule forbidding a
+	// command (an instinct "never run `git push --force`" names the command
+	// it forbids; quarantining it would be backwards). Exemption is by id
+	// rather than a negation heuristic because a false hold is reversible
+	// (quarantine is a move) but a wrong heuristic is silent.
+	AllowIDs []string
+	// Tripwires is the pattern set. Defaults to DefaultTripwires when nil so
+	// a zero Config with Enabled=true still guards the built-in rules.
+	Tripwires []Tripwire
+}
+
+// Gate applies the deterministic layer.
+type Gate struct {
+	cfg       Config
+	tripwires []Tripwire
+	allow     map[string]bool
+}
+
+// New builds a Gate from a Config, filling the default tripwire set when the
+// caller supplied none.
+func New(cfg Config) *Gate {
+	tw := cfg.Tripwires
+	if tw == nil {
+		tw = DefaultTripwires()
+	}
+	allow := make(map[string]bool, len(cfg.AllowIDs))
+	for _, id := range cfg.AllowIDs {
+		allow[id] = true
+	}
+	return &Gate{cfg: cfg, tripwires: tw, allow: allow}
+}
+
+// Screen partitions candidates into Cleared and Held. A disabled gate
+// clears everything. An allowlisted id always clears. Otherwise a candidate
+// is held by the first tripwire that matches its propagating surface
+// (Trigger + Action); Body is intentionally not scanned, so a note that
+// merely cites a forbidden command in its evidence is not quarantined.
+func (g *Gate) Screen(cands []Candidate) Result {
+	if !g.cfg.Enabled {
+		return Result{Cleared: slices.Clone(cands)}
+	}
+	res := Result{}
+	for _, c := range cands {
+		if g.allow[c.ID] {
+			res.Cleared = append(res.Cleared, c)
+			continue
+		}
+		surface := c.Trigger + "\n" + c.Action
+		held := false
+		for _, tw := range g.tripwires {
+			if tw.Re.MatchString(surface) {
+				res.Held = append(res.Held, Decision{ID: c.ID, Rule: tw.Rule})
+				held = true
+				break
+			}
+		}
+		if !held {
+			res.Cleared = append(res.Cleared, c)
+		}
+	}
+	return res
+}

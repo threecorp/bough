@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -83,6 +84,80 @@ func renderContinuousLearningPosture(w io.Writer) {
 	rootStatus, rootLine := homunculusRootLine()
 	fmt.Fprintf(w, "    %s homunculus root   %s\n", st.Mark(rootStatus), rootLine)
 	fmt.Fprintf(w, "    %s observer daemon   %s\n", st.Mark(daemonStatus), daemonLine)
+
+	// Policy gate posture + how many minted instincts are currently held.
+	// Surfacing the held count is deliberate (invariant: a silent hold is
+	// indistinguishable from data loss); the count in the message IS the
+	// signal that a command-shaped instinct was withheld for review.
+	gateEnabled, gateHeld, gateBatches := policyGateState()
+	gateStatus, gateLine := policyGateLine(gateEnabled, gateHeld, gateBatches)
+	fmt.Fprintf(w, "    %s policy gate       %s\n", st.Mark(gateStatus), gateLine)
+}
+
+// policyGateState resolves the deterministic policy-gate posture for the
+// monorepo at the current cwd: whether the gate is enabled, and how many
+// minted instincts sit in quarantine right now (held whole, never
+// deleted). Best-effort — no config / no project reports the default-on
+// posture with a zero held count.
+func policyGateState() (enabled bool, held, batches int) {
+	enabled = true
+	cwd, err := os.Getwd()
+	if err != nil {
+		return enabled, 0, 0
+	}
+	root := resolveMonorepoRoot(cwd)
+	if cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root)); err == nil {
+		enabled = cfg.Instinct.GateEnabled()
+	}
+	ident, err := homunculus.DetectIdentity(root)
+	if err != nil {
+		return enabled, 0, 0
+	}
+	held, batches = countQuarantined(homunculus.NewLayout().QuarantineDir(ident.ID))
+	return enabled, held, batches
+}
+
+// countQuarantined tallies held instincts across the dated batch
+// subdirectories of a quarantine dir. The per-batch REPORT.md is not an
+// instinct, so it is not counted; only <id>.md files are.
+func countQuarantined(dir string) (held, batches int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		batchEntries, _ := os.ReadDir(filepath.Join(dir, e.Name()))
+		n := 0
+		for _, be := range batchEntries {
+			if filepath.Ext(be.Name()) == ".md" && be.Name() != "REPORT.md" {
+				n++
+			}
+		}
+		if n > 0 {
+			batches++
+			held += n
+		}
+	}
+	return held, batches
+}
+
+// policyGateLine renders the gate posture as a status + message. Every
+// state is neutral or OK, never an error: an OFF gate is a deliberate
+// operator choice, and held instincts are the guard functioning, not a
+// fault — so the section header is never escalated by the gate.
+func policyGateLine(enabled bool, held, batches int) (termio.Status, string) {
+	if !enabled {
+		return termio.StatusNeutral, "OFF — minted instincts are not screened (set instinct.gate.enabled: true to turn on)"
+	}
+	if held == 0 {
+		return termio.StatusOK, "ON — 0 held (screens command-shaped forbidden actions only; not a completeness claim)"
+	}
+	return termio.StatusNeutral, fmt.Sprintf(
+		"ON — %d held across %d batch(es); review .policy-quarantine/*/REPORT.md, restore is a reversible mv",
+		held, batches)
 }
 
 // claudeCLILine reports whether the claude binary bough shells out to is on

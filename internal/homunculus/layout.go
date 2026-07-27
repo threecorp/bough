@@ -69,6 +69,26 @@ func (l Layout) InheritedDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "instincts", "inherited")
 }
 
+// StagingDir is where the observer writes a freshly minted instinct
+// BEFORE the generation gate has cleared it. It is a sibling of
+// InstinctsDir under instincts/, so a ScanInstincts of the personal
+// dir never descends into it: staging is invisible to injection by
+// construction, which is what closes the "live before check" window
+// (a minted note cannot be injected until the gate moves it to
+// InstinctsDir). The leading dot keeps it out of casual `ls`.
+func (l Layout) StagingDir(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "instincts", ".staging")
+}
+
+// QuarantineDir holds notes the policy gate HELD, moved here whole
+// (never deleted) so an operator can inspect what was withheld, why,
+// and put it back. Batches land in dated subdirectories with a
+// REPORT.md; a silent hold would be indistinguishable from data loss,
+// so surfacing is part of the mechanism, not an add-on.
+func (l Layout) QuarantineDir(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "instincts", ".policy-quarantine")
+}
+
 // ObservationsFile is the JSONL trail bough hook handle appends to
 // from PreToolUse / PostToolUse / Stop hooks. observer-loop reads
 // the tail of this file.
@@ -122,6 +142,7 @@ func (l Layout) GlobalInstinctsDir() string {
 func (l Layout) EnsureProjectDirs(projectID string) error {
 	dirs := []string{
 		l.InstinctsDir(projectID),
+		l.StagingDir(projectID),
 		l.InheritedDir(projectID),
 		l.EvolvedSkillsDir(projectID),
 		l.EvolvedAgentsDir(projectID),
