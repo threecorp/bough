@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.20.3
+
+### Fixed
+
+- **A screen-only pass reported a malformed response it had never asked for.**
+  v0.20.2 lets a run with staged leftovers skip the mint call; the staging
+  step then saw a nil document and printed
+  `soft: response missing 'instincts' array (got <nil>)` on a pass that had
+  done exactly what it was asked to. An absent response is now distinguished
+  from a malformed one — a genuinely malformed mint response is still
+  reported.
+
 ## v0.20.2
 
 The generation gate's LLM layer had never run. Not once, on any real machine —

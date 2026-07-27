@@ -529,3 +529,22 @@ func TestQuietProjectStillScreensLeftovers(t *testing.T) {
 		t.Error("a staged instinct must be reported, so the run screens instead of bailing")
 	}
 }
+
+// TestNoMintPassIsNotAMalformedResponse: a screen-only pass makes no mint
+// call, so there is no response to parse. Treating the absent document as a
+// malformed one printed `soft: response missing 'instincts' array (got
+// <nil>)` on a path that had done exactly what it was asked to.
+func TestNoMintPassIsNotAMalformedResponse(t *testing.T) {
+	staged, skipped, errs := stageInstincts(t.TempDir(), t.TempDir(), homunculus.ProjectIdentity{ID: "p", Name: "p"}, nil, time.Now())
+	if len(staged) != 0 || skipped != 0 {
+		t.Errorf("a screen-only pass stages nothing: staged=%d skipped=%d", len(staged), skipped)
+	}
+	if len(errs) != 0 {
+		t.Errorf("a screen-only pass is not an error: %v", errs)
+	}
+	// A response that really is malformed must still be reported.
+	_, _, errs = stageInstincts(t.TempDir(), t.TempDir(), homunculus.ProjectIdentity{ID: "p", Name: "p"}, map[string]any{"nope": 1}, time.Now())
+	if len(errs) == 0 {
+		t.Error("a malformed mint response must still be reported")
+	}
+}

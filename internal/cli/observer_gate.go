@@ -44,6 +44,12 @@ func stageInstincts(stagingDir, personalDir string, ident homunculus.ProjectIden
 	staged := []stagedInstinct{}
 	skipped := 0
 	errs := []error{}
+	if parsed == nil {
+		// No mint call was made this pass — the run is here only to screen
+		// what a previous one left staged. That is not a malformed response;
+		// reporting it as one puts a soft error on a clean path.
+		return nil, 0, nil
+	}
 	raw, ok := parsed["instincts"].([]any)
 	if !ok {
 		return nil, 0, []error{fmt.Errorf("response missing 'instincts' array (got %T)", parsed["instincts"])}
