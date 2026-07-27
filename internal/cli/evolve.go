@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -165,6 +166,16 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	agentsDir := layout.EvolvedAgentsDir(ident.ID)
 	commandsDir := layout.EvolvedCommandsDir(ident.ID)
 
+	rulesDir := layout.EvolvedRulesDir(ident.ID)
+	coveragePath := layout.SkillCoverageFile(ident.ID)
+	coverage, cerr := evolve.LoadSkillCoverage(coveragePath)
+	if cerr != nil {
+		// A corrupt registry must not cost the whole pass; it is recorded
+		// state, not a precondition. Start from empty and say so.
+		fmt.Fprintf(stderr, "  skill coverage: %v (starting from empty)\n", cerr)
+		coverage = &evolve.SkillCoverage{BySkill: map[string][]string{}}
+	}
+
 	// One registry for the whole pass: retirement is a property of the
 	// corpus, so every skill in this emit must be judged against the same
 	// snapshot rather than against whatever the file said at its turn.
@@ -175,6 +186,7 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 
 	skillsWritten := 0
 	skillsBelowBar := 0
+	rulesWritten := 0
 	for _, s := range out.Skills {
 		art := evolve.RenderSkill(s.Label, s.Description, s.Cluster, th, now)
 		// A skill with nothing concrete in it is worse than no skill: it
@@ -198,6 +210,23 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		}
 		if s.NewLabel {
 			labels.Add(s.Label, s.Description)
+		}
+		// Record what this skill now delivers. Recording is unconditional;
+		// ACTING on it (suppressing the pushed copies) is not, because
+		// turning off the push for knowledge whose pull path has not
+		// demonstrably fired removes it from both paths at once.
+		coverage.Record(s.Label, art.Members)
+		// A path-scoped rule is emitted only when the cluster names
+		// repository paths — it fires when a file is READ, which is the one
+		// delivery moment retrieval cannot cover, and a rule with no paths
+		// never fires at all.
+		if rule, hasPaths := evolve.RenderRule(s.Label, s.Description, s.Cluster, now); hasPaths {
+			if _, err := evolve.WriteRule(rulesDir, rule); err != nil {
+				fmt.Fprintf(stderr, "  rule  %s: %v\n", s.Label, err)
+			} else {
+				rulesWritten++
+				fmt.Fprintf(stdout, "  rule    %s (%s)\n", s.Label, strings.Join(rule.Paths, ", "))
+			}
 		}
 		skillsWritten++
 		fmt.Fprintf(stdout, "  skill   %s (%s, %d members)\n", s.Label, s.Verdict.Decision, len(s.Cluster.Members))
@@ -239,8 +268,12 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		deployProjectArtifacts(stdout, stderr, skillsDir, agentsDir, commandsDir, ident.Root)
 	}
 
-	fmt.Fprintf(stdout, "\nwrote skills=%d agents=%d commands=%d (rejected clusters=%d)\n",
-		skillsWritten, agentsWritten, commandsWritten, len(out.Rejected))
+	if err := coverage.Save(coveragePath, now); err != nil {
+		fmt.Fprintf(stderr, "  skill coverage: %v\n", err)
+	}
+
+	fmt.Fprintf(stdout, "\nwrote skills=%d rules=%d agents=%d commands=%d (rejected clusters=%d)\n",
+		skillsWritten, rulesWritten, agentsWritten, commandsWritten, len(out.Rejected))
 	if skillsBelowBar > 0 {
 		// Counted separately from rejected clusters: these PASSED the gates
 		// and the judge, and were then dropped for lacking anything concrete.

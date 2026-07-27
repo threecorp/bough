@@ -59,6 +59,16 @@ type Options struct {
 	// package names below the project root). See retrieve.ContextTokens
 	// for why the repo name itself is deliberately not among them.
 	ContextTokens []string
+	// ExcludeIDs are instinct ids an evolved skill already delivers.
+	// Supplying them drops those instincts from the pushed block so the
+	// same knowledge is not both pushed and pullable.
+	//
+	// The CALLER decides whether to supply this, and by default does not:
+	// suppressing the push for knowledge whose pull path has not
+	// demonstrably fired removes it from BOTH paths at once. The registry
+	// is recorded first, acted on only once there is evidence the pull
+	// path works.
+	ExcludeIDs map[string]struct{}
 }
 
 func (o Options) withDefaults() Options {
@@ -127,6 +137,9 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	// decays.
 	projectIDs := make(map[string]bool, len(project))
 	for _, in := range project {
+		if _, covered := opts.ExcludeIDs[in.ID]; covered {
+			continue // already delivered by an evolved skill
+		}
 		if in.Confidence >= *opts.MinConfidence {
 			projectIDs[in.ID] = true
 			pool = append(pool, ranked{in: in, isProject: true})
@@ -135,6 +148,9 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	for _, in := range global {
 		if projectIDs[in.ID] {
 			continue // project overrides global on ID collision (ECC precedence)
+		}
+		if _, covered := opts.ExcludeIDs[in.ID]; covered {
+			continue
 		}
 		if in.Confidence >= *opts.MinConfidence {
 			pool = append(pool, ranked{in: in, isProject: false})
