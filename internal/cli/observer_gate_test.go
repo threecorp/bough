@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func twoInstinctResult() map[string]any {
 
 func stagedFromResult(t *testing.T, layout homunculus.Layout, ident homunculus.ProjectIdentity, now time.Time) []stagedInstinct {
 	t.Helper()
-	staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
+	staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), now)
 	if skipped != 0 || len(errs) != 0 {
 		t.Fatalf("stageInstincts: skipped=%d errs=%v, want 0/none", skipped, errs)
 	}
@@ -89,7 +90,7 @@ func TestScreenAndPromote_ClearedPromoted_HeldQuarantined(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	if out.Emitted != 1 || out.Quarantined != 1 {
 		t.Fatalf("emitted=%d quarantined=%d, want 1/1 (errs=%v)", out.Emitted, out.Quarantined, out.Errs)
@@ -137,7 +138,7 @@ func TestQuarantineReport_HasReversibleRestore(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	report, err := os.ReadFile(filepath.Join(out.BatchDir, "REPORT.md"))
 	if err != nil {
@@ -168,8 +169,8 @@ func TestPromote_ArchivesSupersededVersion(t *testing.T) {
 
 	// Pass 1 mints the original.
 	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
-	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
-	if out := screenAndPromote(layout, ident.ID, staged1, gate, nil, first); out.Superseded != 0 {
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), first)
+	if out := screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first); out.Superseded != 0 {
 		t.Fatalf("first pass Superseded = %d, want 0 (nothing to supersede)", out.Superseded)
 	}
 	original, err := os.ReadFile(filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md"))
@@ -189,8 +190,8 @@ func TestPromote_ArchivesSupersededVersion(t *testing.T) {
 		},
 	}
 	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
-	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, second)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, revised, second)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, second)
 
 	if out.Superseded != 1 || out.ArchiveDir == "" {
 		t.Fatalf("Superseded=%d ArchiveDir=%q, want 1 and a dir (errs=%v)", out.Superseded, out.ArchiveDir, out.Errs)
@@ -228,11 +229,11 @@ func TestPromote_IdenticalRemintIsNotArchived(t *testing.T) {
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 
-	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
-	screenAndPromote(layout, ident.ID, staged1, gate, nil, now)
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), now)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, now)
 	// Same payload, same mint timestamp ⇒ byte-identical rendering.
-	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), now)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, now)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, now)
 
 	if out.Superseded != 0 {
 		t.Errorf("identical re-mint Superseded = %d, want 0", out.Superseded)
@@ -259,8 +260,8 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 	gate := instinctgate.New(instinctgate.Config{Enabled: true})
 
 	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
-	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, twoInstinctResult(), first)
-	screenAndPromote(layout, ident.ID, staged1, gate, nil, first)
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), first)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first)
 
 	live := filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md")
 	original, err := os.ReadFile(live)
@@ -283,8 +284,8 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 		},
 	}
 	second := time.Date(2026, 6, 24, 9, 0, 0, 0, time.UTC)
-	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), ident, revised, second)
-	out := screenAndPromote(layout, ident.ID, staged2, gate, nil, second)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, revised, second)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, second)
 
 	if len(out.Errs) == 0 {
 		t.Error("an unreadable prior version must be reported, not swallowed")
@@ -302,10 +303,172 @@ func TestPromote_UnreadablePriorIsNotOverwritten(t *testing.T) {
 	if !bytes.Equal(after, original) {
 		t.Error("the prior version was overwritten despite never being archived")
 	}
-	// The mint itself is not lost either — it is still staged, so the next
-	// run can promote it once the archive succeeds.
+	// The mint itself is not lost either — it is still staged …
 	if _, err := os.Stat(staged2[0].path); err != nil {
-		t.Errorf("the staged mint should survive for the next run: %v", err)
+		t.Fatalf("the staged mint should survive for the next run: %v", err)
+	}
+	// … and "survives" only counts if something ever picks it up again.
+	// A file nobody re-reads is stranded, not preserved, so the next
+	// pass must actually adopt it.
+	adopted, aerrs := adoptStrandedStaged(layout.StagingDir(ident.ID), nil)
+	if len(aerrs) != 0 {
+		t.Errorf("unexpected adoption errors: %v", aerrs)
+	}
+	var found bool
+	for _, a := range adopted {
+		if a.in.ID == "read-before-edit" {
+			found = true
+			if a.action == "" {
+				t.Error("the adopted candidate has no action line, so the gate would screen an empty surface")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the stranded mint was not adopted by the next pass: %+v", adopted)
+	}
+
+	// Once the prior version is readable again, the adopted mint promotes.
+	if err := os.Chmod(live, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	third := time.Date(2026, 6, 25, 9, 0, 0, 0, time.UTC)
+	out3 := screenAndPromote(context.Background(), layout, ident.ID, adopted, gate, nil, third)
+	if out3.Emitted != 1 {
+		t.Errorf("Emitted = %d, want 1 — the recovered mint should land (errs=%v)", out3.Emitted, out3.Errs)
+	}
+	recovered, _ := homunculus.ReadInstinctFile(live)
+	if recovered == nil || !strings.Contains(recovered.Body, "whole enclosing function") {
+		t.Errorf("the personal corpus does not hold the recovered mint: %+v", recovered)
+	}
+}
+
+// TestRemintAtALaterTimeIsNotArchived is the regression net for a defect
+// only a real run exposed: the supersede check compared raw BYTES, but
+// every rendered instinct embeds first_seen / last_seen stamped at mint
+// time. So an unchanged instinct differed on every pass and was archived
+// every pass — the archive accumulated a copy of the whole corpus per
+// run, burying the real changes it exists to surface, while the archive
+// REPORT promised "identical re-mints are NOT archived".
+//
+// The unit test that "covered" this passed only because it froze `now`.
+// This one advances the clock, which is what actually happens.
+func TestRemintAtALaterTimeIsNotArchived(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+
+	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), first)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first)
+
+	// Same payload, LATER clock — the ordinary case for a real observer.
+	later := time.Date(2026, 6, 24, 9, 30, 0, 0, time.UTC)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), later)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, later)
+
+	if out.Superseded != 0 {
+		t.Errorf("Superseded = %d, want 0 — only the timestamps changed", out.Superseded)
+	}
+	if _, err := os.Stat(layout.ArchiveDir(ident.ID)); !os.IsNotExist(err) {
+		t.Errorf("archive dir created for a content-identical re-mint (err=%v)", err)
+	}
+}
+
+// TestRemintCarriesFirstSeenForward pins the provenance: re-minting an id
+// must not reset how long the corpus has known it. mapToInstinct stamps
+// both timestamps with the mint time, so without a carry-forward an
+// instinct observed for months reports as first seen today — and
+// first_seen is exactly what an operator reads to judge whether a note
+// has earned its place.
+func TestRemintCarriesFirstSeenForward(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+
+	first := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	staged1, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, twoInstinctResult(), first)
+	screenAndPromote(context.Background(), layout, ident.ID, staged1, gate, nil, first)
+
+	revised := map[string]any{
+		"instincts": []any{
+			map[string]any{
+				"id": "read-before-edit", "trigger": "when editing unfamiliar files",
+				"confidence": 0.9, "domain": "workflow", "scope": "project",
+				"action":   "Read the whole enclosing function, not just the edited line.",
+				"evidence": []any{"observed 9 times"},
+			},
+		},
+	}
+	later := time.Date(2026, 7, 2, 8, 0, 0, 0, time.UTC)
+	staged2, _, _ := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, revised, later)
+	screenAndPromote(context.Background(), layout, ident.ID, staged2, gate, nil, later)
+
+	live, err := homunculus.ReadInstinctFile(filepath.Join(layout.InstinctsDir(ident.ID), "read-before-edit.md"))
+	if err != nil {
+		t.Fatalf("re-minted instinct missing: %v", err)
+	}
+	if !live.FirstSeen.Equal(first) {
+		t.Errorf("FirstSeen = %s, want the ORIGINAL %s — provenance was reset by the re-mint", live.FirstSeen, first)
+	}
+	if !live.LastSeen.Equal(later) {
+		t.Errorf("LastSeen = %s, want the re-mint time %s", live.LastSeen, later)
+	}
+}
+
+// TestAdoptedActionIsTheWholeActionBlock pins the propagating surface a
+// re-screened candidate is judged on. buildInstinctBody writes the ENTIRE
+// action under "## Action", so recovering only its first line would hand
+// the gate — and the LLM judge — a truncated surface: a forbidden
+// instruction on the second line would be screened on the first pass and
+// invisible on the recovery pass.
+func TestAdoptedActionIsTheWholeActionBlock(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	multiline := "First, read the failing test.\nThen run `gh pr merge --squash` to land it."
+	parsed := map[string]any{
+		"instincts": []any{
+			map[string]any{
+				"id": "two-step", "trigger": "when CI is green",
+				"confidence": 0.7, "domain": "workflow", "scope": "project",
+				"action": multiline, "evidence": []any{"observed twice"},
+			},
+		},
+	}
+	if _, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), layout.InstinctsDir(ident.ID), ident, parsed, now); skipped != 0 {
+		t.Fatalf("stage: skipped=%d errs=%v", skipped, errs)
+	}
+
+	adopted, errs := adoptStrandedStaged(layout.StagingDir(ident.ID), nil)
+	if len(errs) != 0 || len(adopted) != 1 {
+		t.Fatalf("adopted=%d errs=%v, want 1/none", len(adopted), errs)
+	}
+	if !strings.Contains(adopted[0].action, "gh pr merge") {
+		t.Errorf("the recovered action dropped everything after line 1:\n%q", adopted[0].action)
+	}
+	// And the gate must therefore still catch it on the recovery pass.
+	gate := instinctgate.New(instinctgate.Config{Enabled: true})
+	out := screenAndPromote(context.Background(), layout, ident.ID, adopted, gate, nil, now)
+	if out.Quarantined != 1 {
+		t.Errorf("Quarantined = %d, want 1 — the merge instruction must not survive re-screening", out.Quarantined)
+	}
+}
+
+// TestAdoptStrandedStagedSkipsFreshlyMintedIDs pins the de-dup: an id the
+// current pass just re-minted must not also be adopted from staging, or
+// the same id would be screened twice in one batch.
+func TestAdoptStrandedStagedSkipsFreshlyMintedIDs(t *testing.T) {
+	layout := homunculus.FromRoot(t.TempDir())
+	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	staged := stagedFromResult(t, layout, ident, now)
+
+	adopted, errs := adoptStrandedStaged(layout.StagingDir(ident.ID), staged)
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+	if len(adopted) != 0 {
+		t.Errorf("ids minted this pass must not be adopted again, got %d", len(adopted))
 	}
 }
 
@@ -319,7 +482,7 @@ func TestScreenAndPromote_GateDisabled_AllPromoted(t *testing.T) {
 	staged := stagedFromResult(t, layout, ident, now)
 
 	gate := instinctgate.New(instinctgate.Config{Enabled: false})
-	out := screenAndPromote(layout, ident.ID, staged, gate, nil, now)
+	out := screenAndPromote(context.Background(), layout, ident.ID, staged, gate, nil, now)
 
 	if out.Emitted != 2 || out.Quarantined != 0 {
 		t.Fatalf("emitted=%d quarantined=%d, want 2/0", out.Emitted, out.Quarantined)

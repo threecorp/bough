@@ -275,6 +275,12 @@ type InstinctConfig struct {
 	PluginSecurity             InstinctPluginSecurity `yaml:"plugin_security"`
 	Gate                       InstinctGate           `yaml:"gate"`
 	Lessons                    InstinctLessons        `yaml:"lessons"`
+	// ExcludeSkillCovered asks the injector to stop pushing instincts an
+	// evolved skill already delivers. It is a REQUEST, not a switch: the
+	// readiness gate (evolve.ExclusionReadiness) decides whether it takes
+	// effect, because turning it on before the portfolio is deployed
+	// removes that knowledge from both delivery paths at once.
+	ExcludeSkillCovered bool `yaml:"exclude_skill_covered"`
 }
 
 // InstinctLessons points at the operator's hand-written corrections

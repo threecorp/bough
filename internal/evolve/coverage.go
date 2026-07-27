@@ -71,6 +71,22 @@ func (c *SkillCoverage) Record(slug string, instinctIDs []string) {
 	c.BySkill[slug] = ids
 }
 
+// Forget drops a slug's entry, so its ids stop counting as covered.
+//
+// It is called whenever a pass does NOT write a skill — below the quality
+// bar, retired, curated, or unverifiable. Leaving the previous entry in
+// place would keep suppressing those instincts from every prompt while
+// nothing delivers them, which is the "removed from both paths at once"
+// loss the readiness gate exists to prevent. Under uncertainty the safe
+// direction is to keep PUSHING: an instinct pushed as well as pulled
+// costs prompt budget, one that is neither is gone.
+func (c *SkillCoverage) Forget(slug string) {
+	if c == nil || c.BySkill == nil {
+		return
+	}
+	delete(c.BySkill, slug)
+}
+
 // CoveredIDs returns the flat set of instinct ids delivered by some
 // skill.
 func (c *SkillCoverage) CoveredIDs() map[string]struct{} {

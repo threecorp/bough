@@ -179,13 +179,27 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	// One registry for the whole pass: retirement is a property of the
 	// corpus, so every skill in this emit must be judged against the same
 	// snapshot rather than against whatever the file said at its turn.
+	//
+	// An unreadable registry must NOT abort the pass — by the time this
+	// runs, `--generate` has already spent its GATE-5 judge calls, and
+	// throwing the pass away discards paid work over a sidecar. It must
+	// also NOT degrade to an empty registry the way the coverage one
+	// above does: empty means "nothing is retired", which would resurrect
+	// every slug the operator rejected. So it degrades the only safe way
+	// — no skill is written this pass, while agents, commands, rules and
+	// labels still land. That is exactly what happened before the load
+	// was hoisted out of WriteSkill.
 	retired, rerr := evolve.LoadRetireRegistry(skillsDir)
 	if rerr != nil {
-		return rerr
+		fmt.Fprintf(stderr, "  retire registry: %v (no skill written this pass; agents/commands/labels still land)\n", rerr)
 	}
 
 	skillsWritten := 0
 	skillsBelowBar := 0
+	// Counted apart from skillsBelowBar: an unreadable registry is an I/O
+	// fault, not a quality problem, and the summary must not send the
+	// operator off rewriting cluster descriptions to fix a permissions bug.
+	skillsRegistryBlocked := 0
 	rulesWritten := 0
 	for _, s := range out.Skills {
 		art := evolve.RenderSkill(s.Label, s.Description, s.Cluster, th, now)
@@ -196,6 +210,10 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		// keeping.
 		if issues := evolve.QualityIssues(art); len(issues) > 0 {
 			skillsBelowBar++
+			// Nothing delivers this slug's ids now, so it must stop
+			// counting as covered or they stay suppressed from every
+			// prompt with no skill behind them.
+			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: below the quality bar, not written\n", s.Label)
 			for _, issue := range issues {
 				fmt.Fprintf(stderr, "      - %s\n", issue)
@@ -204,7 +222,18 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		}
 		// Linking is done project-scoped by deployProjectSkills below,
 		// not into the global ~/.claude/skills.
+		if rerr != nil {
+			// Retirement could not be checked, so writing would risk
+			// resurrecting a rejected slug. Reported per skill, as before.
+			skillsRegistryBlocked++
+			coverage.Forget(s.Label)
+			fmt.Fprintf(stderr, "  skill %s: retire registry unreadable, not written\n", s.Label)
+			continue
+		}
 		if _, err := evolve.WriteSkill(skillsDir, art, retired); err != nil {
+			// Retired or curated: bough did not write this body, so it
+			// cannot vouch for what the slug delivers. Drop the claim.
+			coverage.Forget(s.Label)
 			fmt.Fprintf(stderr, "  skill %s: %v\n", s.Label, err)
 			continue
 		}
@@ -279,6 +308,12 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		// and the judge, and were then dropped for lacking anything concrete.
 		// Folding them into one number would hide which stage to go fix.
 		fmt.Fprintf(stdout, "%d skill(s) passed the gates but fell below the quality bar (see above)\n", skillsBelowBar)
+	}
+	if skillsRegistryBlocked > 0 {
+		// Named apart from the quality bar: this is an I/O fault the
+		// operator fixes on disk, not a prompt they rewrite.
+		fmt.Fprintf(stdout, "%d skill(s) were NOT written because the retire registry could not be read (see above) — fix %s and re-run\n",
+			skillsRegistryBlocked, filepath.Join(skillsDir, ".retired.json"))
 	}
 	return nil
 }

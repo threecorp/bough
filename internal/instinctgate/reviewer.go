@@ -33,6 +33,14 @@ import (
 // wiring claudecli in the CLI layer) keeps this package free of any
 // provider import and unit-testable with a plain closure — the same
 // inversion the evolve judge uses.
+//
+// It MUST be safe to call concurrently: Review takes its votes in
+// parallel, so an implementation that closes over mutable per-call state
+// (a counter, a cache, an appended audit slice) will corrupt it. This is
+// not theoretical — the package's own test double had to grow a mutex
+// when the votes stopped being serial. It must also honour ctx: the
+// provider acquires a rate-limit slot before it consults ctx, so a call
+// that ignores cancellation still spends budget.
 type ReviewFunc func(ctx context.Context, trigger, action string) (raw []byte, err error)
 
 // reviewVerdict is the model's structured answer. Violation names the
@@ -64,9 +72,16 @@ type Reviewer struct {
 	Agree int
 }
 
-// NewReviewer wires a ReviewFunc into a 3-vote / 2-agree reviewer.
+// DefaultVotes is how many independent samples NewReviewer takes per
+// candidate. Exported because a caller sizing an LLM budget has to
+// multiply by it, and hard-coding 3 at the call site is how the two drift
+// apart — which is exactly the arithmetic that silently truncated a
+// review batch.
+const DefaultVotes = 3
+
+// NewReviewer wires a 3-vote / 2-agree reviewer.
 func NewReviewer(review ReviewFunc) *Reviewer {
-	return &Reviewer{review: review, Votes: 3, Agree: 2}
+	return &Reviewer{review: review, Votes: DefaultVotes, Agree: 2}
 }
 
 // ReviewResult is one candidate's outcome. Failed records that the layer
@@ -79,6 +94,18 @@ type ReviewResult struct {
 	Rule      string
 	Reason    string
 	Failed    bool
+	// Errs holds EVERY vote's error, not just the first. Which vote index
+	// happened to fail first says nothing about which failure matters: an
+	// unrelated transient error on vote 0 would otherwise hide a rate-limit
+	// trip on vote 1, and the caller — the only layer that knows the
+	// provider's sentinel errors — could not classify what went wrong.
+	Errs []error
+	// Cancelled marks a Failed result caused by ctx cancellation rather
+	// than by the judge being unable to answer. The two must not be
+	// conflated: fail-open is for a model outage, and silently promoting
+	// the rest of a batch because the operator pressed Ctrl-C is not a
+	// judgement anyone made.
+	Cancelled bool
 	Err       error
 }
 
@@ -95,6 +122,14 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		agree = (votes / 2) + 1
 	}
 
+	// An already-cancelled context must not spend a single call. Checked
+	// before the fan-out because Generate acquires a limiter slot before
+	// it looks at ctx, so votes launched into a dead context still burn
+	// the self-DoS budget and record failures.
+	if err := ctx.Err(); err != nil {
+		return ReviewResult{ID: c.ID, Failed: true, Cancelled: true, Err: err}
+	}
+
 	// The votes are independent by construction, so they are taken
 	// CONCURRENTLY: run serially, a 3-vote review costs three round trips
 	// per candidate and the gate's latency is what an operator feels on
@@ -107,40 +142,42 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	}
 	results := make([]voteResult, votes)
 	var wg sync.WaitGroup
-	for i := 0; i < votes; i++ {
+	for i := range votes {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
 			raw, err := r.review(ctx, c.Trigger, c.Action)
 			results[i] = voteResult{raw: raw, err: err}
-		}(i)
+		}()
 	}
 	wg.Wait()
 
+	// Cancellation during the fan-out is NOT the same as a judge that
+	// could not answer. Fail-open exists so a model outage cannot stop the
+	// corpus growing; an interrupted operator has not asked for every
+	// remaining candidate to be promoted unjudged.
+	if err := ctx.Err(); err != nil {
+		return ReviewResult{ID: c.ID, Failed: true, Cancelled: true, Err: err}
+	}
+
 	violations := 0
 	usable := 0
-	var firstErr error
+	var errs []error
 	var rule, reason string
 	for _, res := range results {
 		if res.err != nil {
-			if firstErr == nil {
-				firstErr = res.err
-			}
+			errs = append(errs, res.err)
 			continue
 		}
 		var v reviewVerdict
 		if err := json.Unmarshal(res.raw, &v); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("parse verdict: %w (raw=%q)", err, res.raw)
-			}
+			errs = append(errs, fmt.Errorf("parse verdict: %w (raw=%q)", err, res.raw))
 			continue
 		}
 		if v.Violation == nil {
 			// Parsed, but not a verdict — no `violation` key. Counting this
 			// as a pass is how a broken judge reports a clean corpus.
-			if firstErr == nil {
-				firstErr = fmt.Errorf("verdict has no %q field (raw=%q)", "violation", res.raw)
-			}
+			errs = append(errs, fmt.Errorf("verdict has no %q field (raw=%q)", "violation", res.raw))
 			continue
 		}
 		usable++
@@ -155,7 +192,7 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	// Not enough usable votes to reach the agreement threshold either
 	// way ⇒ no verdict. Clear it and say so.
 	if usable < agree {
-		return ReviewResult{ID: c.ID, Failed: true, Err: firstErr}
+		return ReviewResult{ID: c.ID, Failed: true, Err: firstOf(errs), Errs: errs}
 	}
 	if violations >= agree {
 		if rule == "" {
@@ -166,26 +203,75 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	return ReviewResult{ID: c.ID}
 }
 
+// BatchResult is one batch's outcome. Reviewed counts the candidates that
+// actually got a verdict and Failed counts those that did not — reporting
+// both is the contract that keeps the layer honest, because "0 violations"
+// means nothing without "out of how many reviewed".
+//
+// Unreviewed lists the ids that reached no verdict, so the caller can act
+// on them rather than only counting them. Cancelled says the batch was
+// interrupted, which is a different fact from "the judge could not answer"
+// and needs a different response.
+type BatchResult struct {
+	Held       []Decision
+	Reviewed   int
+	Failed     int
+	Unreviewed []string
+	Cancelled  bool
+	FirstErr   error
+	// Errs is every vote error across the batch. The caller classifies
+	// them — it is the layer that knows the provider's sentinels — and a
+	// single FirstErr cannot carry that: whichever vote index failed first
+	// would decide, hiding a budget trip behind an unrelated hiccup.
+	Errs []error
+}
+
+// firstOf returns the first error or nil, so a single-error field can
+// still be offered alongside the full list.
+func firstOf(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs[0]
+}
+
 // ReviewBatch votes on every candidate and partitions them. Cleared
-// includes the fail-open ones by construction; Reviewed counts the
-// candidates that actually got a verdict, and Failed counts those that
-// did not. Returning both is the contract that keeps the layer honest:
-// "0 violations" means nothing without "out of how many reviewed".
-func (r *Reviewer) ReviewBatch(ctx context.Context, cands []Candidate) (held []Decision, reviewed, failed int, firstErr error) {
-	for _, c := range cands {
+// includes the fail-open ones by construction.
+//
+// It STOPS at the first cancellation instead of running the remaining
+// candidates into a dead context: every one of those would fail open, and
+// a caller that promotes on fail-open would land the whole tail of the
+// batch unjudged because someone pressed Ctrl-C.
+func (r *Reviewer) ReviewBatch(ctx context.Context, cands []Candidate) BatchResult {
+	var out BatchResult
+	for i, c := range cands {
 		res := r.Review(ctx, c)
+		out.Errs = append(out.Errs, res.Errs...)
+		if res.Cancelled {
+			out.Cancelled = true
+			if out.FirstErr == nil {
+				out.FirstErr = res.Err
+			}
+			// This candidate and every one after it reached no verdict.
+			for _, rest := range cands[i:] {
+				out.Failed++
+				out.Unreviewed = append(out.Unreviewed, rest.ID)
+			}
+			return out
+		}
 		switch {
 		case res.Failed:
-			failed++
-			if firstErr == nil {
-				firstErr = res.Err
+			out.Failed++
+			out.Unreviewed = append(out.Unreviewed, res.ID)
+			if out.FirstErr == nil {
+				out.FirstErr = res.Err
 			}
 		case res.Violation:
-			reviewed++
-			held = append(held, Decision{ID: res.ID, Rule: "judge:" + res.Rule})
+			out.Reviewed++
+			out.Held = append(out.Held, Decision{ID: res.ID, Rule: "judge:" + res.Rule})
 		default:
-			reviewed++
+			out.Reviewed++
 		}
 	}
-	return held, reviewed, failed, firstErr
+	return out
 }

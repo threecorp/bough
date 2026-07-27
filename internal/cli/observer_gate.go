@@ -1,11 +1,12 @@
 package cli
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
+	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
 )
 
 // stagedInstinct is one minted instinct written to the staging dir but
@@ -35,7 +37,10 @@ type stagedInstinct struct {
 // live-before-check window structurally, independent of whether the
 // gate is enabled. Returns the staged items, the skipped count, and
 // per-entry soft errors.
-func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) ([]stagedInstinct, int, []error) {
+// personalDir is where the promoted corpus lives. It is consulted only to
+// carry an existing instinct's first-seen stamp forward onto the re-mint;
+// nothing is read from it for screening.
+func stageInstincts(stagingDir, personalDir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) ([]stagedInstinct, int, []error) {
 	staged := []stagedInstinct{}
 	skipped := 0
 	errs := []error{}
@@ -61,6 +66,9 @@ func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed 
 			errs = append(errs, fmt.Errorf("instinct %q failed safety check (%s): %w", in.ID, rule, err))
 			continue
 		}
+		if personalDir != "" {
+			carryForwardFirstSeen(filepath.Join(personalDir, in.ID+".md"), in)
+		}
 		path, werr := homunculus.WriteInstinctFile(stagingDir, in)
 		if werr != nil {
 			skipped++
@@ -71,6 +79,103 @@ func stageInstincts(stagingDir string, ident homunculus.ProjectIdentity, parsed 
 		staged = append(staged, stagedInstinct{in: in, action: action, path: path})
 	}
 	return staged, skipped, errs
+}
+
+// adoptStrandedStaged returns staged instincts left behind by a PREVIOUS
+// run so this pass screens them again.
+//
+// Without it, `.staging` is write-only: the promote loop skips a mint
+// whose prior version could not be archived, and nothing ever looks at
+// the directory again — `ScanInstincts` skips it by design, the doctor
+// counts only quarantine, and neither REPORT.md restore path knows about
+// it. The mint would be stranded forever, which is the "a silent hold is
+// indistinguishable from data loss" failure the whole move-never-delete
+// design exists to prevent.
+//
+// Ids this pass already re-minted are skipped: the fresh file has already
+// replaced the stale one on disk, and adopting both would screen the same
+// id twice in one batch.
+func adoptStrandedStaged(stagingDir string, fresh []stagedInstinct) ([]stagedInstinct, []error) {
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return nil, nil // no staging dir yet ⇒ nothing stranded
+	}
+	minted := make(map[string]bool, len(fresh))
+	for _, s := range fresh {
+		minted[s.in.ID] = true
+	}
+	var adopted []stagedInstinct
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".md")
+		if minted[id] {
+			continue
+		}
+		path := filepath.Join(stagingDir, e.Name())
+		in, rerr := homunculus.ReadInstinctFile(path)
+		if rerr != nil || in == nil {
+			errs = append(errs, fmt.Errorf("staging leftover %s is unreadable and stays staged: %v", e.Name(), rerr))
+			continue
+		}
+		// The raw action string is not persisted separately, so it is
+		// recovered from the body. It must be the WHOLE action block, not
+		// its first line: buildInstinctBody writes multi-line actions
+		// verbatim, and screening only line 1 would hand both the pattern
+		// layer and the judge a truncated surface — an instruction to merge
+		// on line 2 would be caught on the first pass and invisible here.
+		adopted = append(adopted, stagedInstinct{in: in, action: actionBlock(in.Body), path: path})
+	}
+	return adopted, errs
+}
+
+// withoutIDs drops every candidate whose id is in remove, filtering in
+// place. One helper rather than the same six lines per reason, so a fix
+// to the compaction cannot land on only one of the paths — they are
+// exercised by different tests, and a half-applied fix would go unnoticed.
+func withoutIDs(cands []instinctgate.Candidate, remove []string) []instinctgate.Candidate {
+	if len(remove) == 0 {
+		return cands
+	}
+	drop := make(map[string]bool, len(remove))
+	for _, id := range remove {
+		drop[id] = true
+	}
+	kept := cands[:0]
+	for _, c := range cands {
+		if !drop[c.ID] {
+			kept = append(kept, c)
+		}
+	}
+	return kept
+}
+
+// actionBlock returns everything under "## Action" up to the next heading
+// — the exact inverse of buildInstinctBody. Falls back to the whole body
+// when the heading is absent, because screening too MUCH is safe and
+// screening too little is the failure being avoided.
+func actionBlock(body string) string {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.EqualFold(strings.TrimSpace(l), "## Action") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return strings.TrimSpace(body)
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
+			end = i
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start:end], "\n"))
 }
 
 // promoteOutcome is the result of screening one staged batch. Emitted
@@ -91,8 +196,43 @@ type promoteOutcome struct {
 	// produces the same held count as a corpus with nothing wrong.
 	Reviewed     int
 	ReviewFailed int
-	Errs         []error
+	// ReviewCancelled says the unreviewed candidates were left unjudged by
+	// an interrupt, not by the judge failing. They are NOT promoted.
+	ReviewCancelled bool
+	// ReviewCapped says the unreviewed candidates ran out of SELF-DoS
+	// BUDGET rather than hitting a model outage. The distinction is the
+	// whole point: "unreviewed=4" reads as "the model was down" when the
+	// real cause is a cap the operator set and can raise. Candidates and
+	// Votes carry the arithmetic so the report can name the value that
+	// would have covered the batch.
+	ReviewCapped     bool
+	ReviewCandidates int
+	ReviewVotes      int
+	// JudgeOff says the LLM layer was requested but could not be built, so
+	// nothing was judged. Without it a pass that never ran the judge is
+	// indistinguishable on stdout from one where the judge found nothing.
+	JudgeOff       bool
+	JudgeOffReason string
+	// JudgeProvider is the judge's provider, so the caller can print ITS
+	// limiter snapshot. The judge holds a budget separate from minting;
+	// reporting only the minting one understates what the pass spent.
+	JudgeProvider *claudecli.Provider
+	Errs          []error
 }
+
+// judgeFactory builds the LLM reviewer once the CANDIDATE COUNT is known,
+// so the judge's budget can be sized to the batch instead of a fixed
+// number that truncates it mid-review.
+//
+// Measured on the real binary: with the provider default (10 calls) and
+// 3 votes, a 7-candidate batch judged 3 and admitted the remaining 4
+// unjudged — including a prose-shaped violation that the judge quarantines
+// correctly when the budget covers it. A batch of 4+ judge candidates is
+// the ordinary case for a mint, so a fixed cap made the layer unreliable
+// exactly when it had the most to check.
+//
+// nil disables the LLM layer.
+type judgeFactory func(candidates int) (*instinctgate.Reviewer, *claudecli.Provider, error)
 
 // movedRecord is one file this pass relocated instead of destroying:
 // which instinct, why it moved, and where it now lives so a report can
@@ -109,7 +249,12 @@ type movedRecord struct {
 // dated batch dir with a REPORT. Every transition is a move, never a
 // delete, so a held instinct is always recoverable — a false hold costs
 // an operator glance, not data.
-func screenAndPromote(layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, reviewer *instinctgate.Reviewer, now time.Time) promoteOutcome {
+// ctx is the caller's cancellation scope — the interrupt-derived context
+// cobra hands the command. It must be threaded here rather than replaced
+// with context.Background(): the judge fan-out blocks on it, so with a
+// detached context Ctrl-C did nothing for as long as the provider timeout
+// allowed while the run kept spending the operator's budget.
+func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID string, staged []stagedInstinct, gate *instinctgate.Gate, newJudge judgeFactory, now time.Time) promoteOutcome {
 	out := promoteOutcome{}
 	if len(staged) == 0 {
 		return out
@@ -132,25 +277,57 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 	// violation. It fails open and reports, because a guard that silently
 	// held everything would stop the corpus growing while looking like a
 	// clean pass.
-	if reviewer != nil && len(res.Cleared) > 0 {
-		judged, reviewed, failed, jerr := reviewer.ReviewBatch(context.Background(), res.Cleared)
-		out.Reviewed, out.ReviewFailed = reviewed, failed
-		if jerr != nil {
-			out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", failed, jerr))
+	if newJudge != nil && len(res.Cleared) > 0 {
+		reviewer, judgeProv, jerr := newJudge(len(res.Cleared))
+		out.JudgeProvider = judgeProv
+		switch {
+		case jerr != nil:
+			out.JudgeOff, out.JudgeOffReason = true, jerr.Error()
+		case reviewer == nil:
+			out.JudgeOff, out.JudgeOffReason = true, "reviewer unavailable"
 		}
-		if len(judged) > 0 {
-			flagged := make(map[string]bool, len(judged))
-			for _, d := range judged {
-				flagged[d.ID] = true
+		if reviewer != nil {
+			out.ReviewCandidates, out.ReviewVotes = len(res.Cleared), reviewer.Votes
+			br := reviewer.ReviewBatch(ctx, res.Cleared)
+			out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
+			out.ReviewCancelled = br.Cancelled
+			// The self-DoS cap is the operator's own setting, so exhausting it
+			// is a different fact from the model being unreachable — and the
+			// only one of the two they can act on.
+			// Scan EVERY vote error: which one happened to be first is an
+			// artefact of goroutine indexing, and a budget trip on vote 1
+			// hidden behind a transient failure on vote 0 would be reported
+			// as a model outage — the one cause the operator cannot fix.
+			out.ReviewCapped = slices.ContainsFunc(br.Errs, func(e error) bool {
+				return errors.Is(e, claudecli.ErrSelfDoSLimit)
+			})
+			switch {
+			case br.Cancelled:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: interrupted with %d candidate(s) unreviewed — they stay staged, not promoted: %w", br.Failed, br.FirstErr))
+			case out.ReviewCapped:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: self-DoS budget exhausted after %d of %d candidate(s): %w", br.Reviewed, out.ReviewCandidates, br.FirstErr))
+			case br.FirstErr != nil:
+				out.Errs = append(out.Errs, fmt.Errorf("judge: %d candidate(s) unreviewed (failed open): %w", br.Failed, br.FirstErr))
 			}
-			kept := res.Cleared[:0]
-			for _, c := range res.Cleared {
-				if !flagged[c.ID] {
-					kept = append(kept, c)
+			// Neither an interrupt nor an exhausted budget is a verdict.
+			// Fail-open covers a model that could not ANSWER; it must not
+			// cover a run the operator stopped, or one that ran out of the
+			// operator's own call budget. Both leave the candidates staged,
+			// which is what makes "re-run to review the rest" true — the
+			// next pass adopts them (adoptStrandedStaged) and judges them.
+			// Promoting them here would make that instruction a lie: nothing
+			// ever re-screens a file already in the personal corpus.
+			if br.Cancelled || out.ReviewCapped {
+				res.Cleared = withoutIDs(res.Cleared, br.Unreviewed)
+			}
+			if len(br.Held) > 0 {
+				heldIDs := make([]string, 0, len(br.Held))
+				for _, d := range br.Held {
+					heldIDs = append(heldIDs, d.ID)
 				}
+				res.Cleared = withoutIDs(res.Cleared, heldIDs)
+				res.Held = append(res.Held, br.Held...)
 			}
-			res.Cleared = kept
-			res.Held = append(res.Held, judged...)
 		}
 	}
 
@@ -223,26 +400,37 @@ func screenAndPromote(layout homunculus.Layout, projectID string, staged []stage
 
 // archiveIfSuperseded moves the instinct currently at dst into a dated
 // archive batch when the incoming staged file at srcPath carries
-// DIFFERENT text. It returns nil when there is nothing at dst (a fresh
-// instinct) or when the two files are byte-identical (a re-mint that
-// reinforces rather than supersedes — archiving those would bury the
-// real changes in noise).
+// DIFFERENT knowledge. It returns nil when there is nothing at dst (a
+// fresh instinct) or when the two say the same thing (a re-mint that
+// reinforces rather than supersedes — archiving those would bury the real
+// changes in noise).
+//
+// "The same thing" is decided on CONTENT, not on bytes. Every rendered
+// instinct embeds first_seen / last_seen stamped at mint time, so a byte
+// comparison reports every re-mint as a change: measured against the real
+// binary, an unchanged instinct was archived on every pass, and the whole
+// corpus accumulated a copy per run — exactly the noise the "identical
+// re-mints are NOT archived" line in the archive REPORT promises to avoid.
 func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath string, now time.Time) (*movedRecord, error) {
-	prior, err := os.ReadFile(dst)
+	priorInstinct, err := homunculus.ReadInstinctFile(dst)
 	switch {
-	case os.IsNotExist(err):
+	// errors.Is, not os.IsNotExist: ReadInstinctFile WRAPS the syscall
+	// error, and os.IsNotExist does not unwrap. Using it here silently
+	// classified "file absent" as "file unreadable", which turned every
+	// first mint of an id into a refusal to promote.
+	case errors.Is(err, os.ErrNotExist):
 		return nil, nil // fresh instinct: nothing to supersede
 	case err != nil:
 		// The file EXISTS and could not be read (permission, transient IO,
-		// a lock). Treating that as "absent" would let the caller's rename
-		// overwrite a prior version that was never archived — the silent
-		// destruction this whole function exists to prevent. Surface it and
-		// let the caller skip the promotion instead.
+		// a lock) — or it parses as something this code does not model.
+		// Treating that as "absent" would let the caller's rename overwrite
+		// a prior version that was never archived: the silent destruction
+		// this whole function exists to prevent. Surface it and let the
+		// caller skip the promotion instead.
 		return nil, fmt.Errorf("archive: read prior %s: %w", id, err)
 	}
-	incoming, err := os.ReadFile(srcPath)
-	if err == nil && bytes.Equal(prior, incoming) {
-		return nil, nil // identical re-mint: reinforcement, not a supersede
+	if incoming, ierr := homunculus.ReadInstinctFile(srcPath); ierr == nil && sameKnowledge(priorInstinct, incoming) {
+		return nil, nil // reinforcement, not a supersede
 	}
 	batchDir := filepath.Join(layout.ArchiveDir(projectID), now.Format("20060102-150405"))
 	if err := os.MkdirAll(batchDir, 0o755); err != nil {
@@ -253,6 +441,43 @@ func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath s
 		return nil, fmt.Errorf("archive: move superseded %s: %w", id, err)
 	}
 	return &movedRecord{id: id, reason: "superseded by a newer mint", path: archived}, nil
+}
+
+// sameKnowledge reports whether two versions of an instinct say the same
+// thing. It deliberately ignores the volatile bookkeeping — FirstSeen,
+// LastSeen, Observed — because those change on every mint and comparing
+// them makes "unchanged" impossible to observe.
+//
+// Confidence IS compared: it is the value the session evaluator adjusts,
+// and a confidence move is a real change to what the corpus asserts.
+func sameKnowledge(a, b *homunculus.Instinct) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.ID == b.ID &&
+		a.Trigger == b.Trigger &&
+		a.Body == b.Body &&
+		a.Domain == b.Domain &&
+		a.Scope == b.Scope &&
+		a.Confidence == b.Confidence
+}
+
+// carryForwardFirstSeen preserves the ORIGINAL first-seen stamp when an id
+// is re-minted. mapToInstinct stamps both timestamps with the mint time, so
+// without this an instinct observed for months reports as first seen today
+// — the provenance an operator uses to judge whether a note has earned its
+// place is silently rewritten on every pass.
+//
+// Missing or unreadable prior version ⇒ leave the fresh stamp alone; this
+// is provenance repair, not a precondition for minting.
+func carryForwardFirstSeen(dst string, in *homunculus.Instinct) {
+	prior, err := homunculus.ReadInstinctFile(dst)
+	if err != nil || prior == nil || prior.FirstSeen.IsZero() {
+		return
+	}
+	if in.FirstSeen.IsZero() || prior.FirstSeen.Before(in.FirstSeen) {
+		in.FirstSeen = prior.FirstSeen
+	}
 }
 
 // reportSpec is the per-batch prose of a move report: the title, the

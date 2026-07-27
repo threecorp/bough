@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/retrieve"
@@ -53,6 +55,14 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// — contributes nothing.
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
+	}
+	// Suppressing skill-covered instincts is gated on evidence, not on a
+	// config flag alone: an operator who turns it on before the pull path
+	// works loses the knowledge from both paths at once. The readiness
+	// check is the authority, so a premature `exclude_skill_covered: true`
+	// cannot take effect.
+	if opts.ExcludeIDs == nil {
+		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
 	}
 	block, n := inject.Build(project, global, opts)
 	// Human-authored corrections outrank minted instincts and are not
@@ -143,4 +153,34 @@ is made — selection is pure filesystem.`,
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")
 	return cmd
+}
+
+// skillCoveredExclusions returns the instinct ids to drop from the
+// pushed block — but ONLY when the readiness gate says the pull path can
+// carry them. The gate is the authority, not the config flag: an
+// operator who sets `exclude_skill_covered: true` before the portfolio
+// is deployed would lose that knowledge from both paths at once, and the
+// symptom (the loop goes quiet) does not point at the cause.
+//
+// Returns nil in every uncertain case. Pushing knowledge that is also
+// pullable costs prompt budget; NOT pushing knowledge that turns out not
+// to be pullable costs the knowledge.
+func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout) map[string]struct{} {
+	cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, monoRoot))
+	if err != nil || !cfg.Instinct.ExcludeSkillCovered {
+		return nil
+	}
+	skillsDir := layout.EvolvedSkillsDir(projectID)
+	deployedDir := filepath.Join(monoRoot, ".claude", "skills")
+	coveragePath := layout.SkillCoverageFile(projectID)
+	// The gate reads the coverage registry to judge it, so take the copy
+	// it already parsed rather than reading the same file a second time
+	// on the prompt hot path. A non-Ready verdict already covers the
+	// unreadable case — that check is Blocking — so there is no separate
+	// nil test to make here.
+	ready := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
+	if !ready.Ready() {
+		return nil
+	}
+	return ready.Coverage.CoveredIDs()
 }

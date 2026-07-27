@@ -61,13 +61,14 @@ const (
 // the structured JSON, and writes one .md per accepted instinct.
 func newObserverRunOnceCmd() *cobra.Command {
 	var (
-		root       string
-		windowSize int
-		dryRun     bool
-		out        string
-		model      string
-		maxCalls   int
-		judge      bool
+		root          string
+		windowSize    int
+		dryRun        bool
+		out           string
+		model         string
+		maxCalls      int
+		judgeMaxCalls int
+		judge         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run-once",
@@ -175,17 +176,42 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// (reversibly). Staging happens regardless of the gate's enabled
 			// state, so a minted note is never live before it has been checked.
 			now := time.Now().UTC()
-			staged, skipped, errs := stageInstincts(layout.StagingDir(ident.ID), ident, res.Parsed, now)
+			stagingDir := layout.StagingDir(ident.ID)
+			staged, skipped, errs := stageInstincts(stagingDir, layout.InstinctsDir(ident.ID), ident, res.Parsed, now)
+			// Pick up anything a previous pass left staged (its prior
+			// version could not be archived, or the run was interrupted
+			// before the judge reached it). Nothing else ever reads this
+			// directory, so without this the file would be stranded and
+			// invisible for good.
+			if stranded, serrs := adoptStrandedStaged(stagingDir, staged); len(stranded) > 0 || len(serrs) > 0 {
+				errs = append(errs, serrs...)
+				if len(stranded) > 0 {
+					fmt.Fprintf(stdout, "re-screening %d instinct(s) left staged by an earlier run\n", len(stranded))
+					staged = append(staged, stranded...)
+				}
+			}
 			gate := instinctgate.New(gateConfigFor(cmd, root))
 			// The judge is opt-in per pass: it spends LLM calls, so an
 			// operator who wants only the free deterministic layers passes
 			// --no-judge rather than having to reason about cost every run.
-			var reviewer *instinctgate.Reviewer
-			var judgeProv *claudecli.Provider
+			// The judge is built AFTER the deterministic screen, once the
+			// candidate count is known, so its budget can be sized to the
+			// batch. A fixed cap truncated the review mid-batch: measured
+			// with the default 10 calls and 3 votes, a 7-candidate batch
+			// judged 3 and admitted the other 4 unjudged — one of them a
+			// prose violation the judge catches when the budget covers it.
+			var newJudge judgeFactory
 			if judge {
-				reviewer, judgeProv = newGateReviewer(model, maxCalls)
+				newJudge = func(candidates int) (*instinctgate.Reviewer, *claudecli.Provider, error) {
+					budget := judgeMaxCalls
+					if budget <= 0 {
+						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
+					}
+					return newGateReviewer(model, budget)
+				}
 			}
-			outcome := screenAndPromote(layout, ident.ID, staged, gate, reviewer, now)
+			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, newJudge, now)
+			judgeProv := outcome.JudgeProvider
 			errs = append(errs, outcome.Errs...)
 			fmt.Fprintf(stdout, "instincts emitted=%d quarantined=%d skipped=%d soft-errors=%d duration=%s prompt_version=%s\n",
 				outcome.Emitted, outcome.Quarantined, skipped, len(errs), res.Duration.Truncate(time.Millisecond), res.PromptVersion)
@@ -193,7 +219,24 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
-			if reviewer != nil {
+			switch {
+			case outcome.JudgeOff:
+				// Requested but unusable. Saying so is the whole point: a
+				// silent skip is indistinguishable from a clean review.
+				fmt.Fprintf(stdout, "judge: NOT RUN — %s (the deterministic layers still ran; nothing was LLM-screened)\n", outcome.JudgeOffReason)
+			case outcome.ReviewCancelled:
+				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (INTERRUPTED — unreviewed candidates were left staged, not promoted)\n",
+					outcome.Reviewed, outcome.ReviewFailed)
+			case outcome.ReviewCapped:
+				// Name the cause AND the number that would have covered the
+				// batch. "unreviewed=4" alone reads as a model outage, which
+				// is the one explanation the operator cannot act on; this is
+				// the one they can.
+				need := outcome.ReviewCandidates * outcome.ReviewVotes
+				fmt.Fprintf(stdout,
+					"judge: reviewed=%d unreviewed=%d (SELF-DoS CEILING reached, not a model outage — %d candidate(s) x %d votes needs %d calls, ceiling is %d. The unreviewed ones were left STAGED, not promoted; re-run with --judge-max-calls %d to finish judging them)\n",
+					outcome.Reviewed, outcome.ReviewFailed, outcome.ReviewCandidates, outcome.ReviewVotes, need, judgeCallCeiling, need)
+			case outcome.ReviewCandidates > 0:
 				// "0 held" says nothing without the coverage behind it: a judge
 				// that could not run produces the same held count as a clean batch.
 				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",
@@ -226,7 +269,9 @@ func newObserverRunOnceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "render the prompt and exit without spawning claude --print")
 	cmd.Flags().StringVar(&out, "out", "", "with --dry-run, write the rendered prompt to this path instead of stdout")
 	cmd.Flags().StringVar(&model, "model", "", "override the claude model (default: haiku)")
-	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "per-session LLM call cap, applied to EACH budget separately: minting and the gate judge hold their own (default: 10 each; --judge=false leaves only the minting one)")
+	cmd.Flags().IntVar(&maxCalls, "max-calls", 0, "per-session cap for MINTING (default: 10). The gate judge has its own budget — see --judge-max-calls")
+	cmd.Flags().IntVar(&judgeMaxCalls, "judge-max-calls", 0,
+		"per-session cap for the GATE judge only (default: sized to the batch, candidates x 3 votes, ceiling 30). --max-calls does not apply to the judge")
 	cmd.Flags().BoolVar(&judge, "judge", true, "run the LLM layer of the generation gate (catches prose-shaped violations the patterns cannot; --judge=false spends no extra LLM calls)")
 	return cmd
 }
@@ -388,7 +433,9 @@ func renderForPreview(body string, data any) (string, error) {
 // stages then screens via stageInstincts + screenAndPromote, so a
 // minted note passes the policy gate before it becomes injectable.
 func writeInstinctsFromResult(dir string, ident homunculus.ProjectIdentity, parsed map[string]any, now time.Time) (int, int, []error) {
-	staged, skipped, errs := stageInstincts(dir, ident, parsed, now)
+	// dir IS the destination here, so it doubles as the prior-version
+	// source for the first-seen carry-forward.
+	staged, skipped, errs := stageInstincts(dir, dir, ident, parsed, now)
 	return len(staged), skipped, errs
 }
 
