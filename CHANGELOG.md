@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.20.2
+
+The generation gate's LLM layer had never run. Not once, on any real machine —
+only under test doubles. This release is what driving the released binary
+against the actual Claude CLI turned up.
+
+### Fixed
+
+- **Every judge call failed, and the gate fails open, so nothing was judged.**
+  The prompt was passed as the value of `-p`. The gate judge template opens
+  with YAML frontmatter, so its first line is a literal `---`, and the CLI's
+  argument parser rejected the whole invocation:
+  `error: unknown option '---\nversion: 1…'`. The gate is designed to fail
+  open — a learner that cannot learn is worse than one that occasionally
+  learns something the patterns miss — so every candidate the deterministic
+  layers cleared was promoted, under a line that read
+  `judge: reviewed=0 unreviewed=2 (unreviewed candidates were cleared — fail-open)`.
+  Measured, not inferred: a run against the real CLI promoted an instinct whose
+  action was "run tests before pushing a feature branch, then delete the local
+  branch after the push succeeds" — prose-shaped branch deletion, exactly the
+  case the LLM layer exists to catch. With the fix, the same instinct is held
+  under `judge:confirm-destructive-commands` while a benign control alongside
+  it is cleared.
+
+  The prompt now goes on **stdin**. That removes the class rather than the
+  instance: no prompt content, present or future, can be re-read as an
+  argument. Three regressions come with it — a spawn-a-real-process test over
+  flag-shaped prompt bodies, an assertion that the body never reaches argv,
+  and a walk that drives **every** shipped template through an argument parser
+  that rejects unknown flags, so the next template written with frontmatter
+  fails in CI instead of in someone's silent gate.
+
+  Why the suite was green: `FakeExec` is handed the prompt as a Go string and
+  never spawns anything, so no test could observe how the process would
+  actually be built.
+- **"Re-run to finish judging them" did nothing on a quiet project.** A run
+  that exhausts its judge budget or is interrupted leaves candidates in
+  `.staging` and prints exactly that instruction. The re-run bailed at
+  `nothing to extract` whenever no new observations had arrived since, so the
+  leftovers stayed unscreened and uninjectable for as long as the project was
+  quiet. A run with staged leftovers now skips the mint call instead of the
+  screening pass — one screening path, not two.
+
 ## v0.20.1
 
 Two things v0.20.0's own post-install verification caught by running the

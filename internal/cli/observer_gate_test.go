@@ -495,3 +495,37 @@ func TestScreenAndPromote_GateDisabled_AllPromoted(t *testing.T) {
 		t.Errorf("quarantine dir created despite gate off (err=%v)", err)
 	}
 }
+
+// TestQuietProjectStillScreensLeftovers is the regression for the run that
+// told the operator to re-run and then did nothing when they did.
+//
+// A budget-exhausted or interrupted run leaves candidates in .staging and
+// prints "re-run with --judge-max-calls N to finish judging them". The
+// re-run bailed at "nothing to extract" whenever no new observations had
+// arrived, so on a quiet project the instruction was false and the
+// leftovers stayed unscreened indefinitely.
+func TestQuietProjectStillScreensLeftovers(t *testing.T) {
+	staging := t.TempDir()
+	if hasStaged(staging) {
+		t.Fatal("an empty staging dir must not report leftovers")
+	}
+	if hasStaged(filepath.Join(staging, "does-not-exist")) {
+		t.Error("a missing staging dir must not report leftovers")
+	}
+	// A stray non-instinct file is not work to do.
+	if err := os.WriteFile(filepath.Join(staging, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(staging, "sub.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if hasStaged(staging) {
+		t.Error("only .md files count as staged instincts")
+	}
+	if err := os.WriteFile(filepath.Join(staging, "left-behind.md"), []byte("---\nid: x\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasStaged(staging) {
+		t.Error("a staged instinct must be reported, so the run screens instead of bailing")
+	}
+}

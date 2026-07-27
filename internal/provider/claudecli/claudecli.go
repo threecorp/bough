@@ -208,8 +208,9 @@ func (p *Provider) GenerateRaw(ctx context.Context, promptBody string) ([]byte, 
 
 func (p *Provider) buildArgs() []string {
 	args := []string{
-		// Prompt is passed via -p<prompt> after sub.Run binds; we
-		// only need the post-prompt flags here.
+		// The prompt is written to the child's stdin (see invoke), not
+		// passed here: a body starting with `-` would otherwise be parsed
+		// as a flag. Only the post-prompt flags belong in this list.
 		"--model", p.Model,
 		"--max-turns", strconv.Itoa(p.MaxTurns),
 		"--output-format", p.OutputFormat,
@@ -237,7 +238,21 @@ func (p *Provider) invoke(ctx context.Context, args []string, env []string, prom
 		cctx, cancel = context.WithTimeout(ctx, p.Timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(cctx, p.Bin, append([]string{"-p", prompt}, args...)...)
+	// The prompt goes on STDIN, not as the value of -p.
+	//
+	// `claude -p <prompt>` looks fine until a prompt begins with something
+	// the CLI's flag parser reads as a flag. The gate judge template opens
+	// with YAML frontmatter — a literal `---` on line 1 — and the CLI
+	// rejected the whole invocation with `unknown option '---\nversion: 1…`.
+	// Every judge call failed, and because the gate fails open by design,
+	// the LLM layer was silently absent while the run reported
+	// `unreviewed=N (cleared — fail-open)`.
+	//
+	// Passing the body on stdin removes the class rather than the instance:
+	// no prompt content can ever be re-read as an argument. `claude -p`
+	// with no positional prompt reads it from stdin.
+	cmd := exec.CommandContext(cctx, p.Bin, append([]string{"-p"}, args...)...)
+	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

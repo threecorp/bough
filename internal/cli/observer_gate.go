@@ -617,3 +617,19 @@ func governancePaths(root string, configured []string) []string {
 	}
 	return out
 }
+
+// hasStaged reports whether a previous run left anything in the staging
+// directory. It is a cheap existence probe, not a count: the caller only
+// needs to know whether skipping the mint call would also skip real work.
+func hasStaged(stagingDir string) bool {
+	ents, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			return true
+		}
+	}
+	return false
+}

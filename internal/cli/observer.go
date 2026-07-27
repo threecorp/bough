@@ -126,7 +126,17 @@ func newObserverRunOnceCmd() *cobra.Command {
 				return fmt.Errorf("observer run-once: read observations: %w", err)
 			}
 			stdout := cmd.OutOrStdout()
-			if len(observations) == 0 {
+			// Nothing to MINT is not nothing to DO. A run that ran out of judge
+			// budget, or that the operator interrupted, leaves candidates in
+			// .staging and tells the operator to re-run to finish judging them.
+			// Returning here made that instruction false whenever no new
+			// observations had arrived since: the leftovers stayed unscreened
+			// and uninjectable for as long as the project was quiet. So the
+			// early return is now conditional on there being nothing staged
+			// either, and when there is, the mint call is skipped rather than
+			// the screen — one screening path, not two.
+			mint := len(observations) > 0
+			if !mint && !hasStaged(layout.StagingDir(ident.ID)) {
 				fmt.Fprintf(stdout, "no observations under %s or %s — nothing to extract\n", inboxPath, archivePath)
 				return nil
 			}
@@ -166,9 +176,14 @@ func newObserverRunOnceCmd() *cobra.Command {
 				return nil
 			}
 
-			res, err := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: data})
-			if err != nil {
-				return fmt.Errorf("observer run-once: %w", err)
+			res := &claudecli.GenerateResult{PromptVersion: tpl.Version}
+			if mint {
+				res, err = prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: data})
+				if err != nil {
+					return fmt.Errorf("observer run-once: %w", err)
+				}
+			} else {
+				fmt.Fprintln(stdout, "no new observations — screening what a previous run left staged (no mint call)")
 			}
 			// Stage every accepted instinct out of injection's reach, then
 			// screen the batch: cleared ones are promoted into the personal
