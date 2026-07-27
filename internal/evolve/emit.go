@@ -51,8 +51,8 @@ func RenderSkill(label, description string, c Cluster, th Thresholds, now time.T
 	}
 	fmt.Fprintf(&b, "generated_by: bough-evolve@v0.9.1\n")
 	fmt.Fprintf(&b, "generated_at: %s\n", now.UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "evolve_thresholds: {member_min: %d, cohesion_min: %.2f, lexicon_coverage_max: %.2f, relative_isolation_min: %.2f}\n",
-		th.MemberMin, th.CohesionMin, th.LexiconCoverageMax, th.RelIsolationMin)
+	fmt.Fprintf(&b, "evolve_thresholds: {member_min: %d, cohesion_min: %.2f, lexicon_coverage_max: %.2f, relative_isolation_min: %.2f, clique_k: %d}\n",
+		th.MemberMin, th.CohesionMin, th.LexiconCoverageMax, th.RelIsolationMin, th.CliqueK)
 	b.WriteString("---\n\n")
 	fmt.Fprintf(&b, "# %s\n\n", label)
 	fmt.Fprintf(&b, "%s\n\n", description)
