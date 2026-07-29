@@ -89,6 +89,12 @@ type RetireRegistry struct {
 	// Slugs maps a retired slug to its rejection, so a later "why is
 	// this skill missing?" has an answer on disk.
 	Slugs map[string]RetiredSkill `json:"retired"`
+	// MergedInto maps a slug whose content was folded into another skill
+	// to the slug it now lives under. A merged key counts as retired
+	// everywhere — its dir stays on disk (nothing is deleted), but it is
+	// neither rewritten nor deployed, or the same knowledge would ship
+	// under two labels and the consolidation would silently undo itself.
+	MergedInto map[string]string `json:"merged_into,omitempty"`
 	// overlap is the member-overlap share at which a new cluster counts
 	// as a retired one. Seeded by LoadRetireRegistry; a zero value falls
 	// back to the default rather than meaning "match everything", so a
@@ -114,11 +120,13 @@ func (r *RetireRegistry) overlapThreshold() float64 {
 // indistinguishable from a reader that found nothing.
 func (r *RetireRegistry) UnmarshalJSON(b []byte) error {
 	var env struct {
-		Retired map[string]json.RawMessage `json:"retired"`
+		Retired    map[string]json.RawMessage `json:"retired"`
+		MergedInto map[string]string          `json:"merged_into"`
 	}
 	if err := json.Unmarshal(b, &env); err != nil {
 		return err
 	}
+	r.MergedInto = env.MergedInto
 	r.Slugs = make(map[string]RetiredSkill, len(env.Retired))
 	for slug, raw := range env.Retired {
 		var obj RetiredSkill
@@ -155,19 +163,28 @@ func LoadRetireRegistry(skillsDir string) (*RetireRegistry, error) {
 	if reg.Slugs == nil {
 		reg.Slugs = map[string]RetiredSkill{}
 	}
+	if reg.MergedInto == nil {
+		reg.MergedInto = map[string]string{}
+	}
 	reg.overlap = defaultRetireOverlap
 	return reg, nil
 }
 
 // Retired reports whether a slug has been rejected under that exact
-// name. Callers deciding whether to EMIT should use RetiredAs, which
-// also catches the same grouping under a new label.
+// name, or folded into another skill. This is the DEPLOY-side question
+// — "may this slug be linked where the host can load it?" — so it is
+// slug-only, matching the registry an operator edits by hand. Callers
+// deciding whether to EMIT should use RetiredAs, which also catches the
+// same grouping under a new label.
 func (r *RetireRegistry) Retired(slug string) bool {
 	if r == nil {
 		return false
 	}
-	_, ok := r.Slugs[slug]
-	return ok
+	if _, ok := r.Slugs[slug]; ok {
+		return true
+	}
+	_, merged := r.MergedInto[slug]
+	return merged
 }
 
 // RetiredAs reports whether emitting this slug with these members would
@@ -184,6 +201,11 @@ func (r *RetireRegistry) RetiredAs(slug string, members []string) (string, bool)
 	}
 	if e, ok := r.Slugs[slug]; ok {
 		return fmt.Sprintf("%s (%s)", slug, e.Reason), true
+	}
+	if target, ok := r.MergedInto[slug]; ok {
+		// Rewriting a merged-away slug would recreate content that now
+		// lives under the target, shipping the same knowledge twice.
+		return fmt.Sprintf("%s (merged into %s)", slug, target), true
 	}
 	if len(members) == 0 {
 		return "", false

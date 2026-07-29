@@ -1,6 +1,7 @@
 package evolve
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -330,5 +331,37 @@ func TestRetirementAttributionIsDeterministic(t *testing.T) {
 		if !ok || got != first {
 			t.Fatalf("run %d cited %q, first run cited %q — attribution must not depend on map order", i, got, first)
 		}
+	}
+}
+
+// TestMergedIntoKeysCountAsRetired: a slug folded into another skill is
+// retired everywhere — refusing the rewrite names the target, the
+// deploy-side Retired() answer is true, and the registry round-trips
+// through JSON without losing the mapping.
+func TestMergedIntoKeysCountAsRetired(t *testing.T) {
+	raw := []byte(`{"retired":{"gone":{"reason":"too vague","members":["i1"]}},"merged_into":{"old-label":"new-label"}}`)
+	reg := &RetireRegistry{}
+	if err := json.Unmarshal(raw, reg); err != nil {
+		t.Fatal(err)
+	}
+	if !reg.Retired("old-label") {
+		t.Error("a merged-away slug must count as retired")
+	}
+	if reg.Retired("new-label") {
+		t.Error("the merge target itself is not retired")
+	}
+	if msg, held := reg.RetiredAs("old-label", nil); !held || !strings.Contains(msg, "merged into new-label") {
+		t.Errorf("the refusal must name the merge target, got held=%v msg=%q", held, msg)
+	}
+	out, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg2 := &RetireRegistry{}
+	if err := json.Unmarshal(out, reg2); err != nil {
+		t.Fatal(err)
+	}
+	if !reg2.Retired("old-label") || !reg2.Retired("gone") {
+		t.Error("merged_into and retired must both survive a save/load round-trip")
 	}
 }
