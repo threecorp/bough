@@ -161,6 +161,36 @@ func Identifiers(text string) map[string]struct{} {
 	return out
 }
 
+// Jaccard returns |a ∩ b| / |a ∪ b| over two token sets. Two empty sets
+// return 0: contentless items are not "similar", they are both noise.
+//
+// It lives here, in the leaf package that owns tokenization, because
+// both consumers need the same answer over the same kind of set — the
+// clustering pipeline measures cohesion with it, and the injector uses
+// it to drop a selected line that merely restates a higher-ranked one.
+// Two copies would be two chances for "similar" to mean two things.
+func Jaccard(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 0
+	}
+	// Iterate the smaller set for the intersection scan.
+	small, large := a, b
+	if len(b) < len(a) {
+		small, large = b, a
+	}
+	inter := 0
+	for k := range small {
+		if _, ok := large[k]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
 // normalizeIdentifier reduces one raw match to its head form: lower
 // case, no call parentheses, no trailing separator. `Assert(cap,` and
 // `assert` must resolve to the same token or neither side can ever match

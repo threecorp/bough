@@ -24,7 +24,11 @@
 // artifact records the thresholds it was minted under.
 package evolve
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ikeikeikeike/bough/internal/retrieve"
+)
 
 // stopwords are dropped from token sets before any jaccard maths.
 // The list mirrors ECC's tokenize spec: English function words plus
@@ -85,26 +89,16 @@ func Tokenize(s string) map[string]struct{} {
 // Jaccard returns |a ∩ b| / |a ∪ b| over two token sets. Empty-vs-
 // empty returns 0 (= ECC convention: two contentless instincts are
 // not "similar", they're both noise).
+//
+// The maths lives in internal/retrieve, which owns tokenization for
+// the retrieval side and needs the identical measure to drop a
+// selected line that only restates a higher-ranked one. Kept exported
+// here because "cohesion" is this package's vocabulary and the gates
+// read better naming it locally — but there is one implementation, so
+// the two callers cannot drift into disagreeing about what similar
+// means.
 func Jaccard(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 0
-	}
-	inter := 0
-	// iterate the smaller set for the intersection scan
-	small, large := a, b
-	if len(b) < len(a) {
-		small, large = b, a
-	}
-	for k := range small {
-		if _, ok := large[k]; ok {
-			inter++
-		}
-	}
-	union := len(a) + len(b) - inter
-	if union == 0 {
-		return 0
-	}
-	return float64(inter) / float64(union)
+	return retrieve.Jaccard(a, b)
 }
 
 // union merges every token set in sets into one. Used to build the

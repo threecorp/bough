@@ -194,3 +194,100 @@ func TestContextTokensNarrowResults(t *testing.T) {
 		t.Errorf("context tokens should lift the matching note, got %+v", got)
 	}
 }
+
+// flatCorpus builds n docs that ALL share one marker token, so a query
+// for that marker puts every doc in the lexical channel. It is the shape
+// the per-channel depth exists for: without a bound, a whole corpus
+// enters the fusion carrying near-zero contributions.
+func flatCorpus(n int) []Doc {
+	docs := make([]Doc, 0, n)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		docs = append(docs, Doc{
+			ID:         fmt.Sprintf("note-%03d", i),
+			Text:       fmt.Sprintf("marker applies while editing subsystem%03d", i),
+			ModTime:    base.Add(time.Duration(i) * time.Hour),
+			Confidence: 0.85,
+			IsProject:  true,
+		})
+	}
+	return docs
+}
+
+// TestChannelDepthBoundsTheCandidatePool pins the depth cut: a query
+// every doc matches must still yield at most ChannelLimit candidates.
+// The point is not only cost — a doc ranked 800th lexically used to
+// enter the pool with a contribution so small that the tiebreak, not
+// the ranking, decided its place.
+func TestChannelDepthBoundsTheCandidatePool(t *testing.T) {
+	docs := flatCorpus(200)
+	r := NewRanker()
+	if r.ChannelLimit != 50 {
+		t.Fatalf("default ChannelLimit = %d, want 50", r.ChannelLimit)
+	}
+	got := r.Rank(docs, "marker", nil)
+	if len(got) == 0 {
+		t.Fatal("a query every doc matches returned nothing")
+	}
+	if len(got) > r.ChannelLimit {
+		t.Errorf("candidates = %d, want <= ChannelLimit (%d)", len(got), r.ChannelLimit)
+	}
+}
+
+// TestChannelDepthZeroMeansUnbounded is the other direction of the same
+// check (a cap that cannot be observed to bind is a cap nobody can
+// trust): with the bound off, the identical query returns the whole
+// corpus.
+func TestChannelDepthZeroMeansUnbounded(t *testing.T) {
+	docs := flatCorpus(200)
+	r := NewRanker()
+	r.ChannelLimit = 0
+	if got := r.Rank(docs, "marker", nil); len(got) != len(docs) {
+		t.Errorf("unbounded candidates = %d, want %d", len(got), len(docs))
+	}
+}
+
+// TestShortContentTokensSurviveOnBothSides pins the tokenizer symmetry
+// the relevance floor depends on. The floor compares query tokens
+// against instinct tokens; if a two-letter content word survives on one
+// side and is dropped on the other, the floor is unsatisfiable BY
+// CONSTRUCTION for such a query — and the failure reads as "no relevant
+// instincts" rather than as a bug. These are the terms measured to
+// matter in practice, so they are asserted by name.
+func TestShortContentTokensSurviveOnBothSides(t *testing.T) {
+	for _, tok := range []string{"pr", "ci", "db", "go", "ui"} {
+		query := ContentTokens("please wait for the " + strings.ToUpper(tok))
+		if _, ok := query[tok]; !ok {
+			t.Errorf("query side dropped %q", tok)
+		}
+		doc := ContentTokens("when the " + strings.ToUpper(tok) + " run finishes, report it")
+		if _, ok := doc[tok]; !ok {
+			t.Errorf("doc side dropped %q", tok)
+		}
+	}
+}
+
+// TestJaccard covers the measure both the clustering gates and the
+// injector's near-duplicate check read, including the empty-vs-empty
+// convention (two contentless items are noise, not siblings).
+func TestJaccard(t *testing.T) {
+	set := func(words ...string) map[string]struct{} {
+		out := map[string]struct{}{}
+		for _, w := range words {
+			out[w] = struct{}{}
+		}
+		return out
+	}
+	if got := Jaccard(set("a", "b"), set("b", "c")); got != 1.0/3.0 {
+		t.Errorf("Jaccard = %v, want 1/3", got)
+	}
+	if got := Jaccard(set("a"), set("a")); got != 1 {
+		t.Errorf("identical sets = %v, want 1", got)
+	}
+	if got := Jaccard(set("a"), set("b")); got != 0 {
+		t.Errorf("disjoint sets = %v, want 0", got)
+	}
+	if got := Jaccard(set(), set()); got != 0 {
+		t.Errorf("empty vs empty = %v, want 0", got)
+	}
+}
