@@ -223,7 +223,24 @@ type promoteOutcome struct {
 	// limiter snapshot. The judge holds a budget separate from minting;
 	// reporting only the minting one understates what the pass spent.
 	JudgeProvider *claudecli.Provider
-	Errs          []error
+	// HeldTripwire / HeldDenylist / HeldClaimUngrounded / HeldJudge split
+	// Quarantined by the layer that made the hold. One merged number
+	// cannot say which layer is doing the work — or which has silently
+	// stopped, which is how a guard ships disabled and reports success.
+	HeldTripwire        int
+	HeldDenylist        int
+	HeldClaimUngrounded int
+	HeldJudge           int
+	// RuleUngrounded counts consensus violations RELEASED because the
+	// judge's cited category was not on the list it was given. A
+	// permanently-zero value is itself suspect — an inert grounding check
+	// reads exactly like a judge that never hallucinates.
+	RuleUngrounded int
+	// QuoteUnverified counts holds whose quoted evidence could not be
+	// located in the instinct. The holds stand; the reviewer should look
+	// harder at these.
+	QuoteUnverified int
+	Errs            []error
 }
 
 // judgeFactory builds the LLM reviewer once the CANDIDATE COUNT is known,
@@ -297,6 +314,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			br := reviewer.ReviewBatch(ctx, res.Cleared)
 			out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
 			out.ReviewCancelled = br.Cancelled
+			out.RuleUngrounded, out.QuoteUnverified = br.RuleUngrounded, br.QuoteUnverified
 			// The self-DoS cap is the operator's own setting, so exhausting it
 			// is a different fact from the model being unreachable — and the
 			// only one of the two they can act on.
@@ -334,6 +352,24 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 				res.Cleared = withoutIDs(res.Cleared, heldIDs)
 				res.Held = append(res.Held, br.Held...)
 			}
+		}
+	}
+
+	// Split the holds by the layer that made them. The layers exist for
+	// different threats — patterns for command shapes, the denylist for
+	// boundary terms, grounding for invented rules, the judge for prose
+	// intent — and one merged number cannot say which layer is doing the
+	// work, or which has silently stopped.
+	for _, d := range res.Held {
+		switch {
+		case strings.HasPrefix(d.Rule, "judge:"):
+			out.HeldJudge++
+		case strings.HasPrefix(d.Rule, "denylisted-term:"):
+			out.HeldDenylist++
+		case d.Rule == "ungrounded-rule-claim":
+			out.HeldClaimUngrounded++
+		default:
+			out.HeldTripwire++
 		}
 	}
 

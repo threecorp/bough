@@ -40,6 +40,14 @@ const judgeCallCeiling = 30
 // judge never ran must not print what a pass that judged everything and
 // found nothing prints.
 func newGateReviewer(model string, budget int, forbidden []string) (*instinctgate.Reviewer, *claudecli.Provider, error) {
+	// Resolve the category list once, up front: the same resolved list
+	// must reach the prompt (via newGatePromptData, which re-applies this
+	// default as its own safety net) AND the reviewer's grounding check.
+	// A judge prompted with one list and grounded against another would
+	// release every hold as a hallucination.
+	if len(forbidden) == 0 {
+		forbidden = instinctgate.DefaultForbiddenActions
+	}
 	resolver := prompts.NewResolver()
 	tpl, err := resolver.Get(prompts.TemplateInstinctGate)
 	if err != nil {
@@ -109,7 +117,9 @@ func newGateReviewer(model string, budget int, forbidden []string) (*instinctgat
 		}
 		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %s)", size)
 	}
-	return instinctgate.NewReviewer(review), prov, nil
+	rv := instinctgate.NewReviewer(review)
+	rv.Categories = forbidden
+	return rv, prov, nil
 }
 
 // gatePromptData is the template's view of one candidate: only the

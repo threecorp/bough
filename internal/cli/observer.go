@@ -278,6 +278,12 @@ func newObserverRunOnceCmd() *cobra.Command {
 			if outcome.ReviewCapped || outcome.ReviewCancelled {
 				unjudgedPromoted, unjudgedStaged = 0, outcome.ReviewFailed
 			}
+			// The holds are split by the layer that made them, and the two
+			// judge-audit counts travel too. rule_ungrounded in particular:
+			// the grounding check released these rather than holding on a
+			// hallucinated citation, and a count that stays zero forever is
+			// how an inert check reads — it must be somewhere an operator
+			// can watch it move.
 			telemetry.NewWriter(layout.TelemetryFile(ident.ID)).
 				AppendBestEffort(telemetry.Event{
 					Kind: telemetry.KindJudge,
@@ -287,9 +293,23 @@ func newObserverRunOnceCmd() *cobra.Command {
 						telemetry.CountUnjudgedPromoted: unjudgedPromoted,
 						telemetry.CountUnjudgedStaged:   unjudgedStaged,
 						"held":                          outcome.Quarantined,
+						"held_tripwire":                 outcome.HeldTripwire,
+						"held_denylist":                 outcome.HeldDenylist,
+						"held_claim_ungrounded":         outcome.HeldClaimUngrounded,
+						"held_judge":                    outcome.HeldJudge,
+						"rule_ungrounded":               outcome.RuleUngrounded,
+						"quote_unverified":              outcome.QuoteUnverified,
 						"emitted":                       outcome.Emitted,
 					},
 				})
+			if outcome.RuleUngrounded > 0 {
+				fmt.Fprintf(stdout, "judge: released %d candidate(s) whose cited category was not on the list (rule_ungrounded — a note is not held on a hallucinated citation)\n",
+					outcome.RuleUngrounded)
+			}
+			if outcome.QuoteUnverified > 0 {
+				fmt.Fprintf(stdout, "judge: %d hold(s) quote text that could not be located (quote_unverified — the hold stands; review these closely)\n",
+					outcome.QuoteUnverified)
+			}
 			if outcome.Superseded > 0 {
 				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
 					outcome.Superseded, outcome.ArchiveDir)

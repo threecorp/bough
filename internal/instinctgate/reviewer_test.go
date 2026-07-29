@@ -2,6 +2,7 @@ package instinctgate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -294,5 +295,92 @@ func TestCancellationIsNotFailOpen(t *testing.T) {
 	// And it must not have spent a single provider call doing it.
 	if n := calls.count(); n != 0 {
 		t.Errorf("calls = %d, want 0 — a dead context must not burn budget", n)
+	}
+}
+
+// citedVerdictJSON builds one vote's raw response for the grounding tests.
+func citedVerdictJSON(violation bool, rule, category, quote string) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"violation": violation, "rule": rule, "category": category, "quote": quote,
+	})
+	return b
+}
+
+// TestHallucinatedCitationReleasesTheHold: consensus defeats random
+// variance, not a hallucination the model commits to across votes. A
+// cited category that is not on the list the judge was given must
+// RELEASE the note — held on a rule nobody configured is held on
+// nothing — and the release must be counted, because a grounding check
+// that never fires reads exactly like an inert one.
+func TestHallucinatedCitationReleasesTheHold(t *testing.T) {
+	rv := NewReviewer(func(_ context.Context, _, _ string) ([]byte, error) {
+		return citedVerdictJSON(true, "made-up-rule", "a category nobody configured", ""), nil
+	})
+	rv.Votes, rv.Agree = 1, 1
+	rv.Categories = []string{"deleting a branch, tag, or remote ref"}
+
+	br := rv.ReviewBatch(context.Background(), []Candidate{{ID: "n1", Trigger: "t", Action: "a"}})
+	if len(br.Held) != 0 {
+		t.Fatalf("a hallucinated citation must not hold, got %v", br.Held)
+	}
+	if br.RuleUngrounded != 1 {
+		t.Errorf("the release must be counted, got rule_ungrounded=%d", br.RuleUngrounded)
+	}
+	if br.Reviewed != 1 {
+		t.Errorf("a released note was still reviewed, got reviewed=%d", br.Reviewed)
+	}
+}
+
+// TestVerbatimCitationHolds: the happy path — a category copied from
+// the list grounds, and the hold stands. Whitespace and case wobble
+// must not read as hallucination.
+func TestVerbatimCitationHolds(t *testing.T) {
+	rv := NewReviewer(func(_ context.Context, _, _ string) ([]byte, error) {
+		return citedVerdictJSON(true, "no-branch-delete", "Deleting a branch,  tag, or remote ref", "delete the branch"), nil
+	})
+	rv.Votes, rv.Agree = 1, 1
+	rv.Categories = []string{"deleting a branch, tag, or remote ref"}
+
+	br := rv.ReviewBatch(context.Background(), []Candidate{{ID: "n1", Trigger: "when done", Action: "delete the branch afterwards"}})
+	if len(br.Held) != 1 {
+		t.Fatalf("a grounded citation must hold, got %v (ungrounded=%d)", br.Held, br.RuleUngrounded)
+	}
+	if br.QuoteUnverified != 0 {
+		t.Errorf("the quote IS in the action; quote_unverified=%d", br.QuoteUnverified)
+	}
+}
+
+// TestUnlocatableQuoteFlagsButDoesNotRelease: the consensus judged the
+// whole surface, so a quote that cannot be found flags the hold for a
+// closer look rather than undoing the judgement.
+func TestUnlocatableQuoteFlagsButDoesNotRelease(t *testing.T) {
+	rv := NewReviewer(func(_ context.Context, _, _ string) ([]byte, error) {
+		return citedVerdictJSON(true, "no-branch-delete", "deleting a branch, tag, or remote ref", "words that appear nowhere"), nil
+	})
+	rv.Votes, rv.Agree = 1, 1
+	rv.Categories = []string{"deleting a branch, tag, or remote ref"}
+
+	br := rv.ReviewBatch(context.Background(), []Candidate{{ID: "n1", Trigger: "when done", Action: "delete the branch afterwards"}})
+	if len(br.Held) != 1 {
+		t.Fatalf("an unlocatable quote must not release the hold, got %v", br.Held)
+	}
+	if br.QuoteUnverified != 1 {
+		t.Errorf("the unlocatable quote must be flagged, got %d", br.QuoteUnverified)
+	}
+}
+
+// TestEmptyCitationIsNotAHallucination: omitting the citation is "no
+// answer", not a fabricated one — the hold stands. Releasing on an
+// omitted field would let a lazy model nullify every hold.
+func TestEmptyCitationIsNotAHallucination(t *testing.T) {
+	rv := NewReviewer(func(_ context.Context, _, _ string) ([]byte, error) {
+		return citedVerdictJSON(true, "no-branch-delete", "", ""), nil
+	})
+	rv.Votes, rv.Agree = 1, 1
+	rv.Categories = []string{"deleting a branch, tag, or remote ref"}
+
+	br := rv.ReviewBatch(context.Background(), []Candidate{{ID: "n1", Trigger: "t", Action: "a"}})
+	if len(br.Held) != 1 || br.RuleUngrounded != 0 {
+		t.Errorf("an omitted citation keeps the hold, got held=%v ungrounded=%d", br.Held, br.RuleUngrounded)
 	}
 }
