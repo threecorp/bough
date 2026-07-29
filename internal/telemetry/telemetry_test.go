@@ -43,8 +43,8 @@ func TestMissingLogIsEmptyNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a missing log must not be an error: %v", err)
 	}
-	if len(lg.Events) != 0 || len(lg.Drift()) != 0 {
-		t.Errorf("empty log should be quiet, got %d events / %d drift rows", len(lg.Events), len(lg.Drift()))
+	if len(lg.Events) != 0 || len(lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))) != 0 {
+		t.Errorf("empty log should be quiet, got %d events / %d drift rows", len(lg.Events), len(lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))))
 	}
 }
 
@@ -120,7 +120,7 @@ func TestDriftReportsAnUnattributedPullLoudly(t *testing.T) {
 	if got := PullsBySlug(lg.Events); got["ok"] != 1 || len(got) != 1 {
 		t.Errorf("an unattributed pull must not be counted under an empty slug: %v", got)
 	}
-	rows := lg.Drift()
+	rows := lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))
 	if len(rows) != 1 || !strings.Contains(rows[0], "moved-field") {
 		t.Fatalf("expected one loud drift row quoting the payload, got %v", rows)
 	}
@@ -136,7 +136,7 @@ func TestHealthyLogIsSilent(t *testing.T) {
 		// A judge pass with nothing to review is a legitimate zero, not drift.
 		Event{TS: at(4), Kind: KindJudge, Counts: map[string]int{"reviewed": 0}},
 	))
-	if rows := lg.Drift(); len(rows) != 0 {
+	if rows := lg.DriftIn(time.Time{}, time.Now().Add(time.Hour)); len(rows) != 0 {
 		t.Errorf("a healthy log must produce no drift rows, got %v", rows)
 	}
 }
@@ -149,7 +149,7 @@ func TestUnknownKindIsDriftNotSilence(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"ts":"2026-07-01T00:00:00Z","kind":"skill_render"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rows := load(t, path).Drift()
+	rows := load(t, path).DriftIn(time.Time{}, time.Now().Add(time.Hour))
 	if len(rows) != 1 || !strings.Contains(rows[0], "skill_render") {
 		t.Fatalf("an unknown kind must be reported by name, got %v", rows)
 	}
@@ -169,7 +169,7 @@ func TestTornLineIsDamageNotDisagreement(t *testing.T) {
 	if len(lg.Events) != 1 {
 		t.Errorf("the intact line must still be read, got %d events", len(lg.Events))
 	}
-	rows := lg.Drift()
+	rows := lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))
 	if len(rows) != 1 || !strings.Contains(rows[0], "not valid JSON") {
 		t.Fatalf("a torn line should be reported as damage, got %v", rows)
 	}
@@ -192,7 +192,7 @@ func TestDistinctIDsMeasuresBreadth(t *testing.T) {
 func TestUnjudgedPromotionsIsGreppable(t *testing.T) {
 	lg := load(t, writeLog(t,
 		Event{TS: at(1), Kind: KindJudge, Counts: map[string]int{"reviewed": 7, "unreviewed": 0}},
-		Event{TS: at(2), Kind: KindJudge, Counts: map[string]int{"reviewed": 2, "unreviewed": 5}},
+		Event{TS: at(2), Kind: KindJudge, Counts: map[string]int{"reviewed": 2, CountUnjudgedPromoted: 5}},
 	))
 	if got := UnjudgedPromotions(lg.Events); got != 5 {
 		t.Errorf("unjudged promotions = %d, want 5", got)
@@ -226,7 +226,7 @@ func TestPreviewSaysItTruncated(t *testing.T) {
 	lg := load(t, writeLog(t,
 		Event{TS: at(1), Kind: KindSkillPull, Raw: json.RawMessage(long)},
 	))
-	rows := lg.Drift()
+	rows := lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))
 	if len(rows) != 1 {
 		t.Fatalf("want one drift row, got %v", rows)
 	}

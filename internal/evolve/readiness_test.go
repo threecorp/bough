@@ -30,7 +30,7 @@ func newGateFixture(t *testing.T) gateFixture {
 		coveragePath:  filepath.Join(dir, "skill-coverage.json"),
 	}
 	cov := &SkillCoverage{BySkill: map[string][]string{}}
-	for _, slug := range []string{"alpha", "beta", "gamma"} {
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
 		cov.Record(slug, []string{"i-" + slug})
 		if err := os.MkdirAll(filepath.Join(f.skillsDir, slug), 0o755); err != nil {
 			t.Fatal(err)
@@ -83,6 +83,7 @@ func (f gateFixture) healthy(t *testing.T) {
 	f.pull(t, "alpha", 3*24*time.Hour)
 	f.pull(t, "beta", 5*24*time.Hour)
 	f.pull(t, "gamma", 2*24*time.Hour)
+	f.pull(t, "delta", 4*24*time.Hour)
 }
 
 func TestReadyWhenThePullPathIsDemonstrablyFiring(t *testing.T) {
@@ -154,7 +155,7 @@ func TestRetiringSkillsNeverSubtracts(t *testing.T) {
 // portfolio used a month ago and never since is not carrying delivery.
 func TestQuietRecentWindowBlocks(t *testing.T) {
 	f := newGateFixture(t)
-	for _, slug := range []string{"alpha", "beta", "gamma"} {
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
 		f.pull(t, slug, 13*24*time.Hour) // inside history, outside the recent window
 	}
 	f.pull(t, "alpha", 20*24*time.Hour)
@@ -171,7 +172,7 @@ func TestQuietRecentWindowBlocks(t *testing.T) {
 // was measured, not the window that was asked for.
 func TestShortHistoryBlocksAndStatesTheRealAge(t *testing.T) {
 	f := newGateFixture(t)
-	for _, slug := range []string{"alpha", "beta", "gamma"} {
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
 		f.pull(t, slug, 2*24*time.Hour)
 	}
 	r := f.verdict()
@@ -253,7 +254,7 @@ func TestEmptyCoverageRegistryBlocks(t *testing.T) {
 // "the portfolio is not being used", so the row distinguishes them.
 func TestStaleTelemetrySaysSo(t *testing.T) {
 	f := newGateFixture(t)
-	for _, slug := range []string{"alpha", "beta", "gamma"} {
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
 		f.pull(t, slug, 30*24*time.Hour)
 	}
 	if d := detailOf(f.verdict(), "and still firing"); !strings.Contains(d, "newest event is") {
@@ -273,6 +274,13 @@ func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
 	r := f.verdict()
 	if !r.Ready() {
 		t.Fatalf("a stale registry entry must not block delivery: %s", blockerNames(r))
+	}
+	// It must, however, stop suppressing what it can no longer deliver.
+	if _, ok := r.Coverage.CoveredIDs()["i-beta"]; ok {
+		t.Error("a skill that is gone must not keep suppressing its instincts")
+	}
+	if _, ok := r.Coverage.CoveredIDs()["i-alpha"]; !ok {
+		t.Error("the surviving skills must still suppress theirs")
 	}
 	if detailOf(r, "coverage registry matches the skills on disk") != "" {
 		t.Fatal("the advisory must not be computed before WithAdvisory()")
@@ -339,5 +347,73 @@ func TestNoNoteWhenEveryPullIsRegistered(t *testing.T) {
 	f.healthy(t)
 	if d := detailOf(f.verdict(), "the pull path is firing"); strings.Contains(d, "WERE pulled") {
 		t.Errorf("no note is needed when every pull is registered, got %q", d)
+	}
+}
+
+// TestDriftOlderThanTheWindowStopsBlocking is the regression for a gate
+// that could never be satisfied again. The self-check read the whole
+// log while every other row read the window, and nothing rotates the
+// log — so one unattributable line closed the gate permanently, long
+// after the writer that produced it had been fixed. Measured on the
+// released binary: a corpus reporting ON flipped to WAIT from a line
+// dated 100 days back.
+func TestDriftOlderThanTheWindowStopsBlocking(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{
+		TS:   refNow.Add(-100 * 24 * time.Hour),
+		Kind: telemetry.KindSkillPull,
+		Raw:  []byte(`{"tool_name":"Skill"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.verdict(); !r.Ready() {
+		t.Fatalf("drift 100 days outside a 14d window must not block: %s", blockerNames(r))
+	}
+}
+
+// TestDriftInsideTheWindowStillBlocks is the other half: the row must
+// keep firing while the disagreement is live, or the fix above would
+// have removed the check instead of scoping it.
+func TestDriftInsideTheWindowStillBlocks(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{
+		TS:   refNow.Add(-2 * time.Hour),
+		Kind: telemetry.KindSkillPull,
+		Raw:  []byte(`{"tool_name":"Skill"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("drift inside the window must block")
+	}
+	if !strings.Contains(blockerNames(r), "gate self-check") {
+		t.Errorf("expected the self-check to be the blocker, got %s", blockerNames(r))
+	}
+}
+
+// TestDeletedPortfolioClosesTheGateAtOnce: telemetry is history, and
+// history keeps reporting a portfolio deleted this morning. Without an
+// on-disk check the gate stayed open for the rest of the window,
+// suppressing instincts nothing was left to deliver.
+func TestDeletedPortfolioClosesTheGateAtOnce(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if r := f.verdict(); !r.Ready() {
+		t.Fatalf("fixture should start READY, blocked by: %s", blockerNames(r))
+	}
+	if err := os.RemoveAll(f.skillsDir); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("a portfolio that no longer exists must not keep the gate open")
+	}
+	if d := detailOf(r, "the pull path is firing"); !strings.Contains(d, "GONE from disk") {
+		t.Errorf("the row should say the skills are gone, got %q", d)
 	}
 }

@@ -48,6 +48,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Kind names what an event records. It is a closed set: a line whose
@@ -252,16 +253,42 @@ func DistinctIDs(events []Event) int {
 	return len(seen)
 }
 
+// CountUnjudgedPromoted and CountUnjudgedStaged are the two tallies a
+// judge event carries for candidates that got no verdict. They are
+// SEPARATE because the gate does two different things with them, and
+// only one of them is alarming:
+//
+//   - promoted: the model could not answer, the gate failed open, and
+//     the candidate is in the corpus unscreened;
+//   - staged: the run was interrupted or the operator's own call budget
+//     ran out, so the candidate was left in staging for the next pass.
+//
+// Folding both into one "unreviewed" number made `bough ops` report
+// promotions that had explicitly not happened — the observer prints
+// "left STAGED, not promoted" for the same run.
+const (
+	CountUnjudgedPromoted = "unjudged_promoted"
+	CountUnjudgedStaged   = "unjudged_staged"
+)
+
 // UnjudgedPromotions totals the candidates that reached the corpus
 // without a verdict. The gate fails open on purpose, so this number is
-// how an operator finds out that it did.
-func UnjudgedPromotions(events []Event) int {
+// how an operator finds out that it did. Candidates left staged are NOT
+// counted here — see UnjudgedStaged.
+func UnjudgedPromotions(events []Event) int { return sumCount(events, CountUnjudgedPromoted) }
+
+// UnjudgedStaged totals the candidates a run left in staging without a
+// verdict. Not alarming on its own: the next pass adopts and judges
+// them. It is reported so the two numbers are never read as one.
+func UnjudgedStaged(events []Event) int { return sumCount(events, CountUnjudgedStaged) }
+
+func sumCount(events []Event, key string) int {
 	n := 0
 	for _, e := range events {
 		if e.Kind != KindJudge {
 			continue
 		}
-		n += e.Counts["unreviewed"]
+		n += e.Counts[key]
 	}
 	return n
 }
@@ -297,9 +324,9 @@ func (l *Log) Newest() (time.Time, bool) {
 	return newest, true
 }
 
-// Drift reports lines that decoded but that this reader could not make
-// sense of — the writer and the reader disagreeing, rather than nothing
-// having happened.
+// DriftIn reports lines that decoded but that this reader could not
+// make sense of — the writer and the reader disagreeing, rather than
+// nothing having happened.
 //
 // The predicate is deliberately ASYMMETRIC to the parser. The parser is
 // strict: an unattributed pull contributes zero. The tripwire asks the
@@ -307,10 +334,31 @@ func (l *Log) Newest() (time.Time, bool) {
 // something?" — so a zero that should have been a number becomes a loud
 // row instead of a believable one. Healthy lines are silent, so a
 // correct log produces no noise.
-func (l *Log) Drift() []string {
+//
+// It takes a WINDOW, and the window must be the one the caller's counts
+// come from. An earlier version read the whole log, which made the
+// check unsatisfiable: the log is append-only with no rotation, so a
+// payload shape that moved once, was fixed, and has long since aged out
+// of the window went on blocking forever — a false WAIT with no end,
+// which is the incident this whole gate exists to prevent, not a
+// stricter version of it. A drift row must mean "the numbers beside it
+// are unreliable", and only in-window lines feed those numbers.
+//
+// Unparsed lines are the exception and are always reported: a line that
+// is not JSON carries no timestamp, so it cannot be placed inside or
+// outside any window, and it is damage rather than disagreement.
+func (l *Log) DriftIn(from, to time.Time) []string {
+	out := driftRows(l.Window(from, to))
+	if l.Unparsed > 0 {
+		out = append(out, fmt.Sprintf("%d line(s) are not valid JSON — a torn or truncated write", l.Unparsed))
+	}
+	return out
+}
+
+func driftRows(events []Event) []string {
 	var out []string
 	unknown := map[string]int{}
-	for _, e := range l.Events {
+	for _, e := range events {
 		switch e.Kind {
 		case KindSkillPull:
 			// A pull the writer could not attribute kept its payload.
@@ -335,9 +383,6 @@ func (l *Log) Drift() []string {
 	for _, k := range sortedKeys(unknown) {
 		out = append(out, fmt.Sprintf("%d line(s) carry an unknown kind %q — the writer is ahead of this reader", unknown[k], k))
 	}
-	if l.Unparsed > 0 {
-		out = append(out, fmt.Sprintf("%d line(s) are not valid JSON — a torn or truncated write", l.Unparsed))
-	}
 	return out
 }
 
@@ -351,9 +396,17 @@ func preview(raw json.RawMessage) string {
 	if len(s) <= maxPreviewBytes {
 		return s
 	}
+	// Cut on a rune boundary. A byte index lands mid-rune on any payload
+	// carrying a non-ASCII path or prompt fragment, and emitting invalid
+	// UTF-8 into the row that exists to be read is its own small version
+	// of the failure this package is about.
+	cut := maxPreviewBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
 	// Say that it was cut. A silent truncation in a diagnostic row is
 	// the same class of lie the row exists to expose.
-	return fmt.Sprintf("%s… (%d bytes total)", s[:maxPreviewBytes], len(raw))
+	return fmt.Sprintf("%s… (%d bytes total)", s[:cut], len(raw))
 }
 
 func sortedKeys(m map[string]int) []string {

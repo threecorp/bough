@@ -59,15 +59,19 @@ func IsCurated(path string) bool {
 // changes as the operator prunes, and it must travel with the corpus.
 const retireRegistryName = ".retired.json"
 
-// retireOverlap is the share of a retired skill's members a new cluster
-// may repeat before it counts as the same rejected knowledge.
+// defaultRetireOverlap is the share of a retired skill's members a new
+// cluster may repeat before it counts as the same rejected knowledge.
+// It seeds RetireRegistry.overlap rather than being read directly, so
+// the threshold is a per-registry value a test can tighten instead of a
+// package-scope knob — the same reasoning that put the exclusion window
+// on ExclusionWindow rather than in consts.
 //
 // Slug equality alone does not hold: clustering names a theme from its
 // members, so the next pass over a barely-changed corpus produces the
 // same grouping under a slightly different label, and a registry keyed
 // on the label lets it straight back in. What the operator rejected was
 // the GROUPING, not the string.
-const retireOverlap = 0.5
+const defaultRetireOverlap = 0.5
 
 // RetiredSkill is one rejection: why, and what was in it. The members
 // are what makes the rejection survive a rename.
@@ -85,6 +89,19 @@ type RetireRegistry struct {
 	// Slugs maps a retired slug to its rejection, so a later "why is
 	// this skill missing?" has an answer on disk.
 	Slugs map[string]RetiredSkill `json:"retired"`
+	// overlap is the member-overlap share at which a new cluster counts
+	// as a retired one. Seeded by LoadRetireRegistry; a zero value falls
+	// back to the default rather than meaning "match everything", so a
+	// registry built as a literal cannot silently reject every cluster.
+	overlap float64
+}
+
+// overlapThreshold is the share in force for this registry.
+func (r *RetireRegistry) overlapThreshold() float64 {
+	if r.overlap <= 0 {
+		return defaultRetireOverlap
+	}
+	return r.overlap
 }
 
 // UnmarshalJSON accepts both the current object form and the earlier
@@ -127,7 +144,7 @@ func LoadRetireRegistry(skillsDir string) (*RetireRegistry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &RetireRegistry{Slugs: map[string]RetiredSkill{}}, nil
+			return &RetireRegistry{Slugs: map[string]RetiredSkill{}, overlap: defaultRetireOverlap}, nil
 		}
 		return nil, fmt.Errorf("evolve: read retire registry %s: %w", path, err)
 	}
@@ -138,6 +155,7 @@ func LoadRetireRegistry(skillsDir string) (*RetireRegistry, error) {
 	if reg.Slugs == nil {
 		reg.Slugs = map[string]RetiredSkill{}
 	}
+	reg.overlap = defaultRetireOverlap
 	return reg, nil
 }
 
@@ -155,7 +173,7 @@ func (r *RetireRegistry) Retired(slug string) bool {
 // RetiredAs reports whether emitting this slug with these members would
 // resurrect something the operator rejected, and names which rejection
 // it matched. A match is either the same slug or a member overlap of at
-// least retireOverlap against a retired entry.
+// least the registry's overlap threshold against a retired entry.
 //
 // Overlap is measured against the RETIRED skill's members: the question
 // is "is this the thing that was rejected", so a new cluster that
@@ -174,7 +192,11 @@ func (r *RetireRegistry) RetiredAs(slug string, members []string) (string, bool)
 	for _, m := range members {
 		have[m] = struct{}{}
 	}
-	for retiredSlug, e := range r.Slugs {
+	// Sorted, not map order: with two retired entries both over the
+	// threshold, Go's randomized iteration cited a different one on every
+	// run, so "which rejection blocked this" changed with no data change.
+	for _, retiredSlug := range r.sortedSlugs() {
+		e := r.Slugs[retiredSlug]
 		if len(e.Members) == 0 {
 			// Recorded before members were kept. Slug equality was
 			// already checked above, and guessing is worse than not.
@@ -186,7 +208,7 @@ func (r *RetireRegistry) RetiredAs(slug string, members []string) (string, bool)
 				shared++
 			}
 		}
-		if float64(shared)/float64(len(e.Members)) >= retireOverlap {
+		if float64(shared)/float64(len(e.Members)) >= r.overlapThreshold() {
 			return fmt.Sprintf("%s (%s) — %d of its %d instinct(s) are in this cluster, so this is the same grouping under a new label",
 				retiredSlug, e.Reason, shared, len(e.Members)), true
 		}

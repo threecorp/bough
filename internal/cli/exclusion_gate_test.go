@@ -69,24 +69,23 @@ func exclusionFixture(t *testing.T, pullPathFiring bool) (monoRoot, projectID st
 				t.Fatal(err)
 			}
 		}
+		// Every pulled skill exists in BOTH places: the evolved dir the
+		// gate stats, and the repo-local .claude/skills the host loads
+		// from. A pull only counts while the skill it loaded is still
+		// there, so a fixture that skips the evolved copy is modelling a
+		// deleted portfolio, not a healthy one.
 		for _, slug := range []string{"a", "b", "search-conventions"} {
-			d := filepath.Join(monoRoot, ".claude", "skills", slug)
-			if err := os.MkdirAll(d, 0o755); err != nil {
-				t.Fatal(err)
+			for _, d := range []string{
+				filepath.Join(monoRoot, ".claude", "skills", slug),
+				filepath.Join(layout.EvolvedSkillsDir(projectID), slug),
+			} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: "+slug+"\n---\n\nbody\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: "+slug+"\n---\n\nbody\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		// The registry's slug must also exist in the evolved dir, or the
-		// advisory stale check fires (it should not block, but the fixture
-		// should reflect a healthy portfolio).
-		d := filepath.Join(layout.EvolvedSkillsDir(projectID), "search-conventions")
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: search-conventions\n---\n\nbody\n"), 0o644); err != nil {
-			t.Fatal(err)
 		}
 	}
 	return monoRoot, projectID, layout
@@ -174,4 +173,37 @@ func TestExclusionReadinessLineNamesBlockers(t *testing.T) {
 		}
 	}
 	t.Errorf("readiness line is not self-describing: %v", lines)
+}
+
+// TestAdvisoryNotesAreRendered is the regression for a diagnostic that
+// was computed on every doctor run and then dropped: the Ready branch
+// never looked at Checks and the WAIT branch printed only Blockers(),
+// which filters to the blocking ones. The cost was paid, the comment
+// claimed it was rendered, and the operator could never see it.
+func TestAdvisoryNotesAreRendered(t *testing.T) {
+	monoRoot, projectID, layout := exclusionFixture(t, true)
+	_ = monoRoot
+	// Register a skill that is not on disk: a failing NON-blocking check.
+	cov, err := evolve.LoadSkillCoverage(layout.SkillCoverageFile(projectID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov.Record("a-skill-that-was-deleted", []string{"orphan-id"})
+	if err := cov.Save(layout.SkillCoverageFile(projectID), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := evolve.ExclusionReadiness(
+		layout.EvolvedSkillsDir(projectID),
+		layout.TelemetryFile(projectID),
+		layout.SkillCoverageFile(projectID),
+		time.Now(), evolve.DefaultExclusionWindow(),
+	).WithAdvisory()
+
+	notes := advisoryNotes(r)
+	if len(notes) == 0 {
+		t.Fatal("a failing advisory check must produce a rendered note")
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), "a-skill-that-was-deleted") {
+		t.Errorf("the note must name the missing skill, got %v", notes)
+	}
 }

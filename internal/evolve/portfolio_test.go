@@ -306,3 +306,29 @@ func TestWriteSkillRefusesARenamedRetiredCluster(t *testing.T) {
 		t.Error("nothing should have been written")
 	}
 }
+
+// TestRetirementAttributionIsDeterministic: two retired entries can both
+// clear the overlap bar, and Go randomises map iteration, so the cited
+// rejection changed between identical runs — an operator asking "which
+// rejection blocked this" got a different answer with no data change.
+func TestRetirementAttributionIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	reg := &RetireRegistry{Slugs: map[string]RetiredSkill{}}
+	if err := reg.Retire(dir, "zeta-theme", "too vague", []string{"i1", "i2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Retire(dir, "alpha-theme", "duplicated a rule", []string{"i1", "i2"}); err != nil {
+		t.Fatal(err)
+	}
+	members := []string{"i1", "i2", "i3"}
+	first, ok := reg.RetiredAs("some-new-label", members)
+	if !ok {
+		t.Fatal("the new cluster should have matched a retired entry")
+	}
+	for i := range 50 {
+		got, ok := reg.RetiredAs("some-new-label", members)
+		if !ok || got != first {
+			t.Fatalf("run %d cited %q, first run cited %q — attribution must not depend on map order", i, got, first)
+		}
+	}
+}

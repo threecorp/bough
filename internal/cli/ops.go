@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
@@ -31,10 +32,11 @@ import (
 // the operator to read it as "everything is fine", and the gap between
 // those two is where a broken loop lives for weeks.
 
-// opsWindow is how far back the summary counts. It matches the gate's
-// history window so the two cannot tell different stories about the
-// same log.
-func opsWindow() time.Duration { return 14 * 24 * time.Hour }
+// opsWindow is how far back the summary counts. It READS the gate's
+// window rather than restating it: two copies of "14 days" are equal
+// only until someone changes one, and then this summary reports a
+// healthy span wider than the one actually gating the switch.
+func opsWindow() time.Duration { return evolve.DefaultExclusionWindow().History }
 
 func newOpsCmd() *cobra.Command {
 	var generate bool
@@ -63,7 +65,13 @@ system must not change it.`,
 			ev.SetOut(out)
 			ev.SetErr(c.ErrOrStderr())
 			ev.SetArgs([]string{"--generate"})
-			return ev.Execute()
+			// ExecuteContext, not Execute: a freshly built command has no
+			// context, so the nested evolve would run under
+			// context.Background() and Ctrl-C could not interrupt an
+			// in-flight claude --print — the one thing an operator reaches
+			// for when a generate pass is spending calls they did not mean
+			// to spend.
+			return ev.ExecuteContext(c.Context())
 		},
 	}
 	cmd.Flags().BoolVar(&generate, "generate", false, "also run the evolve pass (the only step that writes)")
@@ -106,7 +114,7 @@ func renderUsageSummary(w io.Writer, now time.Time) {
 	// The drift row goes FIRST when it fires. Every number below it is a
 	// zero that means "I could not tell", and printing those first is how
 	// a broken parser reads as a finding.
-	if rows := log.Drift(); len(rows) > 0 {
+	if rows := log.DriftIn(now.Add(-opsWindow()), now); len(rows) > 0 {
 		fmt.Fprintf(w, "    ✗ SCHEMA DRIFT — the reader could not make sense of %d thing(s) in the log:\n", len(rows))
 		for _, r := range rows {
 			fmt.Fprintf(w, "        - %s\n", r)
@@ -116,24 +124,32 @@ func renderUsageSummary(w io.Writer, now time.Time) {
 	}
 
 	fmt.Fprintf(w, "    • skills pulled: %d pull(s) across %d skill(s) in the last %s%s\n",
-		totalOf(pulls), len(pulls), roundDaysDur(opsWindow()), topSlugs(pulls))
+		totalOf(pulls), len(pulls), evolve.RoundDays(opsWindow()), topSlugs(pulls))
 	fmt.Fprintf(w, "    • retrieval breadth: %d distinct instinct(s) injected in the last %s\n",
-		telemetry.DistinctIDs(win), roundDaysDur(opsWindow()))
+		telemetry.DistinctIDs(win), evolve.RoundDays(opsWindow()))
 
-	unjudged := telemetry.UnjudgedPromotions(win)
+	// Promoted and staged are reported as two rows because they call for
+	// different actions and only one of them is alarming. Folding them
+	// into one number made this row announce promotions that the same run
+	// had explicitly refused to make.
+	promoted := telemetry.UnjudgedPromotions(win)
 	marker := "•"
-	if unjudged > 0 {
+	if promoted > 0 {
 		marker = "✗"
 	}
 	fmt.Fprintf(w, "    %s promoted without being judged: %d candidate(s) in the last %s\n",
-		marker, unjudged, roundDaysDur(opsWindow()))
-	if unjudged > 0 {
+		marker, promoted, evolve.RoundDays(opsWindow()))
+	if promoted > 0 {
 		fmt.Fprintln(w, "      The gate fails open on purpose, so this is knowledge that reached the")
 		fmt.Fprintln(w, "      corpus unscreened. Re-run the observer to judge what is still staged.")
 	}
+	if staged := telemetry.UnjudgedStaged(win); staged > 0 {
+		fmt.Fprintf(w, "    • left staged unjudged: %d candidate(s) — a run was interrupted or hit its\n", staged)
+		fmt.Fprintln(w, "      call budget. They are NOT in the corpus; the next observer pass judges them.")
+	}
 
 	if oldest, ok := log.Oldest(); ok {
-		fmt.Fprintf(w, "    • history: %s, from %s\n", roundDaysDur(now.Sub(oldest)), path)
+		fmt.Fprintf(w, "    • history: %s, from %s\n", evolve.RoundDays(now.Sub(oldest)), path)
 	}
 	fmt.Fprintln(w, "\n    A green run here establishes that the hooks fired and the numbers parse.")
 	fmt.Fprintln(w, "    It does NOT establish that the instincts are correct, that the skills say")
@@ -182,12 +198,4 @@ func topSlugs(pulls map[string]int) string {
 		names += fmt.Sprintf(", %s×%d", e.slug, e.n)
 	}
 	return names + ")"
-}
-
-func roundDaysDur(d time.Duration) string {
-	days := d.Hours() / 24
-	if days < 1 {
-		return fmt.Sprintf("%.1fh", d.Hours())
-	}
-	return fmt.Sprintf("%.0fd", days)
 }

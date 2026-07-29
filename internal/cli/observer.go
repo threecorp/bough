@@ -206,7 +206,11 @@ func newObserverRunOnceCmd() *cobra.Command {
 					staged = append(staged, stranded...)
 				}
 			}
-			gate := instinctgate.New(gateConfigFor(cmd, root))
+			// One read of .bough.yaml for both halves of the gate: the
+			// deterministic screen and the judge's categories must come
+			// from the same version of the same file.
+			gateCfg, forbidden := gateSettings(cmd, root)
+			gate := instinctgate.New(gateCfg)
 			// The judge is opt-in per pass: it spends LLM calls, so an
 			// operator who wants only the free deterministic layers passes
 			// --no-judge rather than having to reason about cost every run.
@@ -223,7 +227,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 					if budget <= 0 {
 						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
 					}
-					return newGateReviewer(model, budget, gateForbiddenActions(cmd, root))
+					return newGateReviewer(model, budget, forbidden)
 				}
 			}
 			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, newJudge, now)
@@ -259,19 +263,31 @@ func newObserverRunOnceCmd() *cobra.Command {
 					outcome.Reviewed, outcome.ReviewFailed)
 			}
 			// Record the verdict tallies. The gate fails open by design, so
-			// "unreviewed" is the number that says knowledge reached the
-			// corpus without being screened — and until now it existed only
-			// in the stdout of a run nobody kept. Written after the lines
-			// above so the log carries the same numbers the operator read.
+			// a candidate that got no verdict is the number worth keeping —
+			// and until now it existed only in the stdout of a run nobody
+			// kept. Written after the lines above so the log carries the
+			// same numbers the operator read.
+			//
+			// The unjudged ones are split by what actually happened to
+			// them. An interrupt or an exhausted call budget leaves them
+			// STAGED (screenAndPromote drops them from res.Cleared); only a
+			// model that could not answer promotes them unscreened. One
+			// combined number made the reader announce promotions this very
+			// run had refused to make.
+			unjudgedPromoted, unjudgedStaged := outcome.ReviewFailed, 0
+			if outcome.ReviewCapped || outcome.ReviewCancelled {
+				unjudgedPromoted, unjudgedStaged = 0, outcome.ReviewFailed
+			}
 			telemetry.NewWriter(layout.TelemetryFile(ident.ID)).
 				AppendBestEffort(telemetry.Event{
 					Kind: telemetry.KindJudge,
 					Counts: map[string]int{
-						"candidates": outcome.ReviewCandidates,
-						"reviewed":   outcome.Reviewed,
-						"unreviewed": outcome.ReviewFailed,
-						"held":       outcome.Quarantined,
-						"emitted":    outcome.Emitted,
+						"candidates":                    outcome.ReviewCandidates,
+						"reviewed":                      outcome.Reviewed,
+						telemetry.CountUnjudgedPromoted: unjudgedPromoted,
+						telemetry.CountUnjudgedStaged:   unjudgedStaged,
+						"held":                          outcome.Quarantined,
+						"emitted":                       outcome.Emitted,
 					},
 				})
 			if outcome.Superseded > 0 {

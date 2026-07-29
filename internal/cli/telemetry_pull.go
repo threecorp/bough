@@ -89,12 +89,21 @@ func dispatchSkillPull(c *cobra.Command, payload []byte) {
 	})
 }
 
-// resolveHomunculusTelemetryPath mirrors resolveHomunculusObsPath so a
-// session inside a worktree records against the same project the
-// observations pool into. Two resolvers that could disagree about which
+// resolveHomunculusTelemetryPath asks the shared resolver for this
+// project's telemetry file. It goes through resolveHomunculusFile rather
+// than repeating the cwd → identity → ensure-dirs walk, because a
+// session inside a worktree must record against the same project the
+// observations pool into: two resolvers that could disagree about which
 // project a session belongs to would split the very history the gate
-// reads.
+// reads, and keeping two copies in step is left to whoever edits one.
 func resolveHomunculusTelemetryPath() string {
+	return resolveHomunculusFile(homunculus.Layout.TelemetryFile)
+}
+
+// resolveHomunculusFile resolves the current project and returns the
+// file `pick` names for it, or "" when the project cannot be resolved.
+// Callers differ only in which file they want.
+func resolveHomunculusFile(pick func(homunculus.Layout, string) string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""
@@ -107,5 +116,5 @@ func resolveHomunculusTelemetryPath() string {
 	if err := layout.EnsureProjectDirs(ident.ID); err != nil {
 		return ""
 	}
-	return layout.TelemetryFile(ident.ID)
+	return pick(layout, ident.ID)
 }

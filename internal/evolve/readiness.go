@@ -173,7 +173,13 @@ func ExclusionReadiness(skillsDir, telemetryPath, coveragePath string, now time.
 	// cannot make sense of what the writer produced, every number below
 	// it is a zero that means "I could not tell", and presenting those
 	// first is how a broken parser reads as a finding.
-	drift := log.Drift()
+	//
+	// It reads the SAME window as the counts below it. Reading the whole
+	// log made this row unsatisfiable: nothing rotates the log, so one
+	// unattributable line blocked the gate forever — including long after
+	// the writer was fixed — which is a false WAIT with no end rather
+	// than a strict gate.
+	drift := log.DriftIn(now.Add(-win.History), now)
 	r.Checks = append(r.Checks, ReadinessCheck{
 		Name:     "gate self-check",
 		Passed:   len(drift) == 0,
@@ -183,13 +189,20 @@ func ExclusionReadiness(skillsDir, telemetryPath, coveragePath string, now time.
 
 	pulls := telemetry.PullsBySlug(log.Window(now.Add(-win.History), now))
 	inPortfolio := pulledSlugsCoveredBy(pulls, cov)
+	// A pull is evidence only while the skill it loaded still exists.
+	// Telemetry is history, and history keeps reporting a portfolio that
+	// was deleted this morning: without this filter, wiping every skill
+	// left the gate open for the rest of the window, suppressing
+	// instincts that nothing was left to deliver — the exact double-blind
+	// loss the top of this file says the gate exists to prevent.
+	live, gone := splitByPresence(inPortfolio, skillsDir)
 	r.Checks = append(r.Checks, ReadinessCheck{
 		Name:     "the pull path is firing",
-		Passed:   len(inPortfolio) >= win.MinPulledSlugs,
+		Passed:   len(live) >= win.MinPulledSlugs,
 		Blocking: true,
-		Detail: fmt.Sprintf("%d of the registry's skill(s) were pulled in the last %s%s, need %d — a deployed skill nothing loads is not delivery%s",
-			len(inPortfolio), roundDays(win.History), namedList(inPortfolio), win.MinPulledSlugs,
-			unregisteredNote(pulls, inPortfolio)),
+		Detail: fmt.Sprintf("%d of the registry's skill(s) were pulled in the last %s and are still on disk%s, need %d — a deployed skill nothing loads is not delivery%s%s",
+			len(live), RoundDays(win.History), namedList(live), win.MinPulledSlugs,
+			goneNote(gone), unregisteredNote(pulls, inPortfolio)),
 	})
 
 	recent := telemetry.PullsBySlug(log.Window(now.Add(-win.Recent), now))
@@ -198,7 +211,7 @@ func ExclusionReadiness(skillsDir, telemetryPath, coveragePath string, now time.
 		Name:     "and still firing",
 		Passed:   recentN > 0,
 		Blocking: true,
-		Detail:   fmt.Sprintf("%d pull(s) in the last %s%s", recentN, roundDays(win.Recent), staleSuffix(log, now)),
+		Detail:   fmt.Sprintf("%d pull(s) in the last %s%s", recentN, RoundDays(win.Recent), staleSuffix(log, now)),
 	})
 
 	r.Checks = append(r.Checks, historyCheck(log, now, win))
@@ -220,8 +233,27 @@ func ExclusionReadiness(skillsDir, telemetryPath, coveragePath string, now time.
 			Detail:   staleDetail(stale),
 		}
 	}
-	r.Coverage = cov
+	// The verdict carries a coverage view with the GONE skills dropped.
+	// Suppression is per instinct id, so a skill that no longer exists
+	// must stop suppressing its ids even while the rest of the portfolio
+	// is healthy — otherwise deleting one skill silently withholds
+	// exactly the knowledge it used to deliver, from both paths at once.
+	// A new value, not a mutation: the registry belongs to the file.
+	r.Coverage = coverageOnDisk(cov, skillsDir)
 	return r
+}
+
+// coverageOnDisk returns a copy of the registry keeping only the skills
+// whose SKILL.md is still present.
+func coverageOnDisk(cov *SkillCoverage, skillsDir string) *SkillCoverage {
+	out := &SkillCoverage{BySkill: make(map[string][]string, len(cov.BySkill)), UpdatedAt: cov.UpdatedAt}
+	for slug, ids := range cov.BySkill {
+		if _, err := os.Stat(filepath.Join(skillsDir, slug, "SKILL.md")); err != nil {
+			continue
+		}
+		out.BySkill[slug] = ids
+	}
+	return out
 }
 
 // historyCheck states the age it actually measured, not the age it was
@@ -235,7 +267,7 @@ func historyCheck(log *telemetry.Log, now time.Time, win ExclusionWindow) Readin
 		return ReadinessCheck{
 			Name: "enough history to judge by", Passed: false, Blocking: true,
 			Detail: fmt.Sprintf("no telemetry recorded yet — %s of history is needed before a quiet week can be told apart from an unused portfolio",
-				roundDays(win.History)),
+				RoundDays(win.History)),
 		}
 	}
 	have := now.Sub(oldest)
@@ -244,8 +276,33 @@ func historyCheck(log *telemetry.Log, now time.Time, win ExclusionWindow) Readin
 		Passed:   have >= win.History,
 		Blocking: true,
 		Detail: fmt.Sprintf("the oldest event is %s old, need %s before a quiet week can be told apart from an unused portfolio",
-			roundDays(have), roundDays(win.History)),
+			RoundDays(have), RoundDays(win.History)),
 	}
+}
+
+// splitByPresence partitions slugs into those whose SKILL.md is still
+// on disk and those that are gone. Both halves stay sorted, so a
+// rendered list is stable.
+func splitByPresence(slugs []string, skillsDir string) (live, gone []string) {
+	for _, s := range slugs {
+		if _, err := os.Stat(filepath.Join(skillsDir, s, "SKILL.md")); err != nil {
+			gone = append(gone, s)
+			continue
+		}
+		live = append(live, s)
+	}
+	return live, gone
+}
+
+// goneNote names skills that were pulled and have since disappeared.
+// Silence when there are none: the row is already long, and this is the
+// unusual case worth spending words on.
+func goneNote(gone []string) string {
+	if len(gone) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(". %d skill(s) were pulled in this window but are GONE from disk%s — their pulls are history, not delivery",
+		len(gone), namedList(gone))
 }
 
 // pulledSlugsCoveredBy narrows the pulled set to skills the coverage
@@ -296,7 +353,7 @@ func staleSuffix(log *telemetry.Log, now time.Time) string {
 	if age < 48*time.Hour {
 		return ""
 	}
-	return fmt.Sprintf("; the newest event is %s old — check that the hooks are still installed", roundDays(age))
+	return fmt.Sprintf("; the newest event is %s old — check that the hooks are still installed", RoundDays(age))
 }
 
 func namedList(slugs []string) string {
@@ -323,7 +380,11 @@ func driftDetail(drift []string) string {
 		suffix, strings.Join(shown, "; "))
 }
 
-func roundDays(d time.Duration) string {
+// RoundDays renders a duration the way every readiness and usage row
+// renders one. It is exported so `bough ops` prints the same shape for
+// the same window: two spellings of "14 days" side by side read as two
+// different windows.
+func RoundDays(d time.Duration) string {
 	days := d.Hours() / 24
 	if days < 1 {
 		return fmt.Sprintf("%.1fh", d.Hours())
@@ -348,6 +409,6 @@ func staleDetail(stale []string) string {
 	if len(stale) == 0 {
 		return "every recorded skill still exists on disk"
 	}
-	return fmt.Sprintf("%d registry entr(y/ies) name a skill that is gone%s — their ids would stay suppressed while nothing delivers them",
+	return fmt.Sprintf("%d registry entr(y/ies) name a skill that is gone%s — their ids are being PUSHED again rather than suppressed, so nothing is lost; run the evolve pass to bring the registry back in line",
 		len(stale), namedList(stale))
 }

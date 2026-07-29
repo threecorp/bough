@@ -109,7 +109,7 @@ func TestUnjudgedPromotionsAreMarkedNotBuried(t *testing.T) {
 	w := telemetry.NewWriter(path)
 	if err := w.Append(telemetry.Event{
 		TS: now.Add(-time.Hour), Kind: telemetry.KindJudge,
-		Counts: map[string]int{"reviewed": 2, "unreviewed": 5},
+		Counts: map[string]int{"reviewed": 2, telemetry.CountUnjudgedPromoted: 5},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,5 +176,55 @@ func TestTopSlugsSaysWhenItTruncates(t *testing.T) {
 	}
 	if short := topSlugs(map[string]int{"a": 1}); strings.Contains(short, "showing") {
 		t.Errorf("a complete list must not claim truncation, got %q", short)
+	}
+}
+
+// TestStagedUnjudgedIsNotReportedAsPromoted is the regression for a
+// false alarm on the loudest row here. Interrupting a run, or running
+// out of the judge budget, leaves candidates STAGED — the observer even
+// prints "left STAGED, not promoted" — but both were folded into the
+// same "unreviewed" number, so this summary announced promotions that
+// the very same run had refused to make.
+func TestStagedUnjudgedIsNotReportedAsPromoted(t *testing.T) {
+	path := opsHarness(t)
+	now := time.Now()
+	w := telemetry.NewWriter(path)
+	if err := w.Append(telemetry.Event{
+		TS:     now.Add(-2 * time.Hour),
+		Kind:   telemetry.KindJudge,
+		Counts: map[string]int{"reviewed": 0, telemetry.CountUnjudgedStaged: 6},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := summary(t, now)
+	if strings.Contains(out, "✗ promoted without being judged: 6") {
+		t.Errorf("staged candidates must not be reported as promoted:\n%s", out)
+	}
+	if !strings.Contains(out, "left staged unjudged: 6") {
+		t.Errorf("staged candidates must still be reported, on their own row:\n%s", out)
+	}
+	if !strings.Contains(out, "NOT in the corpus") {
+		t.Errorf("the row must say where they are:\n%s", out)
+	}
+}
+
+// TestDriftOutsideTheWindowIsNotShown keeps this summary and the gate
+// telling one story: both count inside the window, so both must
+// self-check inside it. A row about a line no number here reads would
+// send an operator to fix something that is not affecting anything.
+func TestDriftOutsideTheWindowIsNotShown(t *testing.T) {
+	path := opsHarness(t)
+	now := time.Now()
+	w := telemetry.NewWriter(path)
+	for _, e := range []telemetry.Event{
+		{TS: now.Add(-2 * time.Hour), Kind: telemetry.KindSkillPull, Slug: "alpha"},
+		{TS: now.Add(-100 * 24 * time.Hour), Kind: telemetry.KindSkillPull, Raw: []byte(`{"tool_name":"Skill"}`)},
+	} {
+		if err := w.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := summary(t, now); strings.Contains(out, "SCHEMA DRIFT") {
+		t.Errorf("drift 100 days outside the window must not be reported here:\n%s", out)
 	}
 }

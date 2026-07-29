@@ -558,20 +558,36 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 // than skip it. When the config loads, the operator's `instinct.gate`
 // block decides — defaulting on when the block is absent (GateEnabled).
 func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
+	c, _ := gateSettings(cmd, root)
+	return c
+}
+
+// gateSettings reads .bough.yaml ONCE and derives both halves of the
+// gate from it: the deterministic layer's config and the categories the
+// judge weighs. They were resolved by two functions that each opened the
+// file, so a run parsed it twice and — if it changed in between — could
+// screen against one version and judge against another. A tripwire and a
+// judge configured from different versions of the same file is the split
+// the configurable categories were added to close.
+func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string) {
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
 			Enabled:    true,
 			Denylist:   loadDenylistQuiet(root, ""),
 			Governance: instinctgate.LoadGovernance(governancePaths(root, nil)),
-		}
+		}, instinctgate.DefaultForbiddenActions
+	}
+	forbidden := cfg.Instinct.Gate.ForbiddenActions
+	if len(forbidden) == 0 {
+		forbidden = instinctgate.DefaultForbiddenActions
 	}
 	return instinctgate.Config{
 		Enabled:    cfg.Instinct.GateEnabled(),
 		AllowIDs:   cfg.Instinct.Gate.AllowIDs,
 		Denylist:   loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
 		Governance: instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths)),
-	}
+	}, forbidden
 }
 
 // gateForbiddenActions resolves the categories the LLM layer judges
@@ -581,11 +597,8 @@ func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
 // rather than to nothing: a judge with an empty category list clears
 // everything while reporting a full review.
 func gateForbiddenActions(cmd *cobra.Command, root string) []string {
-	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
-	if err != nil || len(cfg.Instinct.Gate.ForbiddenActions) == 0 {
-		return instinctgate.DefaultForbiddenActions
-	}
-	return cfg.Instinct.Gate.ForbiddenActions
+	_, forbidden := gateSettings(cmd, root)
+	return forbidden
 }
 
 // DefaultDenylistPath is where bough looks for the untracked denylist

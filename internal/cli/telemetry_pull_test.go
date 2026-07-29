@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -143,7 +144,7 @@ func TestMovedSlugFieldBecomesDriftNotZero(t *testing.T) {
 	if len(telemetry.PullsBySlug(lg.Events)) != 0 {
 		t.Error("it must not be counted under an empty slug")
 	}
-	rows := lg.Drift()
+	rows := lg.DriftIn(time.Time{}, time.Now().Add(time.Hour))
 	if len(rows) != 1 || !strings.Contains(rows[0], "moved") {
 		t.Fatalf("the moved field must surface as a drift row quoting the payload, got %v", rows)
 	}
