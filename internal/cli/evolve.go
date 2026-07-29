@@ -73,10 +73,6 @@ evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
 			layout := homunculus.NewLayout()
 			instincts, _ := homunculus.ScanInstincts(layout.InstinctsDir(ident.ID))
 			stdout := cmd.OutOrStdout()
-			if len(instincts) == 0 {
-				fmt.Fprintf(stdout, "no instincts under %s — run `bough observer run-once` first\n", layout.InstinctsDir(ident.ID))
-				return nil
-			}
 
 			labelsPath := layout.ClusterLabels(ident.ID)
 			labels, err := evolve.LoadLabels(labelsPath)
@@ -85,6 +81,20 @@ evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
 			}
 
 			th := evolve.DefaultThresholds()
+
+			if len(instincts) == 0 {
+				fmt.Fprintf(stdout, "no instincts under %s — run `bough observer run-once` first\n", layout.InstinctsDir(ident.ID))
+				if !generate {
+					return nil
+				}
+				// An empty corpus does not make the DEPLOY step a no-op.
+				// Retiring a skill is an operator action independent of
+				// corpus growth, and its enforcement lives in deploy: skip
+				// deploy here and a retirement recorded during a quiet
+				// stretch stays linked — invisible to the registry that
+				// forbids it — until the corpus happens to grow again.
+				return persistEvolveOutcome(stdout, cmd.ErrOrStderr(), ident, layout, labels, labelsPath, evolve.Outcome{}, th, noSymlink, nil)
+			}
 
 			// Preview path: GATE 1-4 only, no judge call.
 			if !generate {
