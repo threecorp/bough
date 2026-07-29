@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
@@ -63,16 +64,46 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// relative to the monorepo root, so the repo name itself — which
 	// matches a large share of the corpus and would drown short prompts
 	// — contributes nothing.
+	cfg := injectConfig(monoRoot)
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
+	}
+	// The files the session just opened are the strongest statement about
+	// what it is working on, and the prompt often does not contain them:
+	// "why is this failing?" names nothing. They join as context tokens, so
+	// they feed the exact channel (paths are identifier-shaped), the
+	// lexical channel and the relevance floor — the same three places the
+	// cwd's own segments feed.
+	opts.ContextTokens = append(opts.ContextTokens, opts.RecentFiles...)
+	// A non-English prompt reaches an English corpus through the operator's
+	// alias file or not at all: nothing tokenizes 予約 into "booking", so
+	// without this the lexical channel scores a Japanese prompt against
+	// vocabulary it cannot contain.
+	if cfg != nil {
+		opts.ContextTokens = append(opts.ContextTokens,
+			aliasExpansions(resolveUnderRoot(monoRoot, cfg.Instinct.Select.AliasPath), opts.Prompt)...)
 	}
 	// Suppressing skill-covered instincts is gated on evidence, not on a
 	// config flag alone: an operator who turns it on before the pull path
 	// works loses the knowledge from both paths at once. The readiness
 	// check is the authority, so a premature `exclude_skill_covered: true`
 	// cannot take effect.
+	// One exclusion set with one consumer — this injector. The operator's
+	// manual register and the skill-covered set answer different questions
+	// ("I have heard this enough" vs "a skill already delivers this") but
+	// they are the same decision at the point of delivery, and a second
+	// consumer with its own idea of "covered" is how the two paths drift
+	// into disagreeing about what was pushed.
 	if opts.ExcludeIDs == nil {
 		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
+		if cfg != nil {
+			for id := range manualExclusions(resolveUnderRoot(monoRoot, cfg.Instinct.Select.ExclusionsPath)) {
+				if opts.ExcludeIDs == nil {
+					opts.ExcludeIDs = map[string]struct{}{}
+				}
+				opts.ExcludeIDs[id] = struct{}{}
+			}
+		}
 	}
 	// Which family each instinct belongs to, so one family of restatements
 	// cannot take the whole block. Stamped by the offline evolve pass
@@ -81,10 +112,12 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// cap exists to trim redundancy, so failing to read it must not start
 	// dropping instincts on a guess. `bough doctor` reports the stamped
 	// population precisely so that state is visible.
-	if opts.ClusterOf == nil {
-		if ca, cerr := evolve.LoadClusterAssignments(layout.ClusterAssignmentsFile(ident.ID)); cerr == nil {
-			opts.ClusterOf = ca.ByInstinct
-		}
+	assignments, aerr := evolve.LoadClusterAssignments(layout.ClusterAssignmentsFile(ident.ID))
+	if aerr != nil {
+		assignments = nil
+	}
+	if opts.ClusterOf == nil && assignments != nil {
+		opts.ClusterOf = assignments.ByInstinct
 	}
 	var block string
 	var ids []string
@@ -106,7 +139,11 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// NOT derived from opts.MaxBytes: the two blocks have separate
 	// allowances that sum under the total, so tuning the instinct block
 	// must not silently shrink the operator's corrections.
-	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), 0)
+	var lessonPaths []string
+	if cfg != nil {
+		lessonPaths = cfg.Instinct.Lessons.Paths
+	}
+	lessons := inject.LessonsBlock(monoRoot, lessonPaths, 0)
 	// The selection is recorded even when it chose NOTHING. A prompt that
 	// correctly selected zero instincts is a data point — the share of
 	// empty selections is a selector-health signal, and skipping the
@@ -129,7 +166,13 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// when the batch gains a REVIEWED marker, because a notice that never
 	// clears is a notice that gets ignored.
 	notice := quarantineNotice(layout, ident.ID)
-	if notice == "" && lessons == "" && len(ids) == 0 {
+	// Routing new arrivals into rules / skills / the tail is the only
+	// manual step left, so it is the only one that can silently stop
+	// happening — and a corpus filling with restatements is invisible from
+	// inside a session. Appended after the block rather than prepended: it
+	// is about the corpus's upkeep, not about this turn.
+	backlog := arrivalBacklogNotice(project, assignments)
+	if notice == "" && lessons == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
 	fmt.Fprint(out, notice)
@@ -137,6 +180,7 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
+	fmt.Fprint(out, backlog)
 	return nil
 }
 
@@ -181,16 +225,40 @@ func quarantineNotice(layout homunculus.Layout, projectID string) string {
 		held, batches, root)
 }
 
-// lessonsPaths reads the operator's lessons-file locations from
-// .bough.yaml, falling back to the conventional set. A missing or
-// unreadable config is not an error: the hook fires on every prompt, so
-// it degrades to the conventions rather than failing the turn.
-func lessonsPaths(root string) []string {
+// arrivalBacklogNotice announces that enough instincts have arrived since
+// the last clustering pass to be worth routing. Empty below the threshold,
+// so a corpus keeping up adds zero bytes to the prompt.
+func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.ClusterAssignments) string {
+	n, overdue := evolve.DefaultArrivalBacklog().Count(project, assignments)
+	if !overdue {
+		return ""
+	}
+	return fmt.Sprintf("\n[bough] %d instinct(s) have arrived since the last clustering pass — run `bough evolve` to see what has grown into a family, then `bough evolve --generate` to fold the restatements and route the rest.\n",
+		n)
+}
+
+// injectConfig loads .bough.yaml for the injector's optional inputs
+// (lessons paths, the manual exclusion register, the alias file). A
+// missing or unreadable config is not an error: the hook fires on every
+// prompt, so it degrades to the conventions and defaults rather than
+// failing the turn. nil means "nothing configured".
+func injectConfig(root string) *config.Config {
 	cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
 	if err != nil {
 		return nil
 	}
-	return cfg.Instinct.Lessons.Paths
+	return cfg
+}
+
+// resolveUnderRoot interprets a configured path relative to the monorepo
+// root, the way every other path in .bough.yaml is read. Absolute paths
+// are left alone, and empty stays empty so the caller can tell
+// "unconfigured" from "configured to the root".
+func resolveUnderRoot(root, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }
 
 // newInjectContextCmd wires `bough inject-context` — the

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/ikeikeikeike/bough/internal/homunculus"
 )
 
 // A per-cluster cap exists so one family of restatements cannot take the
@@ -105,6 +107,57 @@ func (c *ClusterAssignments) StampedAmong(ids []string) int {
 		}
 	}
 	return n
+}
+
+// ArrivalBacklog decides when enough instincts have arrived since the
+// last clustering pass to be worth telling the operator about.
+//
+// Routing new arrivals is the only manual step left in the loop, which
+// makes it the only one that can silently stop happening — and the
+// symptom, a corpus slowly filling with restatements, is invisible from
+// inside a session. So it is announced in the prompt rather than logged
+// somewhere nobody reads.
+//
+// The threshold is a constructor-seeded field, not a package constant: it
+// is an operational knob, and a test needs to reach the loud path without
+// minting sixty fixtures.
+type ArrivalBacklog struct {
+	Threshold int
+}
+
+// DefaultArrivalBacklog is the published threshold.
+func DefaultArrivalBacklog() ArrivalBacklog {
+	return ArrivalBacklog{Threshold: 60} // ~a fortnight of arrivals at the observed mint rate
+}
+
+// Count returns how many instincts arrived after the pass that wrote ca,
+// and whether that is enough to announce.
+//
+// Arrival is FirstSeen, not the file's mtime: re-observing an old note
+// bumps its mtime, and counting that would let a corpus nobody has added
+// to keep re-announcing a backlog — a notice that cannot be cleared is a
+// notice that gets ignored, which is the failure mode this whole notice
+// exists to avoid. An unstamped corpus counts everything, since nothing
+// has ever been routed.
+func (b ArrivalBacklog) Count(instincts []*homunculus.Instinct, ca *ClusterAssignments) (int, bool) {
+	since := time.Time{}
+	if ca != nil {
+		since = ca.UpdatedAt
+	}
+	n := 0
+	for _, in := range instincts {
+		arrived := in.FirstSeen
+		if arrived.IsZero() {
+			// No first_seen in the frontmatter (an imported or hand-written
+			// note). LastSeen is the only date it carries, so use it rather
+			// than treating the note as infinitely old and never counting it.
+			arrived = in.LastSeen
+		}
+		if since.IsZero() || arrived.After(since) {
+			n++
+		}
+	}
+	return n, n >= b.Threshold
 }
 
 // Save persists the stamp atomically.

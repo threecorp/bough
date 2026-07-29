@@ -281,6 +281,31 @@ type InstinctConfig struct {
 	// effect, because turning it on before the portfolio is deployed
 	// removes that knowledge from both delivery paths at once.
 	ExcludeSkillCovered bool `yaml:"exclude_skill_covered"`
+	// Select tunes the prompt-time selector's optional side inputs.
+	Select InstinctSelect `yaml:"select"`
+}
+
+// InstinctSelect points at two optional operator-owned files the
+// prompt-time selector reads. Both are paths rather than inline lists:
+// one is a judgement about individual instincts that changes as the
+// corpus does, the other is vocabulary. Neither is required, and an
+// absent file leaves its feature off rather than failing the hook.
+type InstinctSelect struct {
+	// ExclusionsPath lists instinct ids the injector must stop pushing —
+	// the operator's own "I have heard this enough" register, alongside the
+	// skill-covered set. Same consumer as that one (the injector), so there
+	// is still exactly one place that decides what is delivered.
+	//
+	// Either a JSON object ({"excluded": {"<id>": {"reason": "..."}}}) or a
+	// plain file of one id per line. Keyed by frontmatter id, never
+	// filename: the two diverge once a note is renamed.
+	ExclusionsPath string `yaml:"exclusions_path"`
+	// AliasPath maps a non-English term to the English words the corpus
+	// actually indexes ({"予約": ["booking", "reservation"]}). BM25 is blind
+	// across languages — nothing tokenizes 予約 into "booking" — so without
+	// this a Japanese prompt retrieves only what it happens to name in
+	// English. Keys starting with "_" are treated as comments.
+	AliasPath string `yaml:"alias_path"`
 }
 
 // InstinctLessons points at the operator's hand-written corrections

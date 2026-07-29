@@ -79,3 +79,40 @@ func TestLoadClusterAssignmentsMissingFileIsEmpty(t *testing.T) {
 		t.Errorf("StampedAmong on an empty stamp = %d, want 0", n)
 	}
 }
+
+func TestArrivalBacklogCountsSinceTheLastPass(t *testing.T) {
+	pass := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	older := &homunculus.Instinct{ID: "older", FirstSeen: pass.Add(-48 * time.Hour)}
+	newer := &homunculus.Instinct{ID: "newer", FirstSeen: pass.Add(48 * time.Hour)}
+	ca := &ClusterAssignments{ByInstinct: map[string]int{"older": 0}, UpdatedAt: pass}
+
+	b := ArrivalBacklog{Threshold: 1}
+	if n, overdue := b.Count([]*homunculus.Instinct{older, newer}, ca); n != 1 || !overdue {
+		t.Errorf("Count = (%d, %v), want (1, true) — only the arrival after the pass counts", n, overdue)
+	}
+	if n, overdue := b.Count([]*homunculus.Instinct{older}, ca); n != 0 || overdue {
+		t.Errorf("Count = (%d, %v), want (0, false)", n, overdue)
+	}
+	// Never clustered: nothing has been routed, so everything is a backlog.
+	if n, _ := b.Count([]*homunculus.Instinct{older, newer}, nil); n != 2 {
+		t.Errorf("unstamped Count = %d, want 2", n)
+	}
+	// Under the threshold says nothing at all.
+	if _, overdue := (ArrivalBacklog{Threshold: 5}).Count([]*homunculus.Instinct{older, newer}, nil); overdue {
+		t.Error("a corpus under the threshold reported overdue")
+	}
+	if got := DefaultArrivalBacklog().Threshold; got != 60 {
+		t.Errorf("default threshold = %d, want 60", got)
+	}
+}
+
+// A note with no dates at all (imported, or hand-written) must not be
+// counted as having arrived since a pass that happened after it: falling
+// back to LastSeen is what keeps such a corpus from re-announcing forever.
+func TestArrivalBacklogUndatedNoteDoesNotResurrectTheNotice(t *testing.T) {
+	ca := &ClusterAssignments{UpdatedAt: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)}
+	undated := &homunculus.Instinct{ID: "undated"}
+	if n, _ := (ArrivalBacklog{Threshold: 1}).Count([]*homunculus.Instinct{undated}, ca); n != 0 {
+		t.Errorf("an undated note counted as a new arrival (n=%d)", n)
+	}
+}

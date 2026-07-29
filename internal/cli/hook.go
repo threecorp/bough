@@ -354,7 +354,7 @@ func newHookHandleCmd() *cobra.Command {
 				// completion gate is built on it.
 				dispatchSkillPull(c, payload)
 			case string(hooks.EventUserPromptSubmit):
-				dispatchInjectContext(c, extractPrompt(payload))
+				dispatchInjectContext(c, extractPrompt(payload), extractTranscriptPath(payload))
 				dispatchObserverAutostart(c)
 			case string(hooks.EventSessionEnd):
 				_ = runSessionEnd(c.OutOrStdout(), "", extractSessionID(payload), sessionEndDefaultWindow)
@@ -457,7 +457,7 @@ func rotateIfLarge(obsPath string) {
 // selection errors are swallowed (= a non-git directory or empty
 // corpus must not break the operator's prompt); the block is only
 // emitted when there is something worth injecting.
-func dispatchInjectContext(c *cobra.Command, prompt string) {
+func dispatchInjectContext(c *cobra.Command, prompt, transcript string) {
 	// runInjectContext (internal/cli/inject.go) is shared with `bough
 	// inject-context`'s RunE so the hook path and the manual preview
 	// command cannot silently diverge.
@@ -466,7 +466,30 @@ func dispatchInjectContext(c *cobra.Command, prompt string) {
 	// arbitrary order: it is the only relevance signal available, and
 	// before it was plumbed through, selection ignored what the operator
 	// had actually asked about.
-	_ = runInjectContext(c.OutOrStdout(), "", inject.Options{Prompt: prompt})
+	//
+	// The transcript adds what the prompt usually leaves out: "why is this
+	// failing?" names no subsystem, while the files the session just opened
+	// name it exactly.
+	_ = runInjectContext(c.OutOrStdout(), "", inject.Options{
+		Prompt:      prompt,
+		RecentFiles: newTranscriptReader().recentFiles(transcript),
+	})
+}
+
+// extractTranscriptPath pulls the session transcript's path out of a hook
+// payload. Same contract as extractPrompt: a payload that does not parse
+// is not an error for a hook, it just means one less retrieval signal.
+func extractTranscriptPath(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var probe struct {
+		TranscriptPath string `json:"transcript_path"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return ""
+	}
+	return probe.TranscriptPath
 }
 
 // extractPrompt pulls the user's submitted text out of a

@@ -106,6 +106,12 @@ type Options struct {
 	// package names below the project root). See retrieve.ContextTokens
 	// for why the repo name itself is deliberately not among them.
 	ContextTokens []string
+	// RecentFiles are paths the session just read or edited, from the
+	// host's transcript. Kept apart from ContextTokens by PROVENANCE — one
+	// is derived from where the shell is, the other from what the session
+	// actually opened — and merged into the query by the caller, which is
+	// the layer that knows how to obtain each.
+	RecentFiles []string
 	// ExcludeIDs are instinct ids an evolved skill already delivers.
 	// Supplying them drops those instincts from the pushed block so the
 	// same knowledge is not both pushed and pullable.
