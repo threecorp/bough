@@ -102,7 +102,11 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// parameter here would read a different (possibly empty) directory,
 	// so an operator's configured path would be silently ignored when the
 	// hook fires from a sub-repo.
-	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
+	// Zero = the lessons block's own default budget. It is deliberately
+	// NOT derived from opts.MaxBytes: the two blocks have separate
+	// allowances that sum under the total, so tuning the instinct block
+	// must not silently shrink the operator's corrections.
+	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), 0)
 	// The selection is recorded even when it chose NOTHING. A prompt that
 	// correctly selected zero instincts is a data point — the share of
 	// empty selections is a selector-health signal, and skipping the
@@ -247,8 +251,8 @@ pure filesystem.`,
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the injected block (default 9500)")
-	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to consider (default 40)")
+	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000; the lessons block has its own 3000)")
+	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to render (default 12)")
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")
 	return cmd
