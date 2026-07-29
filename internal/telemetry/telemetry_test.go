@@ -294,3 +294,22 @@ func TestSelectorBarChecksStateTheirNumbers(t *testing.T) {
 		}
 	}
 }
+
+// TestHealthyLogProducesNoDriftRows is the clean direction of the
+// tripwire, and it matters as much as the loud one: a detector that
+// flags clean input trains the reader to ignore it, and then it
+// protects nothing. Every writer shape in current use must pass in
+// silence — including an EMPTY selection, which carries no ids and no
+// raw payload by design.
+func TestHealthyLogProducesNoDriftRows(t *testing.T) {
+	now := time.Now()
+	lg := &Log{Events: []Event{
+		{TS: now, Kind: KindSkillPull, Slug: "using-things", Session: "s1"},
+		{TS: now, Kind: KindSelection, IDs: []string{"i1", "i2"}, N: 2, MS: 12.5},
+		{TS: now, Kind: KindSelection, N: 0, MS: 3.0}, // chose nothing — a data point, not drift
+		{TS: now, Kind: KindJudge, Counts: map[string]int{"reviewed": 3, "held": 1}},
+	}}
+	if rows := lg.DriftIn(now.Add(-time.Hour), now.Add(time.Hour)); len(rows) != 0 {
+		t.Errorf("a healthy log must be silent, got %v", rows)
+	}
+}
