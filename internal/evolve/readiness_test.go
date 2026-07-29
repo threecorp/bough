@@ -314,3 +314,30 @@ func TestLongListsSayTheyAreCut(t *testing.T) {
 		t.Errorf("a truncated list must say it was truncated, got %q", d)
 	}
 }
+
+// TestPulledButUnregisteredSkillsAreExplained: the gate counts pulls of
+// REGISTERED skills while the usage summary counts every pull, so a
+// project with an empty registry sees "0 pulled" in one place and a
+// positive number in the other. Two true numbers that read as a
+// contradiction are how an operator learns to distrust both.
+func TestPulledButUnregisteredSkillsAreExplained(t *testing.T) {
+	f := newGateFixture(t)
+	f.pull(t, "alpha", 20*24*time.Hour)
+	for _, unrelated := range []string{"not-registered-1", "not-registered-2"} {
+		f.pull(t, unrelated, 1*24*time.Hour)
+	}
+	d := detailOf(f.verdict(), "the pull path is firing")
+	if !strings.Contains(d, "2 other skill(s) WERE pulled") {
+		t.Errorf("the row must explain the pulls it is not counting, got %q", d)
+	}
+}
+
+// TestNoNoteWhenEveryPullIsRegistered keeps the explanation from
+// becoming noise on a healthy project.
+func TestNoNoteWhenEveryPullIsRegistered(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if d := detailOf(f.verdict(), "the pull path is firing"); strings.Contains(d, "WERE pulled") {
+		t.Errorf("no note is needed when every pull is registered, got %q", d)
+	}
+}

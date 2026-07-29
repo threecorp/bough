@@ -187,8 +187,9 @@ func ExclusionReadiness(skillsDir, telemetryPath, coveragePath string, now time.
 		Name:     "the pull path is firing",
 		Passed:   len(inPortfolio) >= win.MinPulledSlugs,
 		Blocking: true,
-		Detail: fmt.Sprintf("%d of the registry's skill(s) were pulled in the last %s%s, need %d — a deployed skill nothing loads is not delivery",
-			len(inPortfolio), roundDays(win.History), namedList(inPortfolio), win.MinPulledSlugs),
+		Detail: fmt.Sprintf("%d of the registry's skill(s) were pulled in the last %s%s, need %d — a deployed skill nothing loads is not delivery%s",
+			len(inPortfolio), roundDays(win.History), namedList(inPortfolio), win.MinPulledSlugs,
+			unregisteredNote(pulls, inPortfolio)),
 	})
 
 	recent := telemetry.PullsBySlug(log.Window(now.Add(-win.Recent), now))
@@ -242,8 +243,8 @@ func historyCheck(log *telemetry.Log, now time.Time, win ExclusionWindow) Readin
 		Name:     "enough history to judge by",
 		Passed:   have >= win.History,
 		Blocking: true,
-		Detail: fmt.Sprintf("%s of telemetry (oldest event %s ago), need %s",
-			roundDays(have), roundDays(have), roundDays(win.History)),
+		Detail: fmt.Sprintf("the oldest event is %s old, need %s before a quiet week can be told apart from an unused portfolio",
+			roundDays(have), roundDays(win.History)),
 	}
 }
 
@@ -258,6 +259,21 @@ func pulledSlugsCoveredBy(pulls map[string]int, cov *SkillCoverage) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// unregisteredNote exists because two true numbers can read as a
+// contradiction. This row counts pulls of skills the coverage registry
+// knows about; the usage summary counts every pull. A project whose
+// registry is empty therefore sees "0 pulled" here and "3 pulls" there,
+// and an operator reconciling those two by hand is exactly the position
+// the gate is supposed to spare them. So when pulls happened but none of
+// them are registered, the row says which fact it is reporting.
+func unregisteredNote(pulls map[string]int, inPortfolio []string) string {
+	other := len(pulls) - len(inPortfolio)
+	if other <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(". %d other skill(s) WERE pulled but deliver no recorded instincts, so they do not count here — run the evolve pass to record what they cover", other)
 }
 
 func totalPulls(slugs []string, pulls map[string]int) int {
