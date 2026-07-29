@@ -17,6 +17,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 	"github.com/ikeikeikeike/bough/internal/termio"
 )
 
@@ -124,6 +125,37 @@ func renderContinuousLearningPosture(w io.Writer) {
 		}
 		fmt.Fprintf(w, "          %s\n", line)
 	}
+
+	// Selector health, compressed to one row: doctor answers "is the
+	// posture sane?"; the per-check numbers live in `bough ops`. Advisory
+	// — nothing gates on it — but a selector that has not earned trust
+	// must not read as healthy just because it is wired.
+	selStatus, selLine := selectorHealthLine(env)
+	fmt.Fprintf(w, "    %s   selector health %s\n", st.Mark(selStatus), selLine)
+}
+
+// selectorHealthLine folds the four lifetime selector checks into one
+// posture row. Neutral until every check clears — an advisory can be
+// yellow forever without blocking anything, which is exactly its job.
+func selectorHealthLine(env gateEnv) (termio.Status, string) {
+	if !env.hasIdent() {
+		return termio.StatusNeutral, "unknown — no project identity here"
+	}
+	log, err := telemetry.Load(homunculus.NewLayout().TelemetryFile(env.ident.ID))
+	if err != nil {
+		return termio.StatusNeutral, fmt.Sprintf("telemetry unreadable: %v", err)
+	}
+	checks := telemetry.DefaultSelectorBar().Check(telemetry.SelectionStats(log.Events))
+	var failing []string
+	for _, c := range checks {
+		if !c.Passed {
+			failing = append(failing, c.Detail)
+		}
+	}
+	if len(failing) == 0 {
+		return termio.StatusOK, "every lifetime check clears the bar (see `bough ops` for the numbers)"
+	}
+	return termio.StatusNeutral, "WAIT — " + strings.Join(failing, "; ")
 }
 
 // gateEnv is the environment every continuous-learning posture line is

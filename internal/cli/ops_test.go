@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
@@ -226,5 +227,56 @@ func TestDriftOutsideTheWindowIsNotShown(t *testing.T) {
 	}
 	if out := summary(t, now); strings.Contains(out, "SCHEMA DRIFT") {
 		t.Errorf("drift 100 days outside the window must not be reported here:\n%s", out)
+	}
+}
+
+// TestEmptySelectionIsRecordedWithTiming: the hook writes a selection
+// event even when it chose nothing — the empty-rate is a selector-health
+// signal, and a skipped write made "chose nothing" indistinguishable
+// from "never ran".
+func TestEmptySelectionIsRecordedWithTiming(t *testing.T) {
+	path := opsHarness(t)
+	var buf bytes.Buffer
+	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything at all"}); err != nil {
+		t.Fatal(err)
+	}
+	log, err := telemetry.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sel []telemetry.Event
+	for _, e := range log.Events {
+		if e.Kind == telemetry.KindSelection {
+			sel = append(sel, e)
+		}
+	}
+	if len(sel) != 1 {
+		t.Fatalf("want exactly one selection event on an empty corpus, got %d", len(sel))
+	}
+	if len(sel[0].IDs) != 0 || sel[0].N != 0 {
+		t.Errorf("the empty selection must record n=0, got %+v", sel[0])
+	}
+	if sel[0].MS <= 0 {
+		t.Errorf("the selection must carry its latency, got ms=%v", sel[0].MS)
+	}
+}
+
+// TestSelfLimitOverrunFailsOpen: past the selection deadline the prompt
+// loses the instinct block, never the turn — and the overrun is still a
+// recorded (empty) selection so the health numbers see it.
+func TestSelfLimitOverrunFailsOpen(t *testing.T) {
+	path := opsHarness(t)
+	var buf bytes.Buffer
+	err := runInjectContext(&buf, "", inject.Options{Prompt: "anything", SelfLimit: time.Nanosecond})
+	if err != nil {
+		t.Fatalf("an overrun must not fail the hook: %v", err)
+	}
+	log, lerr := telemetry.Load(path)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	stats := telemetry.SelectionStats(log.Events)
+	if stats.Volume != 1 || stats.Empty != 1 {
+		t.Errorf("the overrun must be recorded as an empty selection, got %+v", stats)
 	}
 }

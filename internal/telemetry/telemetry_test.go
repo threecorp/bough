@@ -234,3 +234,63 @@ func TestPreviewSaysItTruncated(t *testing.T) {
 		t.Errorf("a truncated preview must say so: %q", rows[0])
 	}
 }
+
+// TestSelectionStatsAggregates covers the four selector-health numbers,
+// including the one that used to be structurally unmeasurable: an empty
+// selection only counts because the writer now records it.
+func TestSelectionStatsAggregates(t *testing.T) {
+	events := []Event{
+		{Kind: KindSelection, IDs: []string{"a", "b"}, MS: 12.5},
+		{Kind: KindSelection, IDs: []string{"b", "c"}, MS: 40.0},
+		{Kind: KindSelection, IDs: nil, MS: 3.0}, // chose nothing — still a data point
+		{Kind: KindSkillPull, Slug: "s"},         // other kinds do not count
+	}
+	s := SelectionStats(events)
+	if s.Volume != 3 || s.Empty != 1 || s.Distinct != 3 || len(s.Timed) != 3 {
+		t.Errorf("stats = %+v, want volume=3 empty=1 distinct=3 timed=3", s)
+	}
+	if got := s.EmptyRate(); got < 0.33 || got > 0.34 {
+		t.Errorf("empty rate = %f, want 1/3", got)
+	}
+}
+
+// TestP95UsesRoundHalfEven pins the index rounding: with 31 samples the
+// index is 0.95*30 = 28.5, which round-half-even takes DOWN to 28 while
+// round-half-up would take it to 29. Two tools computing the p95 of the
+// same log must not disagree by one sample.
+func TestP95UsesRoundHalfEven(t *testing.T) {
+	s := SelectorStats{}
+	for i := 0; i < 31; i++ {
+		s.Timed = append(s.Timed, float64(i))
+	}
+	got, ok := s.P95MS()
+	if !ok || got != 28 {
+		t.Errorf("p95 = %v ok=%v, want 28 (round-half-even of index 28.5)", got, ok)
+	}
+}
+
+// TestZeroVolumeEmptyRateIsHonest: with no evidence, "always empty" is
+// the honest read — a 0% rate on nothing would clear the bar for free.
+func TestZeroVolumeEmptyRateIsHonest(t *testing.T) {
+	if got := (SelectorStats{}).EmptyRate(); got != 1.0 {
+		t.Errorf("empty rate on zero volume = %f, want 1.0", got)
+	}
+}
+
+// TestSelectorBarChecksStateTheirNumbers: every row carries the numbers
+// it compared, and an untimed log fails the latency row rather than
+// passing it vacuously.
+func TestSelectorBarChecksStateTheirNumbers(t *testing.T) {
+	checks := DefaultSelectorBar().Check(SelectorStats{Volume: 3, Distinct: 2, Empty: 3})
+	if len(checks) != 4 {
+		t.Fatalf("want 4 checks, got %d", len(checks))
+	}
+	for _, c := range checks {
+		if c.Passed {
+			t.Errorf("check %q should fail on a nearly-empty log (%s)", c.Name, c.Detail)
+		}
+		if c.Detail == "" {
+			t.Errorf("check %q must state what it compared", c.Name)
+		}
+	}
+}

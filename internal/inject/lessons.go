@@ -48,7 +48,7 @@ func LessonsBlock(root string, paths []string, maxBytes int) string {
 	// Callers hand Build an Options{} and let it default internally, so a
 	// bare MaxBytes reaching here is 0 — computing a fraction of that
 	// would silently truncate the whole block to nothing.
-	maxBytes = Options{MaxBytes: maxBytes}.withDefaults().MaxBytes
+	maxBytes = Options{MaxBytes: maxBytes}.WithDefaults().MaxBytes
 	if len(paths) == 0 {
 		paths = DefaultLessonsPaths
 	}

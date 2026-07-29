@@ -42,6 +42,7 @@ package telemetry
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,6 +85,17 @@ type Event struct {
 
 	// IDs are the instinct ids injected for one prompt (KindSelection).
 	IDs []string `json:"ids,omitempty"`
+
+	// N is the selection size, recorded explicitly so an EMPTY selection
+	// is a written line rather than a missing one: the share of prompts
+	// that select nothing is a selector-health signal, and a skipped
+	// write makes "chose nothing" indistinguishable from "never ran"
+	// (KindSelection).
+	N int `json:"n,omitempty"`
+
+	// MS is how long the selection took, in milliseconds. Feeds the
+	// selector-health p95 (KindSelection).
+	MS float64 `json:"ms,omitempty"`
 
 	// Counts carries a kind's tallies (KindJudge: reviewed, unreviewed,
 	// held). A map rather than named fields because the gate's shape has
@@ -415,5 +427,144 @@ func sortedKeys(m map[string]int) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// SelectorStats aggregates what the selection events say about the
+// SELECTOR itself — volume, latency, breadth, and how often it chose
+// nothing. Lifetime figures, deliberately not windowed: the question
+// they answer ("has the selector seen enough real traffic to be
+// judged?") is cumulative, unlike the exclusion gate's "is the pull
+// path firing NOW", which must age out.
+type SelectorStats struct {
+	// Volume is how many selections were logged, empty ones included.
+	Volume int
+	// Timed holds the ms samples from events that carried one. Events
+	// written before latency was recorded are legitimately untimed and
+	// simply do not contribute.
+	Timed []float64
+	// Distinct is how many different instinct ids were ever injected —
+	// the breadth measure: flat while prompts vary means the selection
+	// is cycling the same few notes.
+	Distinct int
+	// Empty counts selections that chose nothing.
+	Empty int
+}
+
+// SelectionStats folds the selection events into SelectorStats.
+func SelectionStats(events []Event) SelectorStats {
+	s := SelectorStats{}
+	seen := map[string]struct{}{}
+	for _, e := range events {
+		if e.Kind != KindSelection {
+			continue
+		}
+		s.Volume++
+		if len(e.IDs) == 0 {
+			s.Empty++
+		}
+		if e.MS > 0 {
+			s.Timed = append(s.Timed, e.MS)
+		}
+		for _, id := range e.IDs {
+			seen[id] = struct{}{}
+		}
+	}
+	s.Distinct = len(seen)
+	return s
+}
+
+// P95MS returns the 95th-percentile selection latency, and false when
+// no event carried a timing. The index is computed with round-half-even
+// so the number matches what an operator computed elsewhere with the
+// conventional statistics rounding — two tools disagreeing about the
+// same log by one sample would read as a real difference.
+func (s SelectorStats) P95MS() (float64, bool) {
+	if len(s.Timed) == 0 {
+		return 0, false
+	}
+	sorted := append([]float64(nil), s.Timed...)
+	sort.Float64s(sorted)
+	idx := int(math.RoundToEven(0.95 * float64(len(sorted)-1)))
+	if idx > len(sorted)-1 {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx], true
+}
+
+// EmptyRate is the share of selections that chose nothing. A rate of 1
+// on zero volume: with no evidence, "always empty" is the honest read.
+func (s SelectorStats) EmptyRate() float64 {
+	if s.Volume == 0 {
+		return 1.0
+	}
+	return float64(s.Empty) / float64(s.Volume)
+}
+
+// SelectorBar is the bar the selector must clear before its output is
+// trusted enough to act on. Seeded by DefaultSelectorBar rather than
+// package consts so a test can lower it without waiting for 200 real
+// prompts.
+type SelectorBar struct {
+	// MinSelections: real prompts, enough for a p95 to mean something.
+	MinSelections int
+	// MaxP95MS: the latency ceiling for the prompt hot path.
+	MaxP95MS float64
+	// MinDistinctIDs: breadth — the escape from a fixed few-notes ceiling.
+	MinDistinctIDs int
+	// MaxEmptyRate: mostly-empty selections would mean it is not working.
+	MaxEmptyRate float64
+}
+
+// DefaultSelectorBar returns the operating thresholds.
+func DefaultSelectorBar() SelectorBar {
+	return SelectorBar{
+		MinSelections:  200,
+		MaxP95MS:       500,
+		MinDistinctIDs: 100,
+		MaxEmptyRate:   0.30,
+	}
+}
+
+// SelectorCheck is one selector-health row: what was measured, whether
+// it clears the bar, and a detail stating the numbers actually compared.
+type SelectorCheck struct {
+	Name   string
+	Passed bool
+	Detail string
+}
+
+// Check renders the four selector-health rows. Advisory by design:
+// nothing gates on them — they exist so an operator can see whether the
+// selector has earned trust, with the numbers, not a feeling.
+func (b SelectorBar) Check(s SelectorStats) []SelectorCheck {
+	var out []SelectorCheck
+	out = append(out, SelectorCheck{
+		Name:   "selection volume",
+		Passed: s.Volume >= b.MinSelections,
+		Detail: fmt.Sprintf("%d logged selection(s) (need %d)", s.Volume, b.MinSelections),
+	})
+	if p95, ok := s.P95MS(); ok {
+		out = append(out, SelectorCheck{
+			Name:   "p95 latency",
+			Passed: p95 < b.MaxP95MS,
+			Detail: fmt.Sprintf("p95 %.1fms over %d timed run(s) (need <%.0fms)", p95, len(s.Timed), b.MaxP95MS),
+		})
+	} else {
+		out = append(out, SelectorCheck{
+			Name: "p95 latency", Passed: false,
+			Detail: "no timed runs yet",
+		})
+	}
+	out = append(out, SelectorCheck{
+		Name:   "distinct instincts",
+		Passed: s.Distinct >= b.MinDistinctIDs,
+		Detail: fmt.Sprintf("%d distinct id(s) ever injected (need %d)", s.Distinct, b.MinDistinctIDs),
+	})
+	out = append(out, SelectorCheck{
+		Name:   "non-empty rate",
+		Passed: s.EmptyRate() <= b.MaxEmptyRate,
+		Detail: fmt.Sprintf("%.0f%% of prompts selected nothing (allow <=%.0f%%)", s.EmptyRate()*100, b.MaxEmptyRate*100),
+	})
 	return out
 }

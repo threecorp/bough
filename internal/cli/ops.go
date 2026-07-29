@@ -151,6 +151,21 @@ func renderUsageSummary(w io.Writer, now time.Time) {
 	if oldest, ok := log.Oldest(); ok {
 		fmt.Fprintf(w, "    • history: %s, from %s\n", evolve.RoundDays(now.Sub(oldest)), path)
 	}
+
+	// Selector health reads the WHOLE log, not the window: "has the
+	// selector seen enough real traffic to be judged?" is cumulative,
+	// unlike the pull rows above, which must age out. Advisory — nothing
+	// gates on these — but each row states the numbers it compared.
+	fmt.Fprintln(w, "\n    Selector health (lifetime, advisory):")
+	stats := telemetry.SelectionStats(log.Events)
+	for _, c := range telemetry.DefaultSelectorBar().Check(stats) {
+		mark := "✓"
+		if !c.Passed {
+			mark = "•"
+		}
+		fmt.Fprintf(w, "    %s %s: %s\n", mark, c.Name, c.Detail)
+	}
+
 	fmt.Fprintln(w, "\n    A green run here establishes that the hooks fired and the numbers parse.")
 	fmt.Fprintln(w, "    It does NOT establish that the instincts are correct, that the skills say")
 	fmt.Fprintln(w, "    anything useful, or that anything was learned from the last session.")

@@ -24,6 +24,14 @@ import (
 // DetectIdentity(cwd) to DetectIdentity(resolveMonorepoRoot(cwd)) in
 // both places).
 func runInjectContext(out io.Writer, root string, opts inject.Options) error {
+	// The hook's whole budget is 5s; selection gets opts.SelfLimit of it
+	// so the lessons block can still print if the corpus scan runs long.
+	// Checked between phases rather than mid-scan: the scan is the only
+	// unbounded step, and a check after it converts "the hook timed out
+	// and the prompt lost every block" into "the prompt lost the
+	// instinct block only".
+	start := time.Now()
+	deadline := start.Add(opts.WithDefaults().SelfLimit)
 	cwd := root
 	if cwd == "" {
 		w, err := os.Getwd()
@@ -65,7 +73,12 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if opts.ExcludeIDs == nil {
 		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
 	}
-	block, ids := inject.Build(project, global, opts)
+	var block string
+	var ids []string
+	timedOut := time.Now().After(deadline)
+	if !timedOut {
+		block, ids = inject.Build(project, global, opts)
+	}
 	// Human-authored corrections outrank minted instincts and are not
 	// scored, so they are prepended rather than merged into the ranking
 	// — and they are emitted even when nothing cleared the confidence
@@ -77,19 +90,27 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// so an operator's configured path would be silently ignored when the
 	// hook fires from a sub-repo.
 	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
+	// The selection is recorded even when it chose NOTHING. A prompt that
+	// correctly selected zero instincts is a data point — the share of
+	// empty selections is a selector-health signal, and skipping the
+	// write made that rate structurally unmeasurable: absence of a line
+	// and an empty selection looked identical. Best-effort: the hook is
+	// on the prompt path and telemetry must never cost a turn. The ids
+	// (not just a count) are what answers whether retrieval reaches the
+	// tail of the corpus or keeps cycling the same few notes.
+	telemetry.NewWriter(homunculus.NewLayout().TelemetryFile(ident.ID)).
+		AppendBestEffort(telemetry.Event{
+			Kind: telemetry.KindSelection,
+			IDs:  ids,
+			N:    len(ids),
+			MS:   float64(time.Since(start).Microseconds()) / 1000.0,
+		})
 	if lessons == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
 	fmt.Fprint(out, lessons)
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
-		// Record WHICH instincts this prompt received, not how many.
-		// Whether retrieval reaches the tail of the corpus or keeps
-		// cycling the same few notes is a question about identity over a
-		// window, and a count cannot answer it. Best-effort: the hook is
-		// on the prompt path and telemetry must never cost a turn.
-		telemetry.NewWriter(homunculus.NewLayout().TelemetryFile(ident.ID)).
-			AppendBestEffort(telemetry.Event{Kind: telemetry.KindSelection, IDs: ids})
 	}
 	return nil
 }
