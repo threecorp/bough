@@ -323,6 +323,26 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 		fmt.Fprintf(stderr, "  skill coverage: %v\n", err)
 	}
 
+	// Stamp which family each instinct clustered into, so the injector can
+	// cap how much of the prompt budget ONE family takes. This pass is the
+	// only place that knows — clustering is O(N²) and cannot run on the
+	// prompt hot path.
+	//
+	// A nil Assignments means this pass never clustered (the empty-corpus
+	// early path hands in a zero Outcome), and writing an empty stamp then
+	// would silently disarm the cap: the mechanism would still be there,
+	// reading as implemented, guarded on a field nothing had written. Keep
+	// the previous stamp instead — stale is harmless here, since the cap
+	// only ever removes candidates.
+	if out.Assignments != nil {
+		if err := out.Assignments.Save(layout.ClusterAssignmentsFile(ident.ID), now); err != nil {
+			fmt.Fprintf(stderr, "  cluster assignments: %v\n", err)
+		} else {
+			fmt.Fprintf(stdout, "  stamped %d instinct(s) with a cluster id (per-cluster injection cap)\n",
+				len(out.Assignments.ByInstinct))
+		}
+	}
+
 	fmt.Fprintf(stdout, "\nwrote skills=%d rules=%d agents=%d commands=%d (rejected clusters=%d)\n",
 		skillsWritten, rulesWritten, agentsWritten, commandsWritten, len(out.Rejected))
 	if skillsBelowBar > 0 {

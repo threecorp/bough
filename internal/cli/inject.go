@@ -74,6 +74,18 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if opts.ExcludeIDs == nil {
 		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
 	}
+	// Which family each instinct belongs to, so one family of restatements
+	// cannot take the whole block. Stamped by the offline evolve pass
+	// because clustering is O(N²) — unaffordable here. Unreadable or
+	// missing leaves every instinct unstamped, which means UNCAPPED: the
+	// cap exists to trim redundancy, so failing to read it must not start
+	// dropping instincts on a guess. `bough doctor` reports the stamped
+	// population precisely so that state is visible.
+	if opts.ClusterOf == nil {
+		if ca, cerr := evolve.LoadClusterAssignments(layout.ClusterAssignmentsFile(ident.ID)); cerr == nil {
+			opts.ClusterOf = ca.ByInstinct
+		}
+	}
 	var block string
 	var ids []string
 	timedOut := time.Now().After(deadline)

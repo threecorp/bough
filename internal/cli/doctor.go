@@ -14,6 +14,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
@@ -132,6 +133,46 @@ func renderContinuousLearningPosture(w io.Writer) {
 	// must not read as healthy just because it is wired.
 	selStatus, selLine := selectorHealthLine(env)
 	fmt.Fprintf(w, "    %s   selector health %s\n", st.Mark(selStatus), selLine)
+
+	// The per-family injection cap binds only on instincts an evolve pass
+	// stamped. Printing the POPULATION — stamped of total — is the whole
+	// point of this row: a cap guarded on a field nothing has written is
+	// inert for its entire life while reading as implemented, and the code
+	// cannot tell you which it is.
+	stampStatus, stampLine := clusterStampLine(env)
+	fmt.Fprintf(w, "    %s   cluster stamp   %s\n", st.Mark(stampStatus), stampLine)
+}
+
+// clusterStampLine reports how much of the corpus carries a cluster id,
+// which is what decides whether the per-family injection cap can bind at
+// all. Unstamped means UNCAPPED (see inject.DefaultClusterCap) — so this
+// row is the difference between "the cap is trimming families" and "the
+// cap has never once applied".
+func clusterStampLine(env gateEnv) (termio.Status, string) {
+	if !env.hasIdent() {
+		return termio.StatusNeutral, "unknown — no project identity here"
+	}
+	layout := homunculus.NewLayout()
+	instincts, _ := homunculus.ScanInstincts(layout.InstinctsDir(env.ident.ID))
+	if len(instincts) == 0 {
+		return termio.StatusNeutral, "no project instincts yet — nothing to cluster"
+	}
+	ca, err := evolve.LoadClusterAssignments(layout.ClusterAssignmentsFile(env.ident.ID))
+	if err != nil {
+		return termio.StatusWarn, fmt.Sprintf("unreadable, so the cap cannot bind: %v", err)
+	}
+	ids := make([]string, 0, len(instincts))
+	for _, in := range instincts {
+		ids = append(ids, in.ID)
+	}
+	stamped := ca.StampedAmong(ids)
+	if stamped == 0 {
+		return termio.StatusWarn, fmt.Sprintf(
+			"INERT — 0 of %d instincts carry a cluster id, so the per-family cap (%d) has nothing to cap; run `bough evolve --generate` to stamp them",
+			len(ids), inject.DefaultClusterCap)
+	}
+	return termio.StatusOK, fmt.Sprintf("%d of %d instincts stamped (per-family cap %d, last pass %s)",
+		stamped, len(ids), inject.DefaultClusterCap, ca.UpdatedAt.Format("2006-01-02"))
 }
 
 // selectorHealthLine folds the four lifetime selector checks into one

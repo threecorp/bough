@@ -40,6 +40,19 @@ const DefaultMaxInstincts = 40
 // help, and it competes for the byte budget with reliable ones.
 const MinConfidence = 0.50
 
+// DefaultClusterCap bounds how many instincts from ONE discovered family
+// may take the block. Restatements cluster together, so without a cap a
+// prompt that brushes a well-covered subject spends the whole budget
+// hearing the same advice five times while every other subject the
+// prompt touched gets nothing.
+//
+// It binds only where the corpus carries a cluster stamp (written by
+// `bough evolve --generate`, read via Options.ClusterOf). Unstamped is
+// UNCAPPED, not capped-at-one — and `bough doctor` prints the stamped
+// population so an unstamped corpus is loud instead of quietly making
+// this mechanism inert.
+const DefaultClusterCap = 2
+
 // Options tunes the block. Zero values for MaxBytes/MaxInstincts fall
 // back to the Default* constants so callers can pass Options{} for
 // the standard block. MinConfidence is a pointer specifically because
@@ -70,6 +83,15 @@ type Options struct {
 	// is recorded first, acted on only once there is evidence the pull
 	// path works.
 	ExcludeIDs map[string]struct{}
+	// ClusterOf maps instinct id → the family it clustered into, as
+	// stamped by the last evolve pass (evolve.ClusterAssignments). An id
+	// absent from the map is UNSTAMPED and therefore uncapped: a missing
+	// stamp means "we do not know its family", and guessing it is alone
+	// would be a different claim than the data supports.
+	ClusterOf map[string]int
+	// ClusterCap bounds how many members of one family may be rendered.
+	// Zero falls back to DefaultClusterCap.
+	ClusterCap int
 	// SelfLimit bounds the selection step of the prompt hook. The host
 	// gives the whole hook 5 seconds; the default leaves room for the
 	// blocks that must still print after selection. Overrun is fail-open:
@@ -98,6 +120,9 @@ func (o Options) WithDefaults() Options {
 	}
 	if o.SelfLimit <= 0 {
 		o.SelfLimit = 3 * time.Second // hook budget is 5s; the rest must still print
+	}
+	if o.ClusterCap <= 0 {
+		o.ClusterCap = DefaultClusterCap
 	}
 	return o
 }
@@ -204,13 +229,24 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, []stri
 	// retrieval is reaching the tail of the corpus or cycling the same
 	// few notes. The count callers used to take is len(ids).
 	var ids []string
+	perCluster := map[int]int{}
 	for _, r := range pool {
+		// One family may contribute at most ClusterCap lines. Counted on
+		// what was KEPT, not on what was considered, so a candidate dropped
+		// by the byte budget does not consume its family's allowance.
+		cluster, stamped := opts.ClusterOf[r.in.ID]
+		if stamped && perCluster[cluster] >= opts.ClusterCap {
+			continue
+		}
 		line := renderInstinctLine(r.in)
 		if b.Len()+len(line) > opts.MaxBytes && len(ids) > 0 {
 			break
 		}
 		b.WriteString(line)
 		ids = append(ids, r.in.ID)
+		if stamped {
+			perCluster[cluster]++
+		}
 	}
 	if len(ids) == 0 {
 		// nothing cleared the confidence floor; emit an empty block
