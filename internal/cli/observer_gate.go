@@ -574,6 +574,20 @@ func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
 	}
 }
 
+// gateForbiddenActions resolves the categories the LLM layer judges
+// against. It sits beside gateConfigFor and reads the same file, so the
+// deterministic layer and the judge cannot end up configured from
+// different places. An unreadable config falls back to the defaults
+// rather than to nothing: a judge with an empty category list clears
+// everything while reporting a full review.
+func gateForbiddenActions(cmd *cobra.Command, root string) []string {
+	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
+	if err != nil || len(cfg.Instinct.Gate.ForbiddenActions) == 0 {
+		return instinctgate.DefaultForbiddenActions
+	}
+	return cfg.Instinct.Gate.ForbiddenActions
+}
+
 // DefaultDenylistPath is where bough looks for the untracked denylist
 // sidecar when the operator has not configured one. It sits under the
 // repo's own .bough/ directory (gitignored) so the file lives beside the

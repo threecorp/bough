@@ -223,7 +223,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 					if budget <= 0 {
 						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
 					}
-					return newGateReviewer(model, budget)
+					return newGateReviewer(model, budget, gateForbiddenActions(cmd, root))
 				}
 			}
 			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, newJudge, now)

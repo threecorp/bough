@@ -78,7 +78,7 @@ func TestRetiredSlugIsNotResurrected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.Retire(skillsDir, slug, "too generic to be useful"); err != nil {
+	if err := reg.Retire(skillsDir, slug, "too generic to be useful", nil); err != nil {
 		t.Fatal(err)
 	}
 	// Operator deletes the directory as well.
@@ -113,7 +113,7 @@ func TestRetireRegistryPersistsAcrossLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.Retire(skillsDir, "gone", "not useful"); err != nil {
+	if err := reg.Retire(skillsDir, "gone", "not useful", nil); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := LoadRetireRegistry(skillsDir)
@@ -203,5 +203,106 @@ func TestRenderSkill_EvolvedFromCarriesPath(t *testing.T) {
 	// id-sorted, so the frontmatter and the source-instinct block agree.
 	if strings.Index(art.Body, "member-a, path") > strings.Index(art.Body, "member-b, path") {
 		t.Error("evolved_from must be id-sorted so it matches the source block")
+	}
+}
+
+// TestRetireSurvivesARename is the guard the handover asks for. Slug
+// equality alone does not hold: clustering names a theme from its
+// members, so the next pass over a barely-changed corpus produces the
+// same grouping under a different label — and a registry keyed on the
+// label lets the rejected knowledge straight back in.
+func TestRetireSurvivesARename(t *testing.T) {
+	dir := t.TempDir()
+	reg := &RetireRegistry{}
+	if err := reg.Retire(dir, "search-conventions", "too vague", []string{"a", "b", "c", "d"}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadRetireRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The same grouping under a new name: 3 of the retired 4 are here.
+	matched, retired := reloaded.RetiredAs("indexing-conventions", []string{"a", "b", "c", "z"})
+	if !retired {
+		t.Fatal("a renamed cluster carrying the retired members must stay retired")
+	}
+	if !strings.Contains(matched, "search-conventions") || !strings.Contains(matched, "too vague") {
+		t.Errorf("the refusal must name which rejection it matched and why, got %q", matched)
+	}
+
+	// A genuinely different grouping is not blocked.
+	if _, retired := reloaded.RetiredAs("unrelated", []string{"x", "y", "z", "w"}); retired {
+		t.Error("an unrelated cluster must not inherit someone else's rejection")
+	}
+	// One shared member out of four is below the bar.
+	if _, retired := reloaded.RetiredAs("mostly-new", []string{"a", "x", "y", "z"}); retired {
+		t.Error("a single shared member is not the same grouping")
+	}
+	// The exact slug is still refused, members or not.
+	if _, retired := reloaded.RetiredAs("search-conventions", nil); !retired {
+		t.Error("the retired slug itself must still be refused")
+	}
+}
+
+// TestLegacyRetireEntriesStillLoad: entries written before members were
+// recorded must keep working, and must not be silently dropped — a
+// vanished entry resurrects a skill the operator rejected.
+func TestLegacyRetireEntriesStillLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".retired.json"),
+		[]byte(`{"retired":{"old-slug":"rejected before members were kept"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := LoadRetireRegistry(dir)
+	if err != nil {
+		t.Fatalf("a legacy registry must still load: %v", err)
+	}
+	if _, retired := reg.RetiredAs("old-slug", nil); !retired {
+		t.Error("a legacy entry must still refuse its own slug")
+	}
+	if reg.Slugs["old-slug"].Reason != "rejected before members were kept" {
+		t.Errorf("the reason must survive, got %q", reg.Slugs["old-slug"].Reason)
+	}
+	// With no members recorded there is nothing to overlap against, so a
+	// rename cannot be caught — and guessing would be worse than not.
+	if _, retired := reg.RetiredAs("renamed", []string{"a", "b"}); retired {
+		t.Error("a memberless entry must not match by overlap")
+	}
+}
+
+// TestUnparseableRetireEntryIsAnErrorNotASkip: an entry the reader
+// cannot make sense of must stop the pass, not disappear from it. A
+// registry whose entries silently vanish resurrects everything the
+// operator rejected, and does so quietly.
+func TestUnparseableRetireEntryIsAnErrorNotASkip(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".retired.json"),
+		[]byte(`{"retired":{"weird":12345}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRetireRegistry(dir); err == nil {
+		t.Fatal("an unrecognised entry shape must be an error, not a skipped entry")
+	}
+}
+
+// TestWriteSkillRefusesARenamedRetiredCluster drives the guard through
+// the emit path it actually protects.
+func TestWriteSkillRefusesARenamedRetiredCluster(t *testing.T) {
+	dir := t.TempDir()
+	reg := &RetireRegistry{}
+	if err := reg.Retire(dir, "old-name", "not useful", []string{"m1", "m2", "m3"}); err != nil {
+		t.Fatal(err)
+	}
+	art := SkillArtifact{
+		Slug:    "new-name",
+		Body:    "---\nname: new-name\n---\n\nbody\n",
+		Members: []string{"m1", "m2", "m9"},
+	}
+	if _, err := WriteSkill(dir, art, reg); !errors.Is(err, ErrRetired) {
+		t.Fatalf("emit must refuse the renamed cluster, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new-name", "SKILL.md")); err == nil {
+		t.Error("nothing should have been written")
 	}
 }

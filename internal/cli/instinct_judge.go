@@ -39,7 +39,7 @@ const judgeCallCeiling = 30
 // But the REASON is returned so the caller can say so — a pass where the
 // judge never ran must not print what a pass that judged everything and
 // found nothing prints.
-func newGateReviewer(model string, budget int) (*instinctgate.Reviewer, *claudecli.Provider, error) {
+func newGateReviewer(model string, budget int, forbidden []string) (*instinctgate.Reviewer, *claudecli.Provider, error) {
 	resolver := prompts.NewResolver()
 	tpl, err := resolver.Get(prompts.TemplateInstinctGate)
 	if err != nil {
@@ -51,7 +51,7 @@ func newGateReviewer(model string, budget int) (*instinctgate.Reviewer, *claudec
 	// reaches the template — so a prompt that does not parse used to burn
 	// 3 judge slots per candidate and could trip the circuit breaker,
 	// reported as if the model were down.
-	if _, rerr := renderGatePrompt(tpl.Body, "probe", "probe"); rerr != nil {
+	if _, rerr := renderGatePrompt(tpl.Body, "probe", "probe", forbidden); rerr != nil {
 		return nil, nil, rerr
 	}
 	prov := claudecli.NewProvider()
@@ -59,14 +59,28 @@ func newGateReviewer(model string, budget int) (*instinctgate.Reviewer, *claudec
 		prov.Model = model
 	}
 	if budget > 0 {
+		// Raise BOTH caps. Setting only the session cap left the hourly
+		// one at its default, so a budget above it stopped short at a
+		// number the operator never chose and the run reported a self-DoS
+		// ceiling — while the message told them to re-run with the very
+		// value that had just been silently overridden.
+		//
+		// The hourly cap exists to keep a runaway loop from eating the
+		// operator's interactive session. An explicitly passed budget is
+		// that operator making the call, so it is honoured rather than
+		// quietly clamped; the run still prints the limiter state, so what
+		// is in force is visible either way.
 		prov.Limiter.MaxCallsPerSession = budget
+		if budget > prov.Limiter.MaxCallsPerHour {
+			prov.Limiter.MaxCallsPerHour = budget
+		}
 	}
 	review := func(ctx context.Context, trigger, action string) ([]byte, error) {
 		// The template is rendered by Generate. Rendering it here as well
 		// would double the work on every vote (3 per candidate) for a byte
 		// count only the empty-response error ever reads, so that render is
 		// deferred to the error path below.
-		res, gerr := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: gatePromptData{Trigger: trigger, Action: action}})
+		res, gerr := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: newGatePromptData(trigger, action, forbidden)})
 		if gerr != nil {
 			return nil, gerr
 		}
@@ -88,7 +102,7 @@ func newGateReviewer(model string, budget int) (*instinctgate.Reviewer, *claudec
 		// rather than replacing it: the empty response is the finding, and
 		// swapping in the render error would hide the very condition this
 		// branch exists to report.
-		body, rerr := renderGatePrompt(tpl.Body, trigger, action)
+		body, rerr := renderGatePrompt(tpl.Body, trigger, action, forbidden)
 		size := fmt.Sprintf("%d bytes", len(body))
 		if rerr != nil {
 			size = "size unavailable: " + rerr.Error()
@@ -104,17 +118,38 @@ func newGateReviewer(model string, budget int) (*instinctgate.Reviewer, *claudec
 type gatePromptData struct {
 	Trigger string
 	Action  string
+	// ForbiddenActions are the categories this project judges against.
+	// They travel with the prompt rather than living in it so a project
+	// whose rules go beyond bough's defaults can be judged against its
+	// own — a category the judge was never told about is one it clears.
+	ForbiddenActions []string
+}
+
+// newGatePromptData is the ONE place the judge's view of a candidate is
+// built, and therefore the one place the default category set is applied.
+//
+// The default used to live at the constructor, which left the live judge
+// call correct while every other render — the size in the empty-response
+// error, the dry-run preview — could still be handed a nil list and
+// produce a prompt with NO categories at all. A judge asked to check an
+// instinct against nothing clears everything while reporting a full
+// review, which is the failure this layer exists to prevent.
+func newGatePromptData(trigger, action string, forbidden []string) gatePromptData {
+	if len(forbidden) == 0 {
+		forbidden = instinctgate.DefaultForbiddenActions
+	}
+	return gatePromptData{Trigger: trigger, Action: action, ForbiddenActions: forbidden}
 }
 
 // renderGatePrompt renders the judge template. Used for the byte count
 // in the empty-response error and by the dry-run preview.
-func renderGatePrompt(body, trigger, action string) (string, error) {
+func renderGatePrompt(body, trigger, action string, forbidden []string) (string, error) {
 	tpl, err := template.New("instinct_gate").Parse(body)
 	if err != nil {
 		return "", fmt.Errorf("instinct gate: parse prompt: %w", err)
 	}
 	var b strings.Builder
-	if err := tpl.Execute(&b, gatePromptData{Trigger: trigger, Action: action}); err != nil {
+	if err := tpl.Execute(&b, newGatePromptData(trigger, action, forbidden)); err != nil {
 		return "", fmt.Errorf("instinct gate: render prompt: %w", err)
 	}
 	return b.String(), nil
