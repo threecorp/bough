@@ -187,10 +187,9 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		return ReviewResult{ID: c.ID, Failed: true, Cancelled: true, Err: err}
 	}
 
-	violations := 0
 	usable := 0
 	var errs []error
-	var rule, reason, category, quote string
+	var violating []reviewVerdict
 	for _, res := range results {
 		if res.err != nil {
 			errs = append(errs, res.err)
@@ -209,10 +208,7 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		}
 		usable++
 		if *v.Violation {
-			violations++
-			if rule == "" {
-				rule, reason, category, quote = v.Rule, v.Reason, v.Category, v.Quote
-			}
+			violating = append(violating, v)
 		}
 	}
 
@@ -221,24 +217,39 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	if usable < agree {
 		return ReviewResult{ID: c.ID, Failed: true, Err: firstOf(errs), Errs: errs}
 	}
-	if violations >= agree {
-		// Ground the citation before acting on the verdict. Consensus
+	if len(violating) >= agree {
+		// Ground the citations before acting on the verdict. Consensus
 		// defeats random variance; it cannot defeat a hallucination the
-		// model commits to across votes. A cited category that is not on
-		// the list the judge was given RELEASES the note — held on a rule
-		// nobody configured is held on nothing. An EMPTY category is not
-		// a hallucination (nothing was cited), so the hold stands.
-		if category != "" && !r.groundedCategory(category) {
-			return ReviewResult{ID: c.ID, RuleUngrounded: true, Rule: rule, Reason: reason}
+		// model commits to, which is what grounding is for. The citation
+		// is PER-VOTE, so the verdict carries the first vote whose
+		// citation grounds (an empty citation grounds trivially — nothing
+		// was cited): one vote paraphrasing the category must not release
+		// a note that another agreeing vote cited verbatim. Measured on
+		// the real model: the first violating vote paraphrased once in 13
+		// candidates, and grounding only that vote released a genuine
+		// violation. Only when EVERY agreeing vote cites something not on
+		// the list is the note released — held on a rule nobody configured
+		// is held on nothing.
+		chosen := -1
+		for i, v := range violating {
+			if v.Category == "" || r.groundedCategory(v.Category) {
+				chosen = i
+				break
+			}
 		}
+		if chosen == -1 {
+			return ReviewResult{ID: c.ID, RuleUngrounded: true, Rule: violating[0].Rule, Reason: violating[0].Reason}
+		}
+		v := violating[chosen]
+		rule := v.Rule
 		if rule == "" {
 			rule = "judge-flagged"
 		}
 		// The quote is verified but never decisive: the consensus judged
 		// the whole surface, so an unlocatable quote flags the hold for a
 		// closer look rather than undoing the judgement.
-		unverified := quote != "" && !containsNormalized(c.Trigger+"\n"+c.Action, quote)
-		return ReviewResult{ID: c.ID, Violation: true, Rule: rule, Reason: reason, QuoteUnverified: unverified}
+		unverified := v.Quote != "" && !containsNormalized(c.Trigger+"\n"+c.Action, v.Quote)
+		return ReviewResult{ID: c.ID, Violation: true, Rule: rule, Reason: v.Reason, QuoteUnverified: unverified}
 	}
 	return ReviewResult{ID: c.ID}
 }

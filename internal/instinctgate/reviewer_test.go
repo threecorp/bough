@@ -384,3 +384,30 @@ func TestEmptyCitationIsNotAHallucination(t *testing.T) {
 		t.Errorf("an omitted citation keeps the hold, got held=%v ungrounded=%d", br.Held, br.RuleUngrounded)
 	}
 }
+
+// TestOneSloppyVoteDoesNotReleaseWhenAnotherGrounds: the citation is
+// per-vote. One vote paraphrasing the category must not release a note
+// that another agreeing vote cited verbatim — measured on the real
+// model, that released a genuine violation once in 13 candidates.
+func TestOneSloppyVoteDoesNotReleaseWhenAnotherGrounds(t *testing.T) {
+	answers := [][]byte{
+		citedVerdictJSON(true, "r", "a paraphrase nobody configured", ""),
+		citedVerdictJSON(true, "r", "deleting a branch, tag, or remote ref", ""),
+		citedVerdictJSON(true, "r", "deleting a branch, tag, or remote ref", ""),
+	}
+	var mu sync.Mutex
+	i := 0
+	rv := NewReviewer(func(_ context.Context, _, _ string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		a := answers[i%len(answers)]
+		i++
+		return a, nil
+	})
+	rv.Categories = []string{"deleting a branch, tag, or remote ref"}
+
+	br := rv.ReviewBatch(context.Background(), []Candidate{{ID: "n1", Trigger: "t", Action: "a"}})
+	if len(br.Held) != 1 || br.RuleUngrounded != 0 {
+		t.Errorf("a grounded agreeing vote must carry the hold, got held=%v ungrounded=%d", br.Held, br.RuleUngrounded)
+	}
+}
