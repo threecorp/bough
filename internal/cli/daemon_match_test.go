@@ -14,7 +14,7 @@ func TestDaemonLineMatches(t *testing.T) {
 		want bool
 	}{
 		{"123 bough observer _run-daemon --root /Users/x/repo --interval 600", true},
-		{"123 /usr/bin/vim main.go", false},                                              // recycled pid → unrelated process
+		{"123 /usr/bin/vim main.go", false},                                               // recycled pid → unrelated process
 		{"9 bough observer _run-daemon --root /Users/x/repo-other --interval 600", false}, // prefix root must not match
 		{"9 bough observer run-once --root /Users/x/repo ", false},                        // run-once is not the daemon
 		{"", false},
