@@ -22,9 +22,9 @@ func TestBuild_ConfidenceSort(t *testing.T) {
 		mkI("high", 0.90, "do high"),
 		mkI("mid", 0.70, "do mid"),
 	}
-	block, n := Build(project, nil, Options{})
-	if n != 3 {
-		t.Fatalf("included = %d, want 3", n)
+	block, ids := Build(project, nil, Options{})
+	if len(ids) != 3 {
+		t.Fatalf("included = %d, want 3", len(ids))
 	}
 	// high must appear before mid before low
 	hi := strings.Index(block, "do high")
@@ -40,9 +40,9 @@ func TestBuild_DropsBelowFloor(t *testing.T) {
 		mkI("keep", 0.70, "keep me"),
 		mkI("drop", 0.30, "drop me"),
 	}
-	block, n := Build(project, nil, Options{})
-	if n != 1 {
-		t.Errorf("included = %d, want 1 (low-conf dropped)", n)
+	block, ids := Build(project, nil, Options{})
+	if len(ids) != 1 {
+		t.Errorf("included = %d, want 1 (low-conf dropped)", len(ids))
 	}
 	if strings.Contains(block, "drop me") {
 		t.Errorf("below-floor instinct was injected:\n%s", block)
@@ -67,9 +67,9 @@ func TestBuild_ProjectShadowsGlobalOnIDCollision(t *testing.T) {
 		mkI("shared", 0.95, "global version"),
 		mkI("global-only", 0.80, "global only rule"),
 	}
-	block, n := Build(project, global, Options{})
-	if n != 2 {
-		t.Fatalf("included = %d, want 2 (shared deduped, global-only kept)", n)
+	block, ids := Build(project, global, Options{})
+	if len(ids) != 2 {
+		t.Fatalf("included = %d, want 2 (shared deduped, global-only kept)", len(ids))
 	}
 	if strings.Contains(block, "global version") {
 		t.Errorf("global twin of a project instinct must be suppressed:\n%s", block)
@@ -91,9 +91,9 @@ func TestBuild_BelowFloorProjectDoesNotShadowGlobal(t *testing.T) {
 	// copy from the pool, but the healthy global copy still injects.
 	project := []*homunculus.Instinct{mkI("shared", 0.30, "weak project version")}
 	global := []*homunculus.Instinct{mkI("shared", 0.95, "strong global version")}
-	block, n := Build(project, global, Options{})
-	if n != 1 {
-		t.Fatalf("included = %d, want 1 (global twin still injected)", n)
+	block, ids := Build(project, global, Options{})
+	if len(ids) != 1 {
+		t.Fatalf("included = %d, want 1 (global twin still injected)", len(ids))
 	}
 	if !strings.Contains(block, "strong global version") {
 		t.Errorf("a below-floor project instinct must not shadow its still-valid global twin:\n%s", block)
@@ -109,20 +109,20 @@ func TestBuild_ByteCap(t *testing.T) {
 	for i := range project {
 		project[i] = mkI("instinct-"+string(rune('a'+i%26)), 0.80, strings.Repeat("x", 50))
 	}
-	block, n := Build(project, nil, Options{MaxBytes: 300, MaxInstincts: 100})
+	block, ids := Build(project, nil, Options{MaxBytes: 300, MaxInstincts: 100})
 	if len(block) > 350 { // header + a few lines, well under the 100-instinct full render
 		t.Errorf("block exceeded byte budget: %d bytes", len(block))
 	}
-	if n == 0 || n == 100 {
-		t.Errorf("byte cap did not bound the count: n=%d", n)
+	if len(ids) == 0 || len(ids) == 100 {
+		t.Errorf("byte cap did not bound the count: n=%d", len(ids))
 	}
 }
 
 func TestBuild_EmptyWhenNothingClearsFloor(t *testing.T) {
 	project := []*homunculus.Instinct{mkI("x", 0.30, "y")}
-	block, n := Build(project, nil, Options{})
-	if n != 0 || block != "" {
-		t.Errorf("expected empty block, got n=%d block=%q", n, block)
+	block, ids := Build(project, nil, Options{})
+	if len(ids) != 0 || block != "" {
+		t.Errorf("expected empty block, got n=%d block=%q", len(ids), block)
 	}
 }
 

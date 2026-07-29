@@ -119,8 +119,9 @@ type ranked struct {
 // no longer decides ORDER when a prompt is available: measured on this
 // project's live corpus every instinct carries the same confidence, so
 // ordering by it was really ordering by the id tiebreak. Returns the
-// rendered block + the count actually included.
-func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
+// rendered block + the ids actually included, in the order they were
+// rendered. Callers that only need the count take len(ids).
+func Build(project, global []*homunculus.Instinct, opts Options) (string, []string) {
 	opts = opts.withDefaults()
 
 	pool := make([]ranked, 0, len(project)+len(global))
@@ -181,22 +182,26 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	var b strings.Builder
 	b.WriteString("# bough — learned instincts for this project\n\n")
 	header := b.Len()
-	included := 0
+	// The ids are returned, not just their count: telemetry records what
+	// a prompt actually received, and "how many" cannot answer whether
+	// retrieval is reaching the tail of the corpus or cycling the same
+	// few notes. The count callers used to take is len(ids).
+	var ids []string
 	for _, r := range pool {
 		line := renderInstinctLine(r.in)
-		if b.Len()+len(line) > opts.MaxBytes && included > 0 {
+		if b.Len()+len(line) > opts.MaxBytes && len(ids) > 0 {
 			break
 		}
 		b.WriteString(line)
-		included++
+		ids = append(ids, r.in.ID)
 	}
-	if included == 0 {
+	if len(ids) == 0 {
 		// nothing cleared the confidence floor; emit an empty block
 		// so the hook is a clean no-op rather than a dangling header.
-		return "", 0
+		return "", nil
 	}
 	_ = header
-	return b.String(), included
+	return b.String(), ids
 }
 
 // rankByRelevance reorders the pool by how well each instinct matches

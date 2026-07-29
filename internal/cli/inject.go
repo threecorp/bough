@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/retrieve"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
 // runInjectContext resolves the current project's instinct pools and
@@ -64,7 +65,7 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if opts.ExcludeIDs == nil {
 		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
 	}
-	block, n := inject.Build(project, global, opts)
+	block, ids := inject.Build(project, global, opts)
 	// Human-authored corrections outrank minted instincts and are not
 	// scored, so they are prepended rather than merged into the ranking
 	// — and they are emitted even when nothing cleared the confidence
@@ -76,12 +77,19 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// so an operator's configured path would be silently ignored when the
 	// hook fires from a sub-repo.
 	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
-	if lessons == "" && n == 0 {
+	if lessons == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
 	fmt.Fprint(out, lessons)
-	if n > 0 {
+	if len(ids) > 0 {
 		fmt.Fprint(out, block)
+		// Record WHICH instincts this prompt received, not how many.
+		// Whether retrieval reaches the tail of the corpus or keeps
+		// cycling the same few notes is a question about identity over a
+		// window, and a count cannot answer it. Best-effort: the hook is
+		// on the prompt path and telemetry must never cost a turn.
+		telemetry.NewWriter(homunculus.NewLayout().TelemetryFile(ident.ID)).
+			AppendBestEffort(telemetry.Event{Kind: telemetry.KindSelection, IDs: ids})
 	}
 	return nil
 }
@@ -179,14 +187,14 @@ func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout
 		return nil
 	}
 	skillsDir := layout.EvolvedSkillsDir(projectID)
-	deployedDir := filepath.Join(monoRoot, ".claude", "skills")
 	coveragePath := layout.SkillCoverageFile(projectID)
 	// The gate reads the coverage registry to judge it, so take the copy
 	// it already parsed rather than reading the same file a second time
 	// on the prompt hot path. A non-Ready verdict already covers the
 	// unreadable case — that check is Blocking — so there is no separate
 	// nil test to make here.
-	ready := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
+	ready := evolve.ExclusionReadiness(skillsDir, layout.TelemetryFile(projectID), coveragePath,
+		time.Now(), evolve.DefaultExclusionWindow())
 	if !ready.Ready() {
 		return nil
 	}

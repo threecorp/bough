@@ -22,11 +22,11 @@ func TestExcludeIDsDropsSkillCoveredInstincts(t *testing.T) {
 		inst("covered-by-skill", "Run the reindex job."),
 		inst("not-covered", "Read the enclosing function first."),
 	}
-	block, n := Build(project, nil, Options{
+	block, ids := Build(project, nil, Options{
 		ExcludeIDs: map[string]struct{}{"covered-by-skill": {}},
 	})
-	if n != 1 {
-		t.Fatalf("included = %d, want 1 (the uncovered instinct only)", n)
+	if len(ids) != 1 {
+		t.Fatalf("included = %d, want 1 (the uncovered instinct only)", len(ids))
 	}
 	if strings.Contains(block, "reindex") {
 		t.Errorf("a skill-covered instinct was also pushed:\n%s", block)
@@ -41,11 +41,11 @@ func TestExcludeIDsDropsSkillCoveredInstincts(t *testing.T) {
 // must not slip back in through the global pool.
 func TestExcludeIDsAppliesToGlobalScope(t *testing.T) {
 	global := []*homunculus.Instinct{inst("covered-by-skill", "Run the reindex job.")}
-	_, n := Build(nil, global, Options{
+	_, ids := Build(nil, global, Options{
 		ExcludeIDs: map[string]struct{}{"covered-by-skill": {}},
 	})
-	if n != 0 {
-		t.Errorf("included = %d, want 0 — a covered id must not return via global scope", n)
+	if len(ids) != 0 {
+		t.Errorf("included = %d, want 0 — a covered id must not return via global scope", len(ids))
 	}
 }
 
@@ -58,7 +58,7 @@ func TestNoExcludeIDsPushesEverything(t *testing.T) {
 		inst("covered-by-skill", "Run the reindex job."),
 		inst("not-covered", "Read the enclosing function first."),
 	}
-	if _, n := Build(project, nil, Options{}); n != 2 {
-		t.Errorf("included = %d, want 2 — exclusion must be opt-in", n)
+	if _, ids := Build(project, nil, Options{}); len(ids) != 2 {
+		t.Errorf("included = %d, want 2 — exclusion must be opt-in", len(ids))
 	}
 }

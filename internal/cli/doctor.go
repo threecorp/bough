@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -182,8 +183,10 @@ func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
 	// injector deliberately does not.
 	r := evolve.ExclusionReadiness(
 		layout.EvolvedSkillsDir(env.ident.ID),
-		filepath.Join(env.root, ".claude", "skills"),
+		layout.TelemetryFile(env.ident.ID),
 		layout.SkillCoverageFile(env.ident.ID),
+		time.Now(),
+		evolve.DefaultExclusionWindow(),
 	).WithAdvisory()
 	switch {
 	case r.Ready() && requested:

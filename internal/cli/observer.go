@@ -19,6 +19,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/prompts"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
 // newObserverCmd wires the `bough observer` namespace. v0.9.0 ships
@@ -257,6 +258,22 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",
 					outcome.Reviewed, outcome.ReviewFailed)
 			}
+			// Record the verdict tallies. The gate fails open by design, so
+			// "unreviewed" is the number that says knowledge reached the
+			// corpus without being screened — and until now it existed only
+			// in the stdout of a run nobody kept. Written after the lines
+			// above so the log carries the same numbers the operator read.
+			telemetry.NewWriter(layout.TelemetryFile(ident.ID)).
+				AppendBestEffort(telemetry.Event{
+					Kind: telemetry.KindJudge,
+					Counts: map[string]int{
+						"candidates": outcome.ReviewCandidates,
+						"reviewed":   outcome.Reviewed,
+						"unreviewed": outcome.ReviewFailed,
+						"held":       outcome.Quarantined,
+						"emitted":    outcome.Emitted,
+					},
+				})
 			if outcome.Superseded > 0 {
 				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
 					outcome.Superseded, outcome.ArchiveDir)

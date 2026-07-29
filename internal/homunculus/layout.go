@@ -153,6 +153,15 @@ func (l Layout) EvolvedCommandsDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "evolved", "commands")
 }
 
+// TelemetryFile is the append-only record of what the loop DID: skills
+// pulled, instincts injected, gate verdicts. It sits beside
+// observations.jsonl rather than under evolved/ because it is not an
+// artifact of an evolve pass — it accumulates across every session and
+// outlives any particular portfolio.
+func (l Layout) TelemetryFile(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "telemetry.jsonl")
+}
+
 // EvalDir holds per-session score jsonl (= eval/scores.jsonl) the
 // SessionEnd handler appends to.
 func (l Layout) EvalDir(projectID string) string {
