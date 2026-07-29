@@ -397,7 +397,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 		held = append(held, movedRecord{id: d.ID, reason: d.Rule, path: dst})
 		out.Quarantined++
 	}
-	if err := writeMoveReport(batchDir, quarantineReportSpec(personalDir), held, now); err != nil {
+	if err := writeMoveReport(batchDir, quarantineReportSpec(layout.StagingDir(projectID)), held, now); err != nil {
 		out.Errs = append(out.Errs, err)
 	}
 	out.BatchDir = batchDir
@@ -496,20 +496,38 @@ type reportSpec struct {
 	banner      string
 	reasonLabel string
 	restoreDir  string
+	// reviewedFooter appends the REVIEWED-marker instruction, so the
+	// per-prompt notice for this batch can be cleared. A notice that
+	// never clears is a notice that gets ignored.
+	reviewedFooter bool
 }
 
-func quarantineReportSpec(personalDir string) reportSpec {
+func quarantineReportSpec(stagingDir string) reportSpec {
 	return reportSpec{
 		title: "Policy quarantine",
 		banner: "These instincts were HELD by the deterministic policy gate: their\n" +
 			"propagating surface (trigger + action) matched a command-shaped\n" +
 			"forbidden action. Nothing was deleted — each file was MOVED here\n" +
-			"whole and stays out of injection until you restore it. Review each\n" +
-			"one, then run the restore command in its row to put it back.\n\n" +
+			"whole and stays out of injection until you restore it.\n\n" +
+			"The restore commands point at .staging, NOT the live corpus: the\n" +
+			"next observer pass adopts whatever lands there and RE-JUDGES it.\n" +
+			"Feed every rewrite back through the same gate that held it rather\n" +
+			"than declaring it fixed — a rewrite that conditions one clause and\n" +
+			"leaves a sibling clause unconditional is exactly the miss a\n" +
+			"self-review does not catch and the judge does.\n\n" +
+			"Review guidance:\n" +
+			"- A held note is usually knowledge MISSING A PRECONDITION, not\n" +
+			"  wrong knowledge. The observer records what was done, never\n" +
+			"  whether it was authorized, so expect the fix to be \"restore the\n" +
+			"  condition\" far more often than \"delete\".\n" +
+			"- Permission to CREATE a thing is not permission to EDIT a thing\n" +
+			"  someone else wrote. An instinct bundling \"make it\" and \"then\n" +
+			"  update the related ones\" needs the second half gated separately.\n\n" +
 			"Scope: this gate matches COMMAND SHAPES ONLY. It is NOT a completeness\n" +
 			"claim — prose-shaped intent is not screened here.",
-		reasonLabel: "rule",
-		restoreDir:  personalDir,
+		reasonLabel:    "rule",
+		restoreDir:     stagingDir,
+		reviewedFooter: true,
 	}
 }
 
@@ -544,6 +562,10 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 	for _, r := range records {
 		dst := filepath.Join(spec.restoreDir, r.id+".md")
 		fmt.Fprintf(&b, "| %s | %s | `mv %s %s` |\n", r.id, r.reason, r.path, dst)
+	}
+	if spec.reviewedFooter {
+		fmt.Fprintf(&b, "\nWhen the review is done, clear the per-prompt notice:\n\n    touch %s\n",
+			filepath.Join(batchDir, "REVIEWED"))
 	}
 	reportPath := filepath.Join(batchDir, "REPORT.md")
 	if err := os.WriteFile(reportPath, []byte(b.String()), 0o644); err != nil {

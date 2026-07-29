@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -105,14 +106,63 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 			N:    len(ids),
 			MS:   float64(time.Since(start).Microseconds()) / 1000.0,
 		})
-	if lessons == "" && len(ids) == 0 {
+	// The quarantine notice is PREPENDED, ahead of everything: the gate's
+	// SessionStart/observer output goes nowhere an operator reads, so the
+	// prompt context is the one place a hold is guaranteed to be seen —
+	// and a silent hold is indistinguishable from data loss. It clears
+	// when the batch gains a REVIEWED marker, because a notice that never
+	// clears is a notice that gets ignored.
+	notice := quarantineNotice(layout, ident.ID)
+	if notice == "" && lessons == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
+	fmt.Fprint(out, notice)
 	fmt.Fprint(out, lessons)
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
 	return nil
+}
+
+// quarantineNotice announces quarantine batches that still hold notes
+// and lack a REVIEWED marker. Empty when there is nothing to review, so
+// a healthy corpus adds zero bytes to the prompt.
+func quarantineNotice(layout homunculus.Layout, projectID string) string {
+	root := layout.QuarantineDir(projectID)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	batches, held := 0, 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "REVIEWED")); err == nil {
+			continue
+		}
+		n := 0
+		files, ferr := os.ReadDir(dir)
+		if ferr != nil {
+			continue
+		}
+		for _, f := range files {
+			if !f.IsDir() && filepath.Ext(f.Name()) == ".md" && f.Name() != "REPORT.md" {
+				n++
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		batches++
+		held += n
+	}
+	if batches == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[bough policy] %d held instinct(s) in %d unreviewed batch(es) — read REPORT.md under %s, restore what belongs (into .staging; the next pass re-judges it), then `touch <batch>/REVIEWED`.\n\n",
+		held, batches, root)
 }
 
 // lessonsPaths reads the operator's lessons-file locations from

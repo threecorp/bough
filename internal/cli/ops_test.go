@@ -280,3 +280,49 @@ func TestSelfLimitOverrunFailsOpen(t *testing.T) {
 		t.Errorf("the overrun must be recorded as an empty selection, got %+v", stats)
 	}
 }
+
+// TestUnreviewedQuarantineIsAnnouncedPerPrompt: the gate's own output
+// goes nowhere an operator reads, so the prompt context is where a hold
+// must surface — and the notice must CLEAR once the batch is marked
+// reviewed, or it trains the reader to ignore it.
+func TestUnreviewedQuarantineIsAnnouncedPerPrompt(t *testing.T) {
+	opsHarness(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident, err := homunculus.DetectIdentity(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := homunculus.NewLayout()
+	batch := filepath.Join(layout.QuarantineDir(ident.ID), "20260701-000000")
+	if err := os.MkdirAll(batch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"held-note.md", "REPORT.md"} {
+		if err := os.WriteFile(filepath.Join(batch, f), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "1 held instinct(s) in 1 unreviewed batch(es)") {
+		t.Errorf("the hold must be announced in the prompt context:\n%s", buf.String())
+	}
+
+	// Marking the batch reviewed clears the notice.
+	if err := os.WriteFile(filepath.Join(batch, "REVIEWED"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "unreviewed batch") {
+		t.Errorf("a REVIEWED batch must not keep announcing:\n%s", buf.String())
+	}
+}
