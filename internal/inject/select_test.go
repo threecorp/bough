@@ -125,3 +125,32 @@ func TestFilteredCandidatesAreReplaced(t *testing.T) {
 		t.Errorf("restatements rendered = %d, want 1 (ids: %v)", copies, ids)
 	}
 }
+
+// TestEveryLineOversizedYieldsNothing makes an inherited behaviour
+// EXPLICIT rather than accidental, because a reviewer read it as a
+// regression and the code did not say which it was.
+//
+// The previous rule force-emitted the top candidate even when its own
+// line blew the whole budget; the reference selector instead skips every
+// over-budget line and keeps walking. Skipping is what ships: a single
+// >5000-byte line is a corrupted note (the known collapsed-onto-one-line
+// shape), and emitting it would spend the entire block on that one note.
+// The block only comes back empty when EVERY candidate is oversized —
+// and then there was nothing deliverable within budget anyway.
+func TestEveryLineOversizedYieldsNothing(t *testing.T) {
+	huge := strings.Repeat("collapsed onto one line ", 40)
+	corpus := []*homunculus.Instinct{
+		mkI("giant-a", 0.85, huge),
+		mkI("giant-b", 0.85, huge+"and more"),
+	}
+	block, ids := Build(corpus, nil, Options{MaxBytes: 300})
+	if len(ids) != 0 || block != "" {
+		t.Errorf("want a clean no-op when nothing fits, got %d id(s):\n%s", len(ids), block)
+	}
+	// And one that DOES fit is still delivered from the same corpus, so
+	// this is a per-line skip and not a give-up.
+	corpus = append(corpus, mkI("small", 0.85, "run bash -n after each edit"))
+	if _, ids = Build(corpus, nil, Options{MaxBytes: 300}); len(ids) != 1 || ids[0] != "small" {
+		t.Errorf("the line that fits must still render, got %v", ids)
+	}
+}

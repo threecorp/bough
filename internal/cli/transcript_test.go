@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 )
@@ -151,17 +153,21 @@ func TestInjectContext_RecentFilesReachSelection(t *testing.T) {
 
 	const vague = "why is this failing"
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{Prompt: vague}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{Prompt: vague}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if strings.Contains(buf.String(), "EnsureProjectDirs") {
 		t.Fatalf("precondition: a prompt naming nothing should retrieve nothing:\n%s", buf.String())
 	}
 
+	// The path arrives as a TRANSCRIPT, not a resolved list, so this covers
+	// the reader and the wiring together — and the read now happens inside
+	// the window the hook budgets and measures.
+	transcript := writeTranscript(t, toolLine("Read", filepath.Join(repo, "pkg/homunculus/layout.go")))
 	buf.Reset()
-	if err := runInjectContext(&buf, repo, inject.Options{
-		Prompt:      vague,
-		RecentFiles: []string{filepath.Join(repo, "pkg/homunculus/layout.go")},
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{
+		Prompt:         vague,
+		TranscriptPath: transcript,
 	}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}

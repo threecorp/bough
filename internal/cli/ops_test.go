@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/telemetry"
@@ -237,7 +239,7 @@ func TestDriftOutsideTheWindowIsNotShown(t *testing.T) {
 func TestEmptySelectionIsRecordedWithTiming(t *testing.T) {
 	path := opsHarness(t)
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything at all"}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, "", inject.Options{Prompt: "anything at all"}); err != nil {
 		t.Fatal(err)
 	}
 	log, err := telemetry.Load(path)
@@ -267,7 +269,7 @@ func TestEmptySelectionIsRecordedWithTiming(t *testing.T) {
 func TestSelfLimitOverrunFailsOpen(t *testing.T) {
 	path := opsHarness(t)
 	var buf bytes.Buffer
-	err := runInjectContext(&buf, "", inject.Options{Prompt: "anything", SelfLimit: time.Nanosecond})
+	err := runInjectContext(&cobra.Command{}, &buf, "", inject.Options{Prompt: "anything", SelfLimit: time.Nanosecond})
 	if err != nil {
 		t.Fatalf("an overrun must not fail the hook: %v", err)
 	}
@@ -307,7 +309,7 @@ func TestUnreviewedQuarantineIsAnnouncedPerPrompt(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything"}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, "", inject.Options{Prompt: "anything"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "1 held instinct(s) in 1 unreviewed batch(es)") {
@@ -319,7 +321,7 @@ func TestUnreviewedQuarantineIsAnnouncedPerPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	buf.Reset()
-	if err := runInjectContext(&buf, "", inject.Options{Prompt: "anything"}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, "", inject.Options{Prompt: "anything"}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(buf.String(), "unreviewed batch") {

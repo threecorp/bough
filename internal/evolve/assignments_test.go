@@ -87,18 +87,18 @@ func TestArrivalBacklogCountsSinceTheLastPass(t *testing.T) {
 	ca := &ClusterAssignments{ByInstinct: map[string]int{"older": 0}, UpdatedAt: pass}
 
 	b := ArrivalBacklog{Threshold: 1}
-	if n, overdue := b.Count([]*homunculus.Instinct{older, newer}, ca); n != 1 || !overdue {
+	if n, overdue := b.Count([]*homunculus.Instinct{older, newer}, ca, nil); n != 1 || !overdue {
 		t.Errorf("Count = (%d, %v), want (1, true) — only the arrival after the pass counts", n, overdue)
 	}
-	if n, overdue := b.Count([]*homunculus.Instinct{older}, ca); n != 0 || overdue {
+	if n, overdue := b.Count([]*homunculus.Instinct{older}, ca, nil); n != 0 || overdue {
 		t.Errorf("Count = (%d, %v), want (0, false)", n, overdue)
 	}
 	// Never clustered: nothing has been routed, so everything is a backlog.
-	if n, _ := b.Count([]*homunculus.Instinct{older, newer}, nil); n != 2 {
+	if n, _ := b.Count([]*homunculus.Instinct{older, newer}, nil, nil); n != 2 {
 		t.Errorf("unstamped Count = %d, want 2", n)
 	}
 	// Under the threshold says nothing at all.
-	if _, overdue := (ArrivalBacklog{Threshold: 5}).Count([]*homunculus.Instinct{older, newer}, nil); overdue {
+	if _, overdue := (ArrivalBacklog{Threshold: 5}).Count([]*homunculus.Instinct{older, newer}, nil, nil); overdue {
 		t.Error("a corpus under the threshold reported overdue")
 	}
 	if got := DefaultArrivalBacklog().Threshold; got != 60 {
@@ -112,7 +112,27 @@ func TestArrivalBacklogCountsSinceTheLastPass(t *testing.T) {
 func TestArrivalBacklogUndatedNoteDoesNotResurrectTheNotice(t *testing.T) {
 	ca := &ClusterAssignments{UpdatedAt: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)}
 	undated := &homunculus.Instinct{ID: "undated"}
-	if n, _ := (ArrivalBacklog{Threshold: 1}).Count([]*homunculus.Instinct{undated}, ca); n != 0 {
+	if n, _ := (ArrivalBacklog{Threshold: 1}).Count([]*homunculus.Instinct{undated}, ca, nil); n != 0 {
 		t.Errorf("an undated note counted as a new arrival (n=%d)", n)
+	}
+}
+
+// TestArrivalBacklogSkipsWhatIsAlreadyRouted is the other half of "a notice
+// that cannot be cleared is a notice that gets ignored". A note a deployed
+// skill delivers, or one the operator silenced in their register, HAS been
+// routed — counting it leaves the number stuck whatever the operator does
+// about individual notes.
+func TestArrivalBacklogSkipsWhatIsAlreadyRouted(t *testing.T) {
+	fresh := func(id string) *homunculus.Instinct {
+		return &homunculus.Instinct{ID: id, FirstSeen: time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)}
+	}
+	corpus := []*homunculus.Instinct{fresh("a"), fresh("b"), fresh("c")}
+	b := ArrivalBacklog{Threshold: 3}
+
+	if n, overdue := b.Count(corpus, nil, nil); n != 3 || !overdue {
+		t.Errorf("Count = (%d, %v), want (3, true) with nothing excluded", n, overdue)
+	}
+	if n, overdue := b.Count(corpus, nil, map[string]struct{}{"a": {}, "b": {}}); n != 1 || overdue {
+		t.Errorf("Count = (%d, %v), want (1, false) — routed notes must not count", n, overdue)
 	}
 }

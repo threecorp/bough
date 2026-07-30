@@ -470,9 +470,9 @@ func dispatchInjectContext(c *cobra.Command, prompt, transcript string) {
 	// The transcript adds what the prompt usually leaves out: "why is this
 	// failing?" names no subsystem, while the files the session just opened
 	// name it exactly.
-	_ = runInjectContext(c.OutOrStdout(), "", inject.Options{
-		Prompt:      prompt,
-		RecentFiles: newTranscriptReader().recentFiles(transcript),
+	_ = runInjectContext(c, c.OutOrStdout(), "", inject.Options{
+		Prompt:         prompt,
+		TranscriptPath: transcript,
 	})
 }
 

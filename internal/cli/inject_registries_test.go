@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
@@ -105,7 +107,7 @@ func TestInjectContext_ManualExclusionIsHonored(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if strings.Contains(buf.String(), "Do the minted thing") {
@@ -116,7 +118,7 @@ func TestInjectContext_ManualExclusionIsHonored(t *testing.T) {
 	// test would pass for the wrong reason.
 	writeBoughYAML(t, repo, "", "")
 	buf.Reset()
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Do the minted thing") {
@@ -134,7 +136,7 @@ func TestInjectContext_AliasReachesAnEnglishCorpus(t *testing.T) {
 
 	writeBoughYAML(t, repo, "", "")
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{Prompt: prompt}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{Prompt: prompt}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if strings.Contains(buf.String(), "Do the minted thing") {
@@ -147,7 +149,7 @@ func TestInjectContext_AliasReachesAnEnglishCorpus(t *testing.T) {
 	}
 	writeBoughYAML(t, repo, "", "alias.json")
 	buf.Reset()
-	if err := runInjectContext(&buf, repo, inject.Options{Prompt: prompt}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{Prompt: prompt}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Do the minted thing") {
@@ -167,17 +169,10 @@ func TestInjectContext_ArrivalBacklogAnnouncesAndClears(t *testing.T) {
 	}
 	layout := homunculus.NewLayout()
 	arrived := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < evolve.DefaultArrivalBacklog().Threshold; i++ {
-		id := fmt.Sprintf("arrival-%02d", i)
-		body := fmt.Sprintf("---\nid: %s\ntrigger: when the %d-th thing happens\nconfidence: 0.85\nscope: project\nfirst_seen: \"%s\"\nlast_seen: \"%s\"\n---\n\n## Action\nDo thing %d.\n",
-			id, i, arrived.Format(time.RFC3339), arrived.Format(time.RFC3339), i)
-		if err := os.WriteFile(filepath.Join(layout.InstinctsDir(ident.ID), id+".md"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedArrivals(t, layout, ident.ID, evolve.DefaultArrivalBacklog().Threshold, arrived)
 
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if !strings.Contains(buf.String(), "since the last clustering pass") {
@@ -191,10 +186,66 @@ func TestInjectContext_ArrivalBacklogAnnouncesAndClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	buf.Reset()
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if strings.Contains(buf.String(), "since the last clustering pass") {
 		t.Errorf("the notice survived the pass that answers it:\n%s", buf.String())
+	}
+}
+
+// seedArrivals writes n dated instincts into the project corpus — enough,
+// at the default threshold, to make the backlog notice fire.
+func seedArrivals(t *testing.T, layout homunculus.Layout, projectID string, n int, arrived time.Time) {
+	t.Helper()
+	stamp := arrived.Format(time.RFC3339)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("arrival-%02d", i)
+		body := fmt.Sprintf("---\nid: %s\ntrigger: when the %d-th thing happens\nconfidence: 0.85\nscope: project\nfirst_seen: \"%s\"\nlast_seen: \"%s\"\n---\n\n## Action\nDo thing %d.\n",
+			id, i, stamp, stamp, i)
+		if err := os.WriteFile(filepath.Join(layout.InstinctsDir(projectID), id+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestInjectContext_BacklogIgnoresRoutedInstincts is the end-to-end half of
+// the same rule: an operator who silences every arrival in their register
+// has routed them, and the notice must go quiet. Measured before this was
+// fixed: 61 of 61 excluded, zero lines injected, and the notice still said
+// "61 instinct(s) have arrived" — a number no action could move.
+func TestInjectContext_BacklogIgnoresRoutedInstincts(t *testing.T) {
+	repo := injectFixture(t, "0.9")
+	ident, err := homunculus.DetectIdentity(repo)
+	if err != nil {
+		t.Skipf("identity resolution needs a git repo: %v", err)
+	}
+	layout := homunculus.NewLayout()
+	n := evolve.DefaultArrivalBacklog().Threshold
+	seedArrivals(t, layout, ident.ID, n, time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC))
+
+	writeBoughYAML(t, repo, "", "")
+	var buf bytes.Buffer
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if !strings.Contains(buf.String(), "since the last clustering pass") {
+		t.Fatalf("precondition: the notice should fire at %d arrivals:\n%s", n, buf.String())
+	}
+
+	var register strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&register, "arrival-%02d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "quiet-ids.txt"), []byte(register.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBoughYAML(t, repo, "quiet-ids.txt", "")
+	buf.Reset()
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if strings.Contains(buf.String(), "since the last clustering pass") {
+		t.Errorf("the notice counts instincts the operator already routed:\n%s", buf.String())
 	}
 }

@@ -130,8 +130,9 @@ func DefaultArrivalBacklog() ArrivalBacklog {
 	return ArrivalBacklog{Threshold: 60} // ~a fortnight of arrivals at the observed mint rate
 }
 
-// Count returns how many instincts arrived after the pass that wrote ca,
-// and whether that is enough to announce.
+// Count returns how many instincts arrived after the pass that wrote ca
+// and are still waiting to be routed, plus whether that is enough to
+// announce.
 //
 // Arrival is FirstSeen, not the file's mtime: re-observing an old note
 // bumps its mtime, and counting that would let a corpus nobody has added
@@ -139,13 +140,22 @@ func DefaultArrivalBacklog() ArrivalBacklog {
 // notice that gets ignored, which is the failure mode this whole notice
 // exists to avoid. An unstamped corpus counts everything, since nothing
 // has ever been routed.
-func (b ArrivalBacklog) Count(instincts []*homunculus.Instinct, ca *ClusterAssignments) (int, bool) {
+//
+// excluded is the set of ids already delivered another way — covered by a
+// deployed skill, or silenced in the operator's register. Those HAVE been
+// routed, so counting them is the same unclearable-notice failure by a
+// different door: an operator dealing with notes one at a time would watch
+// the number refuse to move. Pass nil when nothing is excluded.
+func (b ArrivalBacklog) Count(instincts []*homunculus.Instinct, ca *ClusterAssignments, excluded map[string]struct{}) (int, bool) {
 	since := time.Time{}
 	if ca != nil {
 		since = ca.UpdatedAt
 	}
 	n := 0
 	for _, in := range instincts {
+		if _, routed := excluded[in.ID]; routed {
+			continue
+		}
 		arrived := in.FirstSeen
 		if arrived.IsZero() {
 			// No first_seen in the frontmatter (an imported or hand-written

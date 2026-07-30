@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 )
@@ -65,9 +66,15 @@ func (r transcriptReader) recentFiles(path string) []string {
 			return nil
 		}
 	}
-	buf := make([]byte, min(info.Size(), r.tailBytes))
-	n, _ := f.Read(buf) // a short read is still usable: fewer lines, no error
-	lines := strings.Split(string(buf[:n]), "\n")
+	// Read to EOF rather than one Read into a sized buffer: a single Read
+	// may legally return less than asked for, and what it would drop is the
+	// END of the file — the newest lines, which are the entire point. The
+	// seek above is what bounds this.
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(buf), "\n")
 	if len(lines) > r.maxLines {
 		lines = lines[len(lines)-r.maxLines:]
 	}

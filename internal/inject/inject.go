@@ -106,12 +106,15 @@ type Options struct {
 	// package names below the project root). See retrieve.ContextTokens
 	// for why the repo name itself is deliberately not among them.
 	ContextTokens []string
-	// RecentFiles are paths the session just read or edited, from the
-	// host's transcript. Kept apart from ContextTokens by PROVENANCE — one
-	// is derived from where the shell is, the other from what the session
-	// actually opened — and merged into the query by the caller, which is
-	// the layer that knows how to obtain each.
-	RecentFiles []string
+	// TranscriptPath is the host's transcript for this session. The caller
+	// mines its tail for the files the session just opened and merges them
+	// into the query; this package never reads it.
+	//
+	// It is the PATH rather than a resolved file list so the read happens
+	// inside the caller's time budget and inside the duration it records:
+	// work done before the clock starts is work the selector's own health
+	// numbers cannot see.
+	TranscriptPath string
 	// ExcludeIDs are instinct ids an evolved skill already delivers.
 	// Supplying them drops those instincts from the pushed block so the
 	// same knowledge is not both pushed and pullable.
@@ -277,10 +280,18 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, []stri
 	// qualified. Scaled to what the query can actually supply, never below
 	// one — see sharedTokenFloor.
 	floor := map[string]struct{}{}
+	need := 1
 	if opts.Prompt != "" {
 		floor = retrieve.ContentTokens(opts.Prompt + " " + strings.Join(opts.ContextTokens, " "))
+		// Scaled on what the PROMPT can supply, not on the whole query.
+		// Context tokens (the cwd's segments, the files the session just
+		// opened, alias expansions) are present on nearly every real hook
+		// invocation and would push this back to the fixed 2 — which is
+		// exactly the "precise-but-terse prompt returns nothing" failure the
+		// scaling exists to prevent. They still COUNT toward clearing the
+		// floor; they just do not raise the bar.
+		need = max(1, min(sharedTokenFloor, len(retrieve.ContentTokens(opts.Prompt))/2))
 	}
-	need := max(1, min(sharedTokenFloor, len(floor)/2))
 
 	var b strings.Builder
 	b.WriteString("# bough — learned instincts for this project\n\n")
