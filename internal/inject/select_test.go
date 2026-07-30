@@ -154,3 +154,40 @@ func TestEveryLineOversizedYieldsNothing(t *testing.T) {
 		t.Errorf("the line that fits must still render, got %v", ids)
 	}
 }
+
+// TestContextTokensDoNotRaiseTheFloor is the differential the end-to-end
+// probe could not produce: a terse prompt, a candidate sharing exactly ONE
+// prompt token, and context tokens present — the state of nearly every real
+// hook invocation, since the cwd and the files the session just opened both
+// feed ContextTokens.
+//
+// Scaling `need` on the merged query instead of the prompt pushes it back to
+// 2 here and the note is dropped, which is the very "precise-but-terse
+// prompt returns nothing" failure the scaling exists to prevent.
+func TestContextTokensDoNotRaiseTheFloor(t *testing.T) {
+	corpus := []*homunculus.Instinct{
+		{
+			ID: "esreindex-note", Confidence: 0.9,
+			Trigger: "when esreindex has not run",
+			Body:    "## Action\nrebuild the index before trusting a search result\n",
+		},
+	}
+	opts := Options{
+		Prompt: "esreindex?", // one content token
+		// What retrieve.ContextTokens + the transcript reader contribute on
+		// a normal turn: enough to double-digit the merged token count.
+		ContextTokens: []string{
+			"internal/cli/hook.go", "internal/inject/inject.go",
+			"internal/retrieve/rank.go", "pkg/dockerutil",
+		},
+	}
+	if _, ids := Build(corpus, nil, opts); !containsID(ids, "esreindex-note") {
+		t.Errorf("a terse prompt lost the note it names once context tokens were present: %v", ids)
+	}
+	// Without any context the same prompt must of course still work — so the
+	// test cannot pass merely because the floor stopped applying.
+	opts.ContextTokens = nil
+	if _, ids := Build(corpus, nil, opts); !containsID(ids, "esreindex-note") {
+		t.Errorf("baseline: the note was not delivered even with no context: %v", ids)
+	}
+}
