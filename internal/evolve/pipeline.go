@@ -18,6 +18,13 @@ type Outcome struct {
 	Agents        []AgentResult
 	Commands      []CommandResult
 	Rejected      []RejectedCluster
+	// Assignments is the cluster membership of every discovered cluster,
+	// INCLUDING the ones no gate passed. That is deliberate: a family of
+	// restatements too incoherent to become a skill is exactly the family
+	// most likely to crowd a prompt, so the injector's per-cluster cap
+	// needs it stamped. Recorded here (never written by Run) so a preview
+	// stays a preview.
+	Assignments *ClusterAssignments
 }
 
 // SkillResult is a PASS / DOUBT cluster ready to emit as a skill.
@@ -106,6 +113,7 @@ func (p Pipeline) Run(ctx context.Context, instincts []*homunculus.Instinct, lab
 	out := Outcome{
 		InstinctCount: len(instincts),
 		ClusterCount:  len(clusters),
+		Assignments:   NewClusterAssignments(clusters),
 	}
 
 	judged := 0 // gate-passing clusters sent to GATE 5, for progress

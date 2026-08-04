@@ -148,6 +148,16 @@ func (l Layout) SkillCoverageFile(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "evolved", "skill-coverage.json")
 }
 
+// ClusterAssignmentsFile records which discovered cluster each instinct
+// belongs to, as of the last evolve pass. The injector reads it to cap
+// how many members of ONE family may take the prompt budget; clustering
+// is far too slow to redo on the prompt hot path, so the offline pass
+// stamps it here. It sits under evolved/ because it is an artifact of a
+// pass, replaced wholesale by the next one.
+func (l Layout) ClusterAssignmentsFile(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "evolved", "cluster-assignments.json")
+}
+
 // EvolvedCommandsDir holds <slug>.md slash-command specs.
 func (l Layout) EvolvedCommandsDir(projectID string) string {
 	return filepath.Join(l.ProjectDir(projectID), "evolved", "commands")

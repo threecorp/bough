@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 )
@@ -60,7 +62,7 @@ func TestInjectContext_LessonsPrecedeMintedInstincts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	out := buf.String()
@@ -84,7 +86,7 @@ func TestInjectContext_LessonsSurviveWhenNothingClearsTheFloor(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	out := buf.String()
@@ -114,7 +116,7 @@ func TestInjectContext_PromptSelectsRelevantInstinct(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{Prompt: "the mysql handshake keeps failing"}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{Prompt: "the mysql handshake keeps failing"}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	out := buf.String()
@@ -132,7 +134,7 @@ func TestInjectContext_PromptSelectsRelevantInstinct(t *testing.T) {
 func TestInjectContext_OffTopicPromptInjectsNothing(t *testing.T) {
 	repo := injectFixture(t, "0.9")
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{Prompt: "photosynthesis in alpine wildflowers"}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{Prompt: "photosynthesis in alpine wildflowers"}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -146,7 +148,7 @@ func TestInjectContext_OffTopicPromptInjectsNothing(t *testing.T) {
 func TestInjectContext_NoLessonsNoInstinctsIsCleanNoOp(t *testing.T) {
 	repo := injectFixture(t, "0.10") // below floor, and no lessons file
 	var buf bytes.Buffer
-	if err := runInjectContext(&buf, repo, inject.Options{}); err != nil {
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
 		t.Fatalf("runInjectContext: %v", err)
 	}
 	if buf.Len() != 0 {

@@ -568,7 +568,20 @@ instinct:
   observer:
     autostart: true      # opt-in: auto-run the minting daemon per session
     interval_sec: 600     # minting cadence; optional, defaults to 10 min
+  select:                 # both optional; absent leaves the feature off
+    exclusions_path: .claude/bough-exclusions.txt   # ids to stop pushing
+    alias_path: .claude/bough-alias.json            # 非英語 → English terms
 ```
+
+The injected block is ranked by relevance to the prompt (exact identifier
+hits, BM25, recency — fused by rank), then trimmed: at most 12 lines and
+5000 bytes, at most 2 from one clustered family, and a line that merely
+restates one already chosen is skipped. `select.exclusions_path` is your own
+"I have heard this enough" register — a JSON object with reasons, or one id
+per line. `select.alias_path` maps a term the corpus does not contain to the
+English words it does (`{"予約": ["booking"]}`); without it a non-English
+prompt can only retrieve what it happens to name in English, because the
+lexical channel is blind across languages.
 
 `observer.autostart` is the "opt-in once, then automatic" switch: with it on,
 the `UserPromptSubmit` hook ensures the `bough instinct observer start` daemon is running

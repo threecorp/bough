@@ -100,7 +100,7 @@ func exclusionFixture(t *testing.T, pullPathFiring bool) (monoRoot, projectID st
 func TestExclusionHeldByGateDespiteConfig(t *testing.T) {
 	monoRoot, projectID, layout := exclusionFixture(t, false) // nothing has been pulled
 
-	got := skillCoveredExclusions(monoRoot, projectID, layout)
+	got := skillCoveredExclusions(injectConfig(nil, monoRoot), projectID, layout)
 	if len(got) != 0 {
 		t.Errorf("exclusion applied while the gate says WAIT: %v", got)
 	}
@@ -112,7 +112,7 @@ func TestExclusionHeldByGateDespiteConfig(t *testing.T) {
 func TestExclusionAppliesOnceGateOpens(t *testing.T) {
 	monoRoot, projectID, layout := exclusionFixture(t, true)
 
-	got := skillCoveredExclusions(monoRoot, projectID, layout)
+	got := skillCoveredExclusions(injectConfig(nil, monoRoot), projectID, layout)
 	if _, ok := got["reindex-after-schema"]; !ok {
 		t.Errorf("exclusion did not apply though the pull path is firing: %v", got)
 	}
@@ -134,7 +134,7 @@ func TestDeployedButUnusedPortfolioDoesNotOpenTheGate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := skillCoveredExclusions(monoRoot, projectID, layout); len(got) != 0 {
+	if got := skillCoveredExclusions(injectConfig(nil, monoRoot), projectID, layout); len(got) != 0 {
 		t.Errorf("a deployed but never-pulled portfolio must not suppress anything: %v", got)
 	}
 }
@@ -151,7 +151,7 @@ func TestExclusionNotAppliedWithoutRequest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(monoRoot, ".bough.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := skillCoveredExclusions(monoRoot, projectID, layout); len(got) != 0 {
+	if got := skillCoveredExclusions(injectConfig(nil, monoRoot), projectID, layout); len(got) != 0 {
 		t.Errorf("a ready gate must not suppress without the request: %v", got)
 	}
 }

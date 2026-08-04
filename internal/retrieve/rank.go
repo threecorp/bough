@@ -46,13 +46,25 @@ type Ranker struct {
 	// the prompt actually matched, and the tiebreak — not the ranking —
 	// decides, which is the same failure this package exists to fix.
 	RecencyWeight float64
+	// ChannelLimit is the per-channel candidate DEPTH: only a channel's
+	// top-N ranks reach the fusion. It bounds the work fusion does on a
+	// large corpus, and it is what makes the fused score mean "several
+	// channels agree near the top" rather than "some channel found this
+	// somewhere". Without it a doc that ranked 800th lexically still
+	// entered the pool carrying a near-zero RRF term, and the ordering
+	// among such candidates was decided by the tiebreak again.
+	//
+	// It applies to the recency channel too: a weak prior computed over
+	// the whole corpus would hand every candidate the same tiny bonus,
+	// which is not a prior, it is a constant. Zero means "no bound".
+	ChannelLimit int
 	// MaxResults bounds the returned slice. Zero means "no bound".
 	MaxResults int
 }
 
 // NewRanker returns a Ranker with the published defaults.
 func NewRanker() *Ranker {
-	return &Ranker{K1: 1.2, B: 0.75, RRFk: 60, RecencyWeight: 0.3, MaxResults: 0}
+	return &Ranker{K1: 1.2, B: 0.75, RRFk: 60, RecencyWeight: 0.3, ChannelLimit: 50, MaxResults: 0}
 }
 
 // Rank scores docs against the query text plus any context tokens the
@@ -87,9 +99,9 @@ func (r *Ranker) Rank(docs []Doc, query string, contextTokens []string) []Result
 		return nil
 	}
 
-	exactRank := rankByScore(exactScores(docs, queryIdents))
-	lexRank := rankByScore(r.bm25Scores(docs, queryTokens))
-	recRank := recencyRanks(docs)
+	exactRank := capDepth(rankByScore(exactScores(docs, queryIdents)), r.ChannelLimit)
+	lexRank := capDepth(rankByScore(r.bm25Scores(docs, queryTokens)), r.ChannelLimit)
+	recRank := capDepth(recencyRanks(docs), r.ChannelLimit)
 
 	out := make([]Result, 0, len(docs))
 	for i, d := range docs {
@@ -218,6 +230,27 @@ func recencyRanks(docs []Doc) map[int]int {
 		ranks[i] = rank + 1
 	}
 	return ranks
+}
+
+// capDepth drops every entry ranked deeper than limit, so only a
+// channel's head reaches the fusion. A non-positive limit means "no
+// bound" and returns the ranks unchanged.
+//
+// It returns a NEW map rather than deleting from the argument: the
+// caller's map is derived per call today, but a helper that quietly
+// mutates what it is handed is the kind of thing a later caller
+// discovers the hard way.
+func capDepth(ranks map[int]int, limit int) map[int]int {
+	if limit <= 0 {
+		return ranks
+	}
+	out := make(map[int]int, len(ranks))
+	for i, rank := range ranks {
+		if rank <= limit {
+			out[i] = rank
+		}
+	}
+	return out
 }
 
 // rankByScore converts a sparse score map into 1-based ranks, highest

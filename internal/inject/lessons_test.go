@@ -21,7 +21,7 @@ func writeLessons(t *testing.T, root, rel, body string) {
 // TestLessonsBlock_AbsentIsCleanNoOp pins the hook contract: with no
 // lessons file the block is empty, so the prompt is unaffected.
 func TestLessonsBlock_AbsentIsCleanNoOp(t *testing.T) {
-	if got := LessonsBlock(t.TempDir(), nil, DefaultMaxBytes); got != "" {
+	if got := LessonsBlock(t.TempDir(), nil, DefaultLessonsBytes); got != "" {
 		t.Errorf("no lessons file should render nothing, got %q", got)
 	}
 }
@@ -32,7 +32,7 @@ func TestLessonsBlock_AbsentIsCleanNoOp(t *testing.T) {
 func TestLessonsBlock_EmptyFileIsCleanNoOp(t *testing.T) {
 	root := t.TempDir()
 	writeLessons(t, root, "lessons.md", "\n\n   \n")
-	if got := LessonsBlock(root, nil, DefaultMaxBytes); got != "" {
+	if got := LessonsBlock(root, nil, DefaultLessonsBytes); got != "" {
 		t.Errorf("whitespace-only lessons file should render nothing, got %q", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestLessonsBlock_EmptyFileIsCleanNoOp(t *testing.T) {
 func TestLessonsBlock_RendersContentAndPrecedence(t *testing.T) {
 	root := t.TempDir()
 	writeLessons(t, root, "tasks/lessons.md", "- Always re-read the enclosing function before editing.\n")
-	got := LessonsBlock(root, nil, DefaultMaxBytes)
+	got := LessonsBlock(root, nil, DefaultLessonsBytes)
 	for _, want := range []string{"tasks/lessons.md", "outrank", "re-read the enclosing function"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lessons block missing %q:\n%s", want, got)
@@ -58,7 +58,7 @@ func TestLessonsBlock_FirstExistingPathWins(t *testing.T) {
 	root := t.TempDir()
 	writeLessons(t, root, "tasks/lessons.md", "- from tasks\n")
 	writeLessons(t, root, ".claude/lessons.md", "- from dot-claude\n")
-	got := LessonsBlock(root, nil, DefaultMaxBytes)
+	got := LessonsBlock(root, nil, DefaultLessonsBytes)
 	if !strings.Contains(got, "from dot-claude") {
 		t.Errorf("expected .claude/lessons.md (first candidate) to win:\n%s", got)
 	}
@@ -73,7 +73,7 @@ func TestLessonsBlock_ConfiguredPathOverridesDefaults(t *testing.T) {
 	root := t.TempDir()
 	writeLessons(t, root, "lessons.md", "- conventional\n")
 	writeLessons(t, root, "docs/corrections.md", "- configured\n")
-	got := LessonsBlock(root, []string{"docs/corrections.md"}, DefaultMaxBytes)
+	got := LessonsBlock(root, []string{"docs/corrections.md"}, DefaultLessonsBytes)
 	if !strings.Contains(got, "configured") || strings.Contains(got, "conventional") {
 		t.Errorf("configured path should win outright:\n%s", got)
 	}
@@ -91,30 +91,35 @@ func TestLessonsBlock_TruncationIsStatedNotSilent(t *testing.T) {
 	}
 	writeLessons(t, root, "lessons.md", body.String())
 
-	got := LessonsBlock(root, nil, DefaultMaxBytes)
+	got := LessonsBlock(root, nil, DefaultLessonsBytes)
 	if !strings.Contains(got, "truncated") {
 		t.Errorf("truncation must be stated in the block:\n%s", got[:min(len(got), 400)])
 	}
 	if !strings.Contains(got, "lessons.md") {
 		t.Errorf("truncation notice must name the file to read for the rest")
 	}
-	// The lessons block gets its own slice of the budget so it cannot
-	// starve the minted instincts that follow it.
-	if len(got) > DefaultMaxBytes/lessonsBudgetFraction+512 {
-		t.Errorf("lessons block = %d bytes, want ≈ budget/%d + header", len(got), lessonsBudgetFraction)
+	// The lessons block gets its OWN budget so it cannot starve the minted
+	// instincts that follow it, and the two sum under the total the hook
+	// is allowed to print.
+	if len(got) > DefaultLessonsBytes+512 {
+		t.Errorf("lessons block = %d bytes, want ≈ %d + header", len(got), DefaultLessonsBytes)
+	}
+	if DefaultBlockBytes+DefaultLessonsBytes > DefaultTotalBytes {
+		t.Errorf("the two budgets (%d + %d) exceed the total the hook may print (%d)",
+			DefaultBlockBytes, DefaultLessonsBytes, DefaultTotalBytes)
 	}
 }
 
-// TestLessonsBlock_ZeroMaxBytesUsesDefaultBudget pins the defaulting
-// seam. Callers hand Build an Options{} and let it default internally,
-// so MaxBytes arrives here as 0; computing a fraction of 0 truncated the
-// entire block away and emitted a header over an empty body.
-func TestLessonsBlock_ZeroMaxBytesUsesDefaultBudget(t *testing.T) {
+// TestLessonsBlock_ZeroBudgetUsesTheDefault pins the defaulting seam.
+// Zero is what the CLI passes to mean "the standard budget"; taken
+// literally it truncated the entire block away and emitted a header over
+// an empty body.
+func TestLessonsBlock_ZeroBudgetUsesTheDefault(t *testing.T) {
 	root := t.TempDir()
 	writeLessons(t, root, "lessons.md", "- Never skip the readiness gate.\n")
 	got := LessonsBlock(root, nil, 0)
 	if !strings.Contains(got, "Never skip the readiness gate") {
-		t.Errorf("zero MaxBytes must fall back to the default budget, got:\n%s", got)
+		t.Errorf("a zero budget must fall back to the default, got:\n%s", got)
 	}
 	if strings.Contains(got, "truncated") {
 		t.Errorf("a one-line lessons file must not be truncated:\n%s", got)

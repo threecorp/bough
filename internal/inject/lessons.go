@@ -31,24 +31,32 @@ var DefaultLessonsPaths = []string{
 	"lessons.md",
 }
 
-// lessonsBudgetFraction caps the lessons block at a third of the total
-// byte budget. Ground truth ranks first, but a 9KB lessons file would
-// otherwise consume the whole prompt block and leave no room for the
-// minted instincts that are the rest of the point.
-const lessonsBudgetFraction = 3
+// DefaultLessonsBytes is the lessons block's own byte budget — the rest
+// of DefaultTotalBytes after the instinct block's DefaultBlockBytes.
+// Ground truth ranks first, but a 9KB lessons file would otherwise
+// consume the whole prompt block and leave no room for the minted
+// instincts that are the rest of the point.
+//
+// It is a budget of its own rather than a fraction of the instinct
+// block's: the two are not competing for one pool, and a fraction made
+// the operator's corrections shrink whenever someone tuned an unrelated
+// knob.
+const DefaultLessonsBytes = 3000
 
 // LessonsBlock renders the human-authored corrections block for the
 // monorepo at root, or "" when no lessons file exists. paths may be nil,
 // in which case DefaultLessonsPaths is used; entries are resolved
-// relative to root. Truncation is stated in the output rather than
-// applied quietly — a silently halved lessons file reads as "this is all
-// the guidance there is".
-func LessonsBlock(root string, paths []string, maxBytes int) string {
-	// Resolve the byte budget through the same defaulting Build uses.
-	// Callers hand Build an Options{} and let it default internally, so a
-	// bare MaxBytes reaching here is 0 — computing a fraction of that
-	// would silently truncate the whole block to nothing.
-	maxBytes = Options{MaxBytes: maxBytes}.WithDefaults().MaxBytes
+// relative to root. budget is this block's byte allowance; zero or below
+// means DefaultLessonsBytes. Truncation is stated in the output rather
+// than applied quietly — a silently halved lessons file reads as "this
+// is all the guidance there is".
+func LessonsBlock(root string, paths []string, budget int) string {
+	// Zero is what callers pass to mean "the standard budget" (the CLI
+	// does), so it must not be taken literally: a budget of 0 would
+	// truncate the operator's corrections to nothing.
+	if budget <= 0 {
+		budget = DefaultLessonsBytes
+	}
 	if len(paths) == 0 {
 		paths = DefaultLessonsPaths
 	}
@@ -59,10 +67,6 @@ func LessonsBlock(root string, paths []string, maxBytes int) string {
 	body := strings.TrimSpace(content)
 	if body == "" {
 		return ""
-	}
-	budget := maxBytes / lessonsBudgetFraction
-	if budget <= 0 {
-		budget = maxBytes
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Corrections from the operator (%s) — these outrank the learned instincts below\n\n", path)

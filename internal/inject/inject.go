@@ -24,21 +24,67 @@ import (
 	"github.com/ikeikeikeike/bough/internal/retrieve"
 )
 
-// DefaultMaxBytes is the ECC-derived cap on the injected block. The
-// UserPromptSubmit stdout is billed as input tokens, so the block is
-// bounded to balance "useful context" against "cost per prompt".
+// DefaultTotalBytes is the ceiling on everything this hook prints. The
+// UserPromptSubmit stdout is billed as input tokens, so the whole block
+// is bounded to balance "useful context" against "cost per prompt".
 // ~9.5 KB ≈ a few thousand tokens.
-const DefaultMaxBytes = 9500
+//
+// It is not enforced by a truncation pass: the two budgets below sum
+// under it BY CONSTRUCTION, and a test pins that. A ceiling maintained
+// by arithmetic that no one checks is a ceiling that drifts.
+const DefaultTotalBytes = 9500
 
-// DefaultMaxInstincts bounds how many instincts we even consider for
-// the block before the byte cap kicks in. Keeps the render loop cheap
-// on a 1k-instinct corpus.
-const DefaultMaxInstincts = 40
+// DefaultBlockBytes is the instinct block's share of the total. The
+// remainder is the operator's lessons file (DefaultLessonsBytes), which
+// gets its own budget rather than competing for one, so a long lessons
+// file cannot starve the minted block or the reverse.
+const DefaultBlockBytes = 5000
+
+// DefaultMaxInstincts bounds how many instincts are RENDERED. It is a
+// cap on the output, not on the candidates considered: a candidate the
+// relevance floor, the family cap or the near-duplicate check drops must
+// be REPLACEABLE by the next one down, or those filters would quietly
+// shrink the block instead of improving it. Candidate breadth is bounded
+// by the retrieval channels' own depth (retrieve.Ranker.ChannelLimit).
+const DefaultMaxInstincts = 12
+
+// DefaultNearDupJaccard is the similarity above which a candidate counts
+// as a RESTATEMENT of one already selected and is skipped. Restatements
+// are the corpus's dominant failure mode — the observer mints a fresh
+// note for the same lesson every time it recurs — so without this the
+// block spends its budget saying one thing repeatedly.
+//
+// It complements the family cap rather than duplicating it: the cap
+// needs an offline clustering pass to have stamped the corpus, while
+// this compares the two candidates actually in hand, so it works on a
+// corpus nothing has clustered yet.
+const DefaultNearDupJaccard = 0.5
+
+// sharedTokenFloor is the number of query tokens a candidate must share
+// to clear the relevance floor when it has NO exact-identifier hit. It
+// is an upper bound, scaled down for terse queries (see Build): a
+// two-word prompt cannot share two content tokens with anything, so a
+// fixed floor of 2 would turn precise-but-terse prompts into zero
+// results — the shape that made "PR の CI" unanswerable upstream.
+const sharedTokenFloor = 2
 
 // MinConfidence drops low-confidence instincts from injection
 // entirely — a 0.30-confidence guess is more likely to mislead than
 // help, and it competes for the byte budget with reliable ones.
 const MinConfidence = 0.50
+
+// DefaultClusterCap bounds how many instincts from ONE discovered family
+// may take the block. Restatements cluster together, so without a cap a
+// prompt that brushes a well-covered subject spends the whole budget
+// hearing the same advice five times while every other subject the
+// prompt touched gets nothing.
+//
+// It binds only where the corpus carries a cluster stamp (written by
+// `bough evolve --generate`, read via Options.ClusterOf). Unstamped is
+// UNCAPPED, not capped-at-one — and `bough doctor` prints the stamped
+// population so an unstamped corpus is loud instead of quietly making
+// this mechanism inert.
+const DefaultClusterCap = 2
 
 // Options tunes the block. Zero values for MaxBytes/MaxInstincts fall
 // back to the Default* constants so callers can pass Options{} for
@@ -60,6 +106,15 @@ type Options struct {
 	// package names below the project root). See retrieve.ContextTokens
 	// for why the repo name itself is deliberately not among them.
 	ContextTokens []string
+	// TranscriptPath is the host's transcript for this session. The caller
+	// mines its tail for the files the session just opened and merges them
+	// into the query; this package never reads it.
+	//
+	// It is the PATH rather than a resolved file list so the read happens
+	// inside the caller's time budget and inside the duration it records:
+	// work done before the clock starts is work the selector's own health
+	// numbers cannot see.
+	TranscriptPath string
 	// ExcludeIDs are instinct ids an evolved skill already delivers.
 	// Supplying them drops those instincts from the pushed block so the
 	// same knowledge is not both pushed and pullable.
@@ -70,6 +125,20 @@ type Options struct {
 	// is recorded first, acted on only once there is evidence the pull
 	// path works.
 	ExcludeIDs map[string]struct{}
+	// ClusterOf maps instinct id → the family it clustered into, as
+	// stamped by the last evolve pass (evolve.ClusterAssignments). An id
+	// absent from the map is UNSTAMPED and therefore uncapped: a missing
+	// stamp means "we do not know its family", and guessing it is alone
+	// would be a different claim than the data supports.
+	ClusterOf map[string]int
+	// ClusterCap bounds how many members of one family may be rendered.
+	// Zero falls back to DefaultClusterCap.
+	ClusterCap int
+	// NearDupJaccard is the token-set similarity above which a candidate
+	// is treated as a restatement of one already selected. Zero or below
+	// falls back to DefaultNearDupJaccard (0 would drop everything, so it
+	// cannot be a meaningful setting).
+	NearDupJaccard float64
 	// SelfLimit bounds the selection step of the prompt hook. The host
 	// gives the whole hook 5 seconds; the default leaves room for the
 	// blocks that must still print after selection. Overrun is fail-open:
@@ -87,7 +156,7 @@ type Options struct {
 // places.
 func (o Options) WithDefaults() Options {
 	if o.MaxBytes <= 0 {
-		o.MaxBytes = DefaultMaxBytes
+		o.MaxBytes = DefaultBlockBytes
 	}
 	if o.MaxInstincts <= 0 {
 		o.MaxInstincts = DefaultMaxInstincts
@@ -99,6 +168,12 @@ func (o Options) WithDefaults() Options {
 	if o.SelfLimit <= 0 {
 		o.SelfLimit = 3 * time.Second // hook budget is 5s; the rest must still print
 	}
+	if o.ClusterCap <= 0 {
+		o.ClusterCap = DefaultClusterCap
+	}
+	if o.NearDupJaccard <= 0 {
+		o.NearDupJaccard = DefaultNearDupJaccard
+	}
 	return o
 }
 
@@ -108,6 +183,12 @@ func (o Options) WithDefaults() Options {
 type ranked struct {
 	in        *homunculus.Instinct
 	isProject bool
+	// inExact records that the prompt named an identifier or path this
+	// instinct carries. It is the strongest signal available, so such a
+	// candidate BYPASSES the shared-token floor: someone who typed the
+	// exact symbol has already said what they mean, and asking them to
+	// also share two prose words with the note would drop the best hit.
+	inExact bool
 }
 
 // Build assembles the injection block from the project + global
@@ -192,33 +273,100 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, []stri
 			return pool[i].in.ID < pool[j].in.ID
 		})
 	}
-	if len(pool) > opts.MaxInstincts {
-		pool = pool[:opts.MaxInstincts]
+	// The relevance floor: with a prompt, a candidate that has no exact
+	// identifier hit must still share `need` content tokens with the
+	// query. The retrieval drop rule already removed candidates no channel
+	// found at all; this removes the ones a single incidental BM25 term
+	// qualified. Scaled to what the query can actually supply, never below
+	// one — see sharedTokenFloor.
+	floor := map[string]struct{}{}
+	need := 1
+	if opts.Prompt != "" {
+		floor = retrieve.ContentTokens(opts.Prompt + " " + strings.Join(opts.ContextTokens, " "))
+		// Scaled on what the PROMPT can supply, not on the whole query.
+		// Context tokens (the cwd's segments, the files the session just
+		// opened, alias expansions) are present on nearly every real hook
+		// invocation and would push this back to the fixed 2 — which is
+		// exactly the "precise-but-terse prompt returns nothing" failure the
+		// scaling exists to prevent. They still COUNT toward clearing the
+		// floor; they just do not raise the bar.
+		need = max(1, min(sharedTokenFloor, len(retrieve.ContentTokens(opts.Prompt))/2))
 	}
 
 	var b strings.Builder
 	b.WriteString("# bough — learned instincts for this project\n\n")
-	header := b.Len()
 	// The ids are returned, not just their count: telemetry records what
 	// a prompt actually received, and "how many" cannot answer whether
 	// retrieval is reaching the tail of the corpus or cycling the same
 	// few notes. The count callers used to take is len(ids).
 	var ids []string
+	perCluster := map[int]int{}
+	kept := make([]map[string]struct{}, 0, opts.MaxInstincts)
 	for _, r := range pool {
-		line := renderInstinctLine(r.in)
-		if b.Len()+len(line) > opts.MaxBytes && len(ids) > 0 {
+		if len(ids) >= opts.MaxInstincts {
 			break
+		}
+		// Tokenized once per candidate and reused by the floor and the
+		// near-duplicate check, which must compare token sets produced the
+		// SAME way on both sides or either test is unsatisfiable by
+		// construction.
+		tokens := retrieve.ContentTokens(r.in.ID + " " + r.in.Trigger + " " + r.in.Body)
+		if len(floor) > 0 && !r.inExact {
+			shared := 0
+			for tok := range floor {
+				if _, ok := tokens[tok]; ok {
+					shared++
+				}
+			}
+			if shared < need {
+				continue
+			}
+		}
+		// One family may contribute at most ClusterCap lines. Counted on
+		// what was KEPT, not on what was considered, so a candidate dropped
+		// by the byte budget does not consume its family's allowance.
+		cluster, stamped := opts.ClusterOf[r.in.ID]
+		if stamped && perCluster[cluster] >= opts.ClusterCap {
+			continue
+		}
+		if isRestatement(tokens, kept, opts.NearDupJaccard) {
+			continue
+		}
+		line := renderInstinctLine(r.in)
+		if b.Len()+len(line) > opts.MaxBytes {
+			// SKIP, never stop. One oversized line used to discard every
+			// candidate below it: an instinct whose action had collapsed onto
+			// a single very long line ranked first and the block came back
+			// empty, which reads as "nothing was relevant".
+			continue
 		}
 		b.WriteString(line)
 		ids = append(ids, r.in.ID)
+		kept = append(kept, tokens)
+		if stamped {
+			perCluster[cluster]++
+		}
 	}
 	if len(ids) == 0 {
-		// nothing cleared the confidence floor; emit an empty block
-		// so the hook is a clean no-op rather than a dangling header.
+		// nothing cleared the floor; emit an empty block so the hook is a
+		// clean no-op rather than a dangling header.
 		return "", nil
 	}
-	_ = header
 	return b.String(), ids
+}
+
+// isRestatement reports whether tokens are too similar to something
+// already selected. The comparison is against every kept line rather
+// than only the previous one: restatements of one lesson do not arrive
+// adjacently in the ranking, so a pairwise walk would let the third and
+// fourth copy through.
+func isRestatement(tokens map[string]struct{}, kept []map[string]struct{}, bar float64) bool {
+	for _, prev := range kept {
+		if retrieve.Jaccard(tokens, prev) >= bar {
+			return true
+		}
+	}
+	return false
 }
 
 // rankByRelevance reorders the pool by how well each instinct matches
@@ -240,11 +388,17 @@ func rankByRelevance(pool []ranked, opts Options) []ranked {
 			IsProject:  r.isProject,
 		})
 	}
+	// Deliberately NOT bounded to MaxInstincts here: that is a cap on the
+	// RENDERED block, and the floor / family cap / near-duplicate checks
+	// downstream drop candidates. Truncating the pool to the output size
+	// first would make every such drop shrink the block by one instead of
+	// promoting the next candidate. Breadth is bounded by the channels'
+	// own depth (retrieve.Ranker.ChannelLimit).
 	ranker := retrieve.NewRanker()
-	ranker.MaxResults = opts.MaxInstincts
-	out := make([]ranked, 0, opts.MaxInstincts)
+	out := make([]ranked, 0, len(pool))
 	for _, res := range ranker.Rank(docs, opts.Prompt, opts.ContextTokens) {
 		if r, ok := byID[res.Doc.ID]; ok {
+			r.inExact = res.InExact
 			out = append(out, r)
 		}
 	}

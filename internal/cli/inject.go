@@ -5,10 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/evolve"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
@@ -24,7 +26,7 @@ import (
 // already needed an identical fix hand-applied twice (switching
 // DetectIdentity(cwd) to DetectIdentity(resolveMonorepoRoot(cwd)) in
 // both places).
-func runInjectContext(out io.Writer, root string, opts inject.Options) error {
+func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts inject.Options) error {
 	// The hook's whole budget is 5s; selection gets opts.SelfLimit of it
 	// so the lessons block can still print if the corpus scan runs long.
 	// Checked between phases rather than mid-scan: the scan is the only
@@ -63,16 +65,69 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// relative to the monorepo root, so the repo name itself — which
 	// matches a large share of the corpus and would drown short prompts
 	// — contributes nothing.
+	cfg := injectConfig(cmd, monoRoot)
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
+	}
+	// The files the session just opened are the strongest statement about
+	// what it is working on, and the prompt often does not contain them:
+	// "why is this failing?" names nothing. They join as context tokens, so
+	// they feed the exact channel (paths are identifier-shaped), the
+	// lexical channel and the relevance floor — the same three places the
+	// cwd's own segments feed.
+	//
+	// Read HERE, after the clock started, so the tail read falls inside both
+	// the self-limit and the duration this hook records about itself. The
+	// paths are reduced to their project-relative form first, for the same
+	// reason retrieve.ContextTokens refuses to contribute the repo name: an
+	// absolute path drags in /Users/<name>/src/<org> segments that match a
+	// large share of the corpus and would let unrelated instincts clear the
+	// relevance floor on nothing but shared directory names.
+	opts.ContextTokens = append(opts.ContextTokens,
+		projectRelativeFiles(monoRoot, newTranscriptReader().recentFiles(opts.TranscriptPath))...)
+	// A non-English prompt reaches an English corpus through the operator's
+	// alias file or not at all: nothing tokenizes 予約 into "booking", so
+	// without this the lexical channel scores a Japanese prompt against
+	// vocabulary it cannot contain.
+	if cfg != nil {
+		opts.ContextTokens = append(opts.ContextTokens,
+			aliasExpansions(resolveUnderRoot(monoRoot, cfg.Instinct.Select.AliasPath), opts.Prompt)...)
 	}
 	// Suppressing skill-covered instincts is gated on evidence, not on a
 	// config flag alone: an operator who turns it on before the pull path
 	// works loses the knowledge from both paths at once. The readiness
 	// check is the authority, so a premature `exclude_skill_covered: true`
 	// cannot take effect.
+	// One exclusion set with one consumer — this injector. The operator's
+	// manual register and the skill-covered set answer different questions
+	// ("I have heard this enough" vs "a skill already delivers this") but
+	// they are the same decision at the point of delivery, and a second
+	// consumer with its own idea of "covered" is how the two paths drift
+	// into disagreeing about what was pushed.
 	if opts.ExcludeIDs == nil {
-		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
+		opts.ExcludeIDs = skillCoveredExclusions(cfg, ident.ID, layout)
+		if cfg != nil {
+			for id := range manualExclusions(resolveUnderRoot(monoRoot, cfg.Instinct.Select.ExclusionsPath)) {
+				if opts.ExcludeIDs == nil {
+					opts.ExcludeIDs = map[string]struct{}{}
+				}
+				opts.ExcludeIDs[id] = struct{}{}
+			}
+		}
+	}
+	// Which family each instinct belongs to, so one family of restatements
+	// cannot take the whole block. Stamped by the offline evolve pass
+	// because clustering is O(N²) — unaffordable here. Unreadable or
+	// missing leaves every instinct unstamped, which means UNCAPPED: the
+	// cap exists to trim redundancy, so failing to read it must not start
+	// dropping instincts on a guess. `bough doctor` reports the stamped
+	// population precisely so that state is visible.
+	assignments, aerr := evolve.LoadClusterAssignments(layout.ClusterAssignmentsFile(ident.ID))
+	if aerr != nil {
+		assignments = nil
+	}
+	if opts.ClusterOf == nil && assignments != nil {
+		opts.ClusterOf = assignments.ByInstinct
 	}
 	var block string
 	var ids []string
@@ -90,7 +145,15 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// parameter here would read a different (possibly empty) directory,
 	// so an operator's configured path would be silently ignored when the
 	// hook fires from a sub-repo.
-	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
+	// Zero = the lessons block's own default budget. It is deliberately
+	// NOT derived from opts.MaxBytes: the two blocks have separate
+	// allowances that sum under the total, so tuning the instinct block
+	// must not silently shrink the operator's corrections.
+	var lessonPaths []string
+	if cfg != nil {
+		lessonPaths = cfg.Instinct.Lessons.Paths
+	}
+	lessons := inject.LessonsBlock(monoRoot, lessonPaths, 0)
 	// The selection is recorded even when it chose NOTHING. A prompt that
 	// correctly selected zero instincts is a data point — the share of
 	// empty selections is a selector-health signal, and skipping the
@@ -113,7 +176,16 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// when the batch gains a REVIEWED marker, because a notice that never
 	// clears is a notice that gets ignored.
 	notice := quarantineNotice(layout, ident.ID)
-	if notice == "" && lessons == "" && len(ids) == 0 {
+	// Routing new arrivals into rules / skills / the tail is the only
+	// manual step left, so it is the only one that can silently stop
+	// happening — and a corpus filling with restatements is invisible from
+	// inside a session. Appended after the block rather than prepended: it
+	// is about the corpus's upkeep, not about this turn.
+	// Excluded ids do not count: a note a skill already delivers, or one the
+	// operator has silenced, has been routed. Counting it would leave the
+	// number stuck no matter what the operator did about individual notes.
+	backlog := arrivalBacklogNotice(project, assignments, opts.ExcludeIDs)
+	if notice == "" && lessons == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
 	fmt.Fprint(out, notice)
@@ -121,6 +193,7 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
+	fmt.Fprint(out, backlog)
 	return nil
 }
 
@@ -165,16 +238,70 @@ func quarantineNotice(layout homunculus.Layout, projectID string) string {
 		held, batches, root)
 }
 
-// lessonsPaths reads the operator's lessons-file locations from
-// .bough.yaml, falling back to the conventional set. A missing or
-// unreadable config is not an error: the hook fires on every prompt, so
-// it degrades to the conventions rather than failing the turn.
-func lessonsPaths(root string) []string {
-	cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, root))
+// arrivalBacklogNotice announces that enough instincts have arrived since
+// the last clustering pass to be worth routing. Empty below the threshold,
+// so a corpus keeping up adds zero bytes to the prompt.
+func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.ClusterAssignments, excluded map[string]struct{}) string {
+	n, overdue := evolve.DefaultArrivalBacklog().Count(project, assignments, excluded)
+	if !overdue {
+		return ""
+	}
+	return fmt.Sprintf("\n[bough] %d instinct(s) have arrived since the last clustering pass — run `bough evolve` to see what has grown into a family, then `bough evolve --generate` to fold the restatements and route the rest.\n",
+		n)
+}
+
+// injectConfig loads .bough.yaml for the injector's optional inputs
+// (lessons paths, the manual exclusion register, the alias file). A
+// missing or unreadable config is not an error: the hook fires on every
+// prompt, so it degrades to the conventions and defaults rather than
+// failing the turn. nil means "nothing configured".
+func injectConfig(cmd *cobra.Command, root string) *config.Config {
+	// The REAL command, so an operator's --config is honoured. Resolving
+	// against a throwaway &cobra.Command{} looks equivalent and is not: the
+	// flag is not registered on it, so the lookup always misses and the
+	// operator's file is silently ignored.
+	if cmd == nil {
+		cmd = &cobra.Command{}
+	}
+	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return nil
 	}
-	return cfg.Instinct.Lessons.Paths
+	return cfg
+}
+
+// projectRelativeFiles reduces transcript file paths to the part that
+// carries signal: the path INSIDE the project, or the bare filename for
+// anything outside it. The leading /Users/<name>/src/<org> segments are
+// noise that matches a large share of any corpus — the same reason
+// retrieve.ContextTokens contributes nothing at the repo root.
+func projectRelativeFiles(root string, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rel, err := filepath.Rel(root, p)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			// Outside the project: the directory chain says nothing about
+			// this repo, but the filename can still name a subject.
+			out = append(out, filepath.Base(p))
+			continue
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
+// resolveUnderRoot interprets a configured path relative to the monorepo
+// root, the way every other path in .bough.yaml is read. Absolute paths
+// are left alone, and empty stays empty so the caller can tell
+// "unconfigured" from "configured to the root".
+func resolveUnderRoot(root, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }
 
 // newInjectContextCmd wires `bough inject-context` — the
@@ -231,12 +358,12 @@ pure filesystem.`,
 			if cmd.Flags().Changed("min-confidence") {
 				opts.MinConfidence = &minConf
 			}
-			return runInjectContext(cmd.OutOrStdout(), root, opts)
+			return runInjectContext(cmd, cmd.OutOrStdout(), root, opts)
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the injected block (default 9500)")
-	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to consider (default 40)")
+	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000; the lessons block has its own 3000)")
+	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to render (default 12)")
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")
 	return cmd
@@ -252,9 +379,12 @@ pure filesystem.`,
 // Returns nil in every uncertain case. Pushing knowledge that is also
 // pullable costs prompt budget; NOT pushing knowledge that turns out not
 // to be pullable costs the knowledge.
-func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout) map[string]struct{} {
-	cfg, err := loadConfigQuiet(resolveConfigPath(&cobra.Command{}, monoRoot))
-	if err != nil || !cfg.Instinct.ExcludeSkillCovered {
+// The caller passes the config it ALREADY loaded: this runs on the prompt
+// hot path, and re-reading the same .bough.yaml a second time per prompt
+// buys no new information — it only pays another stat + read + unmarshal,
+// and prints the legacy-filename deprecation warning twice.
+func skillCoveredExclusions(cfg *config.Config, projectID string, layout homunculus.Layout) map[string]struct{} {
+	if cfg == nil || !cfg.Instinct.ExcludeSkillCovered {
 		return nil
 	}
 	skillsDir := layout.EvolvedSkillsDir(projectID)
