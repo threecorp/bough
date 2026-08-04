@@ -1,5 +1,87 @@
 # Changelog
 
+## v0.21.0
+
+Two things the loop could not previously answer for itself: whether it is safe
+to stop pushing knowledge a skill now carries, and whether the block a prompt
+receives is the one that prompt deserved. Both are now decided by measurement
+rather than by configuration.
+
+### Added
+
+- **A completion gate with a self-check that can withdraw its own PASS.**
+  `bough claude doctor` reports whether it is safe to stop pushing instincts an
+  evolved skill already delivers, and it decides on EVIDENCE — 14 days of
+  history, at least 3 registry skills actually pulled, a live trend — not on a
+  config flag. The gate reads a pull telemetry log (`telemetry.jsonl`) written
+  by the hook itself; when its reader cannot make sense of a row it says
+  `SCHEMA DRIFT` and withdraws the PASS it had just given, because a count it
+  cannot read looks exactly like a count of zero.
+- **`bough ops`** — one read-only routine that prints what the loop DID:
+  selections, pulls, judge outcomes, and the promotions that were never judged.
+- **Selector health, as four lifetime checks** (volume ≥200, p95 <500ms,
+  distinct ids ≥100, empty rate ≤30%) surfaced in `bough ops` and folded into
+  one advisory row in doctor. Nothing gates on them; a selector that has not
+  earned trust simply must not read as healthy because it is wired.
+- **A per-family injection cap.** Restatements cluster together, so a prompt
+  brushing a well-covered subject used to spend the whole block hearing one
+  lesson five times. At most 2 members of a family are rendered — and
+  `bough claude doctor` prints the STAMPED POPULATION ("58 of 61", or a loud
+  INERT row at zero), because a cap guarded on a stored field is inert for its
+  whole life if nothing writes that field, and it reads as implemented the
+  entire time.
+- **Two optional operator inputs for the selector**, both inert unless
+  configured: `instinct.select.exclusions_path` (ids to stop pushing — JSON
+  with reasons, or one per line) and `instinct.select.alias_path`
+  (`{"予約": ["booking"]}`), without which a non-English prompt can only
+  retrieve what it happens to name in English.
+- **The files the session just opened now reach retrieval.** "Why is this
+  failing?" names no subsystem; the last few Read/Edit calls name it exactly.
+- **An arrival-backlog notice.** Routing new instincts is the only manual step
+  left in the loop, so it is the only one that can silently stop happening.
+
+### Changed
+
+- **Retirement is enforced where artifacts are DEPLOYED, not only where they
+  are written.** A recorded rejection the host can still load is a rejection
+  that never happened: the directory stays on disk, the symlink is pruned, and
+  coverage is derived from what was actually linked.
+- **Selection now obeys the published budgets** — 12 lines, 5000 bytes for the
+  instinct block, 3000 for the operator's lessons, summing under the 9500 total
+  by construction. An over-budget line is SKIPPED rather than stopping the
+  loop: one instinct whose action had collapsed onto a single long line used to
+  discard every candidate below it.
+- **A relevance floor** drops candidates that a single incidental BM25 term
+  qualified, scaled down for terse prompts so "PR の CI" stays answerable, and
+  bypassed entirely by an exact identifier hit.
+- **Restatements are skipped** at 0.5 Jaccard against every line already kept —
+  not just the previous one, since restatements do not arrive adjacently.
+- **Each retrieval channel now has a depth (50)** before fusion, so a document
+  that ranked 800th lexically no longer enters the pool carrying a
+  contribution small enough that the tiebreak, not the ranking, decides.
+
+### Fixed
+
+- **The judge's citation is now grounded per vote.** A hold used to be released
+  whenever the FIRST agreeing vote paraphrased the category it cited, even when
+  the other two quoted it verbatim; measured on real probes this released a
+  genuine violation. `rule_ungrounded` now means what it says: every agreeing
+  vote hallucinated.
+- **A quarantined note that is rewritten is re-judged.** Restores land in
+  `.staging`, which the next observer pass re-screens, instead of returning to
+  the corpus unexamined.
+- **An evolve pass over an empty corpus no longer skips the deploy step**, so
+  a retirement recorded during a quiet period stops being re-linked forever.
+- **`--config` is honoured by the prompt hook.** The lessons paths and both new
+  select registers resolved through a throwaway command with no such flag
+  registered, so an operator's `--config` was silently discarded.
+- **The arrival backlog no longer counts instincts that are already routed.**
+  Measured: 61 of 61 silenced in the operator's register, zero lines injected,
+  and the block still announced "61 instinct(s) have arrived" — a number no
+  action could move.
+- **The transcript tail is read to EOF.** A single `Read` may legally return
+  short, and what it drops is the newest lines — the entire signal.
+
 ## v0.20.3
 
 ### Fixed
