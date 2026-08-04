@@ -73,10 +73,6 @@ evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
 			layout := homunculus.NewLayout()
 			instincts, _ := homunculus.ScanInstincts(layout.InstinctsDir(ident.ID))
 			stdout := cmd.OutOrStdout()
-			if len(instincts) == 0 {
-				fmt.Fprintf(stdout, "no instincts under %s — run `bough observer run-once` first\n", layout.InstinctsDir(ident.ID))
-				return nil
-			}
 
 			labelsPath := layout.ClusterLabels(ident.ID)
 			labels, err := evolve.LoadLabels(labelsPath)
@@ -85,6 +81,20 @@ evolved/agents/<slug>.md, evolved/commands/<slug>.md — plus
 			}
 
 			th := evolve.DefaultThresholds()
+
+			if len(instincts) == 0 {
+				fmt.Fprintf(stdout, "no instincts under %s — run `bough observer run-once` first\n", layout.InstinctsDir(ident.ID))
+				if !generate {
+					return nil
+				}
+				// An empty corpus does not make the DEPLOY step a no-op.
+				// Retiring a skill is an operator action independent of
+				// corpus growth, and its enforcement lives in deploy: skip
+				// deploy here and a retirement recorded during a quiet
+				// stretch stays linked — invisible to the registry that
+				// forbids it — until the corpus happens to grow again.
+				return persistEvolveOutcome(stdout, cmd.ErrOrStderr(), ident, layout, labels, labelsPath, evolve.Outcome{}, th, noSymlink, nil)
+			}
 
 			// Preview path: GATE 1-4 only, no judge call.
 			if !generate {
@@ -294,7 +304,19 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 	// project silently clobber another's same-named artifact. Homunculus stays
 	// the single source of truth (symlinks, no copies).
 	if !noSymlink {
-		deployProjectArtifacts(stdout, stderr, skillsDir, agentsDir, commandsDir, rulesDir, ident.Root)
+		linked := deployProjectArtifacts(stdout, stderr, skillsDir, agentsDir, commandsDir, rulesDir, ident.Root, retired)
+		// Coverage is derived from the DEPLOYED set, not the generated
+		// one: a skill that was written but not linked (retired after an
+		// earlier pass, or held back this pass) delivers nothing, so its
+		// ids must keep flowing through push. Recording them as covered
+		// would silence both delivery paths at once.
+		if linked != nil {
+			for slug := range coverage.BySkill {
+				if !linked[slug] {
+					coverage.Forget(slug)
+				}
+			}
+		}
 	}
 
 	if err := coverage.Save(coveragePath, now); err != nil {
@@ -330,11 +352,15 @@ func persistEvolveOutcome(stdout, stderr io.Writer, ident homunculus.ProjectIden
 // tree directly (#62). Rules arrived later and repeated that mistake: a rule
 // only fires when the host loads it from .claude/rules, so one left in the
 // homunculus tree is inert — the delivery path it exists for never runs.
-func deployProjectArtifacts(stdout, stderr io.Writer, skillsDir, agentsDir, commandsDir, rulesDir, monorepoRoot string) {
-	deployProjectSkills(stdout, stderr, skillsDir, monorepoRoot)
+// It returns the set of skill slugs actually linked (nil when the skill
+// step could not run), so the caller can derive coverage from what was
+// DEPLOYED rather than what was generated.
+func deployProjectArtifacts(stdout, stderr io.Writer, skillsDir, agentsDir, commandsDir, rulesDir, monorepoRoot string, retired *evolve.RetireRegistry) map[string]bool {
+	linked := deployProjectSkills(stdout, stderr, skillsDir, monorepoRoot, retired)
 	deployProjectFiles(stdout, stderr, "agent", agentsDir, filepath.Join(monorepoRoot, ".claude", "agents"))
 	deployProjectFiles(stdout, stderr, "command", commandsDir, filepath.Join(monorepoRoot, ".claude", "commands"))
 	deployProjectFiles(stdout, stderr, "rule", rulesDir, filepath.Join(monorepoRoot, ".claude", "rules"))
+	return linked
 }
 
 // deployProjectFiles symlinks every flat-file evolved artifact (agents,
@@ -373,17 +399,37 @@ func deployProjectFiles(stdout, stderr io.Writer, label, evolvedDir, projectDir 
 // ~/.claude/skills): a bough-evolved skill is specific to the repo it was
 // learned from. Homunculus stays the single source of truth — these are
 // symlinks, not copies. Best-effort: never fails the evolve.
-func deployProjectSkills(stdout, stderr io.Writer, evolvedSkillsDir, monorepoRoot string) {
+//
+// Retirement is enforced HERE, at link time, not only at generation
+// time. A slug retired after its dir was written keeps that dir on disk
+// forever (nothing is ever deleted), so a deploy that links every dir
+// resurrects the rejection on the very next pass — the retirement was
+// recorded and stayed invisible to the host. Retired slugs are skipped,
+// and the prune below removes the symlink an earlier pass left behind.
+//
+// Returns the set of slugs actually linked, or nil when the step could
+// not run (the caller must then leave coverage untouched — nil and
+// "linked nothing" mean different things).
+func deployProjectSkills(stdout, stderr io.Writer, evolvedSkillsDir, monorepoRoot string, retired *evolve.RetireRegistry) map[string]bool {
+	if retired == nil {
+		// The registry could not be read, so "is this slug retired?" has
+		// no answer. Linking anyway could resurrect a rejection; pruning
+		// could remove a healthy skill. Both are worse than leaving the
+		// links exactly as the last successful deploy left them.
+		fmt.Fprintln(stderr, "  deploy skills: retire registry unreadable — skill links left unchanged this pass")
+		return nil
+	}
 	projectDir := filepath.Join(monorepoRoot, ".claude", "skills")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "  deploy skills: mkdir %s: %v\n", projectDir, err)
-		return
+		return nil
 	}
 	entries, err := os.ReadDir(evolvedSkillsDir)
 	if err != nil {
-		return // no evolved skills yet — nothing to deploy
+		return nil // no evolved skills yet — nothing to deploy
 	}
-	linked := 0
+	linked := map[string]bool{}
+	skippedRetired := 0
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -392,15 +438,63 @@ func deployProjectSkills(stdout, stderr io.Writer, evolvedSkillsDir, monorepoRoo
 		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
 			continue // not a skill dir
 		}
+		if retired.Retired(e.Name()) {
+			// The dir stays on disk (reversible by construction); only the
+			// link the host loads from is withheld, and pruned below.
+			skippedRetired++
+			fmt.Fprintf(stdout, "  retire  %s — not linked (kept in evolved/, symlink pruned)\n", e.Name())
+			continue
+		}
 		if err := ensureSymlink(src, filepath.Join(projectDir, e.Name())); err != nil {
 			fmt.Fprintf(stderr, "  deploy skill %s: %v\n", e.Name(), err)
 			continue
 		}
-		linked++
+		linked[e.Name()] = true
 	}
-	if linked > 0 {
-		fmt.Fprintf(stdout, "  linked %d skill(s) into %s\n", linked, projectDir)
+	pruned := pruneStaleSkillLinks(stderr, projectDir, evolvedSkillsDir, linked)
+	if len(linked) > 0 || pruned > 0 || skippedRetired > 0 {
+		fmt.Fprintf(stdout, "  linked %d skill(s) into %s (pruned %d, retired %d)\n",
+			len(linked), projectDir, pruned, skippedRetired)
 	}
+	return linked
+}
+
+// pruneStaleSkillLinks removes symlinks in projectDir that point into
+// the evolved tree but were not linked this pass — retired, blocked, or
+// whose evolved dir is gone. Only links whose target resolves under
+// evolvedSkillsDir are considered: hand-authored skills, plugin dirs
+// and anything else a human placed there are never touched. Removing
+// the LINK is the only deletion deploy performs; the evolved dir it
+// pointed to stays on disk.
+func pruneStaleSkillLinks(stderr io.Writer, projectDir, evolvedSkillsDir string, linked map[string]bool) int {
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return 0
+	}
+	pruned := 0
+	for _, e := range entries {
+		if linked[e.Name()] {
+			continue
+		}
+		dest := filepath.Join(projectDir, e.Name())
+		fi, err := os.Lstat(dest)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(dest)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(target, evolvedSkillsDir+string(os.PathSeparator)) {
+			continue // not ours to manage
+		}
+		if err := os.Remove(dest); err != nil {
+			fmt.Fprintf(stderr, "  prune skill link %s: %v\n", e.Name(), err)
+			continue
+		}
+		pruned++
+	}
+	return pruned
 }
 
 // evolveJudgeDefaultModel is the GATE 5 judge model when --model is not

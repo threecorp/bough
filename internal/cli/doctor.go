@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 	"github.com/ikeikeikeike/bough/internal/termio"
 )
 
@@ -123,6 +125,37 @@ func renderContinuousLearningPosture(w io.Writer) {
 		}
 		fmt.Fprintf(w, "          %s\n", line)
 	}
+
+	// Selector health, compressed to one row: doctor answers "is the
+	// posture sane?"; the per-check numbers live in `bough ops`. Advisory
+	// — nothing gates on it — but a selector that has not earned trust
+	// must not read as healthy just because it is wired.
+	selStatus, selLine := selectorHealthLine(env)
+	fmt.Fprintf(w, "    %s   selector health %s\n", st.Mark(selStatus), selLine)
+}
+
+// selectorHealthLine folds the four lifetime selector checks into one
+// posture row. Neutral until every check clears — an advisory can be
+// yellow forever without blocking anything, which is exactly its job.
+func selectorHealthLine(env gateEnv) (termio.Status, string) {
+	if !env.hasIdent() {
+		return termio.StatusNeutral, "unknown — no project identity here"
+	}
+	log, err := telemetry.Load(homunculus.NewLayout().TelemetryFile(env.ident.ID))
+	if err != nil {
+		return termio.StatusNeutral, fmt.Sprintf("telemetry unreadable: %v", err)
+	}
+	checks := telemetry.DefaultSelectorBar().Check(telemetry.SelectionStats(log.Events))
+	var failing []string
+	for _, c := range checks {
+		if !c.Passed {
+			failing = append(failing, c.Detail)
+		}
+	}
+	if len(failing) == 0 {
+		return termio.StatusOK, "every lifetime check clears the bar (see `bough ops` for the numbers)"
+	}
+	return termio.StatusNeutral, "WAIT — " + strings.Join(failing, "; ")
 }
 
 // gateEnv is the environment every continuous-learning posture line is
@@ -182,23 +215,43 @@ func exclusionReadinessLines(env gateEnv) (termio.Status, []string) {
 	// injector deliberately does not.
 	r := evolve.ExclusionReadiness(
 		layout.EvolvedSkillsDir(env.ident.ID),
-		filepath.Join(env.root, ".claude", "skills"),
+		layout.TelemetryFile(env.ident.ID),
 		layout.SkillCoverageFile(env.ident.ID),
+		time.Now(),
+		evolve.DefaultExclusionWindow(),
 	).WithAdvisory()
 	switch {
 	case r.Ready() && requested:
-		return termio.StatusOK, []string{"ON — skill-covered instincts are not also pushed"}
+		return termio.StatusOK, append([]string{"ON — skill-covered instincts are not also pushed"}, advisoryNotes(r)...)
 	case r.Ready():
-		return termio.StatusNeutral, []string{"READY but not requested (set instinct.exclude_skill_covered: true)"}
+		return termio.StatusNeutral, append([]string{"READY but not requested (set instinct.exclude_skill_covered: true)"}, advisoryNotes(r)...)
 	}
 	lines := []string{"WAIT — not safe to stop pushing skill-covered instincts:"}
 	for _, b := range r.Blockers() {
 		lines = append(lines, "- "+b.Name+": "+b.Detail)
 	}
+	lines = append(lines, advisoryNotes(r)...)
 	if requested {
 		lines = append(lines, "(requested in .bough.yaml, held by the gate — nothing is being suppressed)")
 	}
 	return termio.StatusNeutral, lines
+}
+
+// advisoryNotes renders the non-blocking checks that FAILED. Both
+// branches above call it, because the advisory was previously computed
+// on every run — one os.Stat per registered skill — and then dropped:
+// the Ready branch never looked at Checks and the WAIT branch printed
+// only Blockers(). A diagnostic nobody can see is worse than none,
+// since the cost is paid and the comment claims it is rendered.
+func advisoryNotes(r evolve.Readiness) []string {
+	var out []string
+	for _, c := range r.Checks {
+		if c.Blocking || c.Passed {
+			continue
+		}
+		out = append(out, "note: "+c.Name+": "+c.Detail)
+	}
+	return out
 }
 
 // denylistActive reports whether the denylist sidecar is loaded for the

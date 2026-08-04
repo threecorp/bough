@@ -335,6 +335,20 @@ type InstinctGate struct {
 	// layer inert, since with no governance every citation would look
 	// unfounded.
 	GovernancePaths []string `yaml:"governance_paths"`
+	// ForbiddenActions are the CATEGORIES the LLM layer judges against.
+	// They were hardcoded in the prompt, which quietly capped the judge
+	// at whatever bough's author had thought of: a project rule outside
+	// those five — "never defer agreed scope out of the sprint", say —
+	// was invisible no matter what the project's governance said, and the
+	// judge cleared violations of it while looking like it had done its
+	// job. That is the same shape as a checker covering a subset of the
+	// governance it claims to enforce.
+	//
+	// Empty falls back to instinctgate.DefaultForbiddenActions. A project
+	// that sets this REPLACES the defaults rather than adding to them, so
+	// the list in .bough.yaml is the whole answer to "what is forbidden
+	// here" — a merge would leave the real set in two places.
+	ForbiddenActions []string `yaml:"forbidden_actions"`
 }
 
 // GateEnabled reports whether the deterministic policy gate should run.

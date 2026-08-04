@@ -105,8 +105,11 @@ func WriteSkill(skillsDir string, art SkillArtifact, reg *RetireRegistry) (strin
 	if !labelPattern.MatchString(art.Slug) {
 		return "", fmt.Errorf("evolve.WriteSkill: invalid slug %q", art.Slug)
 	}
-	if reg.Retired(art.Slug) {
-		return "", fmt.Errorf("%w: %s (%s)", ErrRetired, art.Slug, reg.Slugs[art.Slug])
+	// The check is on the GROUPING, not the label: a re-clustered corpus
+	// renames the same theme, and a registry keyed on the name alone lets
+	// it straight back in.
+	if matched, retired := reg.RetiredAs(art.Slug, art.Members); retired {
+		return "", fmt.Errorf("%w: %s", ErrRetired, matched)
 	}
 	dir := filepath.Join(skillsDir, art.Slug)
 	path := filepath.Join(dir, "SKILL.md")

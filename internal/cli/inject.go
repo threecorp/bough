@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/inject"
 	"github.com/ikeikeikeike/bough/internal/retrieve"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
 // runInjectContext resolves the current project's instinct pools and
@@ -23,6 +25,14 @@ import (
 // DetectIdentity(cwd) to DetectIdentity(resolveMonorepoRoot(cwd)) in
 // both places).
 func runInjectContext(out io.Writer, root string, opts inject.Options) error {
+	// The hook's whole budget is 5s; selection gets opts.SelfLimit of it
+	// so the lessons block can still print if the corpus scan runs long.
+	// Checked between phases rather than mid-scan: the scan is the only
+	// unbounded step, and a check after it converts "the hook timed out
+	// and the prompt lost every block" into "the prompt lost the
+	// instinct block only".
+	start := time.Now()
+	deadline := start.Add(opts.WithDefaults().SelfLimit)
 	cwd := root
 	if cwd == "" {
 		w, err := os.Getwd()
@@ -64,7 +74,12 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	if opts.ExcludeIDs == nil {
 		opts.ExcludeIDs = skillCoveredExclusions(monoRoot, ident.ID, layout)
 	}
-	block, n := inject.Build(project, global, opts)
+	var block string
+	var ids []string
+	timedOut := time.Now().After(deadline)
+	if !timedOut {
+		block, ids = inject.Build(project, global, opts)
+	}
 	// Human-authored corrections outrank minted instincts and are not
 	// scored, so they are prepended rather than merged into the ranking
 	// — and they are emitted even when nothing cleared the confidence
@@ -76,14 +91,78 @@ func runInjectContext(out io.Writer, root string, opts inject.Options) error {
 	// so an operator's configured path would be silently ignored when the
 	// hook fires from a sub-repo.
 	lessons := inject.LessonsBlock(monoRoot, lessonsPaths(monoRoot), opts.MaxBytes)
-	if lessons == "" && n == 0 {
+	// The selection is recorded even when it chose NOTHING. A prompt that
+	// correctly selected zero instincts is a data point — the share of
+	// empty selections is a selector-health signal, and skipping the
+	// write made that rate structurally unmeasurable: absence of a line
+	// and an empty selection looked identical. Best-effort: the hook is
+	// on the prompt path and telemetry must never cost a turn. The ids
+	// (not just a count) are what answers whether retrieval reaches the
+	// tail of the corpus or keeps cycling the same few notes.
+	telemetry.NewWriter(homunculus.NewLayout().TelemetryFile(ident.ID)).
+		AppendBestEffort(telemetry.Event{
+			Kind: telemetry.KindSelection,
+			IDs:  ids,
+			N:    len(ids),
+			MS:   float64(time.Since(start).Microseconds()) / 1000.0,
+		})
+	// The quarantine notice is PREPENDED, ahead of everything: the gate's
+	// SessionStart/observer output goes nowhere an operator reads, so the
+	// prompt context is the one place a hold is guaranteed to be seen —
+	// and a silent hold is indistinguishable from data loss. It clears
+	// when the batch gains a REVIEWED marker, because a notice that never
+	// clears is a notice that gets ignored.
+	notice := quarantineNotice(layout, ident.ID)
+	if notice == "" && lessons == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
+	fmt.Fprint(out, notice)
 	fmt.Fprint(out, lessons)
-	if n > 0 {
+	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
 	return nil
+}
+
+// quarantineNotice announces quarantine batches that still hold notes
+// and lack a REVIEWED marker. Empty when there is nothing to review, so
+// a healthy corpus adds zero bytes to the prompt.
+func quarantineNotice(layout homunculus.Layout, projectID string) string {
+	root := layout.QuarantineDir(projectID)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	batches, held := 0, 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "REVIEWED")); err == nil {
+			continue
+		}
+		n := 0
+		files, ferr := os.ReadDir(dir)
+		if ferr != nil {
+			continue
+		}
+		for _, f := range files {
+			if !f.IsDir() && filepath.Ext(f.Name()) == ".md" && f.Name() != "REPORT.md" {
+				n++
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		batches++
+		held += n
+	}
+	if batches == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[bough policy] %d held instinct(s) in %d unreviewed batch(es) — read REPORT.md under %s, restore what belongs (into .staging; the next pass re-judges it), then `touch <batch>/REVIEWED`.\n\n",
+		held, batches, root)
 }
 
 // lessonsPaths reads the operator's lessons-file locations from
@@ -179,14 +258,14 @@ func skillCoveredExclusions(monoRoot, projectID string, layout homunculus.Layout
 		return nil
 	}
 	skillsDir := layout.EvolvedSkillsDir(projectID)
-	deployedDir := filepath.Join(monoRoot, ".claude", "skills")
 	coveragePath := layout.SkillCoverageFile(projectID)
 	// The gate reads the coverage registry to judge it, so take the copy
 	// it already parsed rather than reading the same file a second time
 	// on the prompt hot path. A non-Ready verdict already covers the
 	// unreadable case — that check is Blocking — so there is no separate
 	// nil test to make here.
-	ready := evolve.ExclusionReadiness(skillsDir, deployedDir, coveragePath)
+	ready := evolve.ExclusionReadiness(skillsDir, layout.TelemetryFile(projectID), coveragePath,
+		time.Now(), evolve.DefaultExclusionWindow())
 	if !ready.Ready() {
 		return nil
 	}

@@ -130,7 +130,8 @@ func TestScreenAndPromote_ClearedPromoted_HeldQuarantined(t *testing.T) {
 
 // TestQuarantineReport_HasReversibleRestore pins the reversibility
 // contract: the REPORT names the rule and prints a copy-paste restore
-// command that moves the held file back into the personal corpus.
+// command — targeting .staging, so the restored (possibly rewritten)
+// note is RE-JUDGED by the next pass instead of going straight live.
 func TestQuarantineReport_HasReversibleRestore(t *testing.T) {
 	layout := homunculus.FromRoot(t.TempDir())
 	ident := homunculus.ProjectIdentity{ID: "proj1", Name: "demo"}
@@ -149,7 +150,7 @@ func TestQuarantineReport_HasReversibleRestore(t *testing.T) {
 		"never-merge-unasked",                  // the rule that held it
 		"mv ",                                  // a restore command
 		"merge-when-green.md",                  // the held file
-		filepath.Join("instincts", "personal"), // restore target is the personal corpus
+		filepath.Join("instincts", ".staging"), // restore target: re-judged, never straight live
 		"COMMAND SHAPES ONLY",                  // honest scope banner (no completeness claim)
 	} {
 		if !strings.Contains(s, want) {
@@ -546,5 +547,41 @@ func TestNoMintPassIsNotAMalformedResponse(t *testing.T) {
 	_, _, errs = stageInstincts(t.TempDir(), t.TempDir(), homunculus.ProjectIdentity{ID: "p", Name: "p"}, map[string]any{"nope": 1}, time.Now())
 	if len(errs) == 0 {
 		t.Error("a malformed mint response must still be reported")
+	}
+}
+
+// TestQuarantineRestoreTargetsStaging pins the review loop's shape: the
+// restore one-liner puts a held note into .staging, where the next
+// observer pass adopts and RE-JUDGES it. Restoring straight into the
+// live corpus would skip the very gate that held it — nothing ever
+// re-screens a file already in personal/ — so a hand-rewritten note
+// would go live carrying whatever the rewrite missed.
+func TestQuarantineRestoreTargetsStaging(t *testing.T) {
+	dir := t.TempDir()
+	staging := filepath.Join(dir, ".staging")
+	batch := filepath.Join(dir, ".policy-quarantine", "20260701-000000")
+	if err := os.MkdirAll(batch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recs := []movedRecord{{id: "held-1", reason: "git-safety-force-push", path: filepath.Join(batch, "held-1.md")}}
+	if err := writeMoveReport(batch, quarantineReportSpec(staging), recs, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(batch, "REPORT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := string(raw)
+	if !strings.Contains(report, "mv "+recs[0].path+" "+filepath.Join(staging, "held-1.md")) {
+		t.Errorf("restore must target .staging, got:\n%s", report)
+	}
+	if !strings.Contains(report, "RE-JUDGES") {
+		t.Error("the report must say the restore is re-judged (a rewrite is not declared fixed)")
+	}
+	if !strings.Contains(report, "not permission to EDIT") {
+		t.Error("the report must carry the create-vs-edit guidance")
+	}
+	if !strings.Contains(report, "touch "+filepath.Join(batch, "REVIEWED")) {
+		t.Error("the report must say how to clear the per-prompt notice")
 	}
 }

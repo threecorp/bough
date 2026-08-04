@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/retrieve"
@@ -69,9 +70,22 @@ type Options struct {
 	// is recorded first, acted on only once there is evidence the pull
 	// path works.
 	ExcludeIDs map[string]struct{}
+	// SelfLimit bounds the selection step of the prompt hook. The host
+	// gives the whole hook 5 seconds; the default leaves room for the
+	// blocks that must still print after selection. Overrun is fail-open:
+	// the prompt loses the instinct block, never the turn — deliberately
+	// no fallback ranking, because a fallback slower than the thing that
+	// timed out blows the same budget twice. A field, not a package
+	// const, so a test can exercise the overrun without waiting 3s.
+	SelfLimit time.Duration
 }
 
-func (o Options) withDefaults() Options {
+// WithDefaults returns a copy with every unset knob at its default.
+// Exported because the cli layer needs the resolved SelfLimit BEFORE
+// calling Build — the deadline covers the corpus scan that happens
+// first — and re-deriving the default there would put the value in two
+// places.
+func (o Options) WithDefaults() Options {
 	if o.MaxBytes <= 0 {
 		o.MaxBytes = DefaultMaxBytes
 	}
@@ -81,6 +95,9 @@ func (o Options) withDefaults() Options {
 	if o.MinConfidence == nil {
 		def := MinConfidence
 		o.MinConfidence = &def
+	}
+	if o.SelfLimit <= 0 {
+		o.SelfLimit = 3 * time.Second // hook budget is 5s; the rest must still print
 	}
 	return o
 }
@@ -119,9 +136,10 @@ type ranked struct {
 // no longer decides ORDER when a prompt is available: measured on this
 // project's live corpus every instinct carries the same confidence, so
 // ordering by it was really ordering by the id tiebreak. Returns the
-// rendered block + the count actually included.
-func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
-	opts = opts.withDefaults()
+// rendered block + the ids actually included, in the order they were
+// rendered. Callers that only need the count take len(ids).
+func Build(project, global []*homunculus.Instinct, opts Options) (string, []string) {
+	opts = opts.WithDefaults()
 
 	pool := make([]ranked, 0, len(project)+len(global))
 	// A project ID shadows the same-ID global one ONLY when the project
@@ -181,22 +199,26 @@ func Build(project, global []*homunculus.Instinct, opts Options) (string, int) {
 	var b strings.Builder
 	b.WriteString("# bough — learned instincts for this project\n\n")
 	header := b.Len()
-	included := 0
+	// The ids are returned, not just their count: telemetry records what
+	// a prompt actually received, and "how many" cannot answer whether
+	// retrieval is reaching the tail of the corpus or cycling the same
+	// few notes. The count callers used to take is len(ids).
+	var ids []string
 	for _, r := range pool {
 		line := renderInstinctLine(r.in)
-		if b.Len()+len(line) > opts.MaxBytes && included > 0 {
+		if b.Len()+len(line) > opts.MaxBytes && len(ids) > 0 {
 			break
 		}
 		b.WriteString(line)
-		included++
+		ids = append(ids, r.in.ID)
 	}
-	if included == 0 {
+	if len(ids) == 0 {
 		// nothing cleared the confidence floor; emit an empty block
 		// so the hook is a clean no-op rather than a dangling header.
-		return "", 0
+		return "", nil
 	}
 	_ = header
-	return b.String(), included
+	return b.String(), ids
 }
 
 // rankByRelevance reorders the pool by how well each instinct matches

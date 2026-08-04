@@ -59,11 +59,89 @@ func IsCurated(path string) bool {
 // changes as the operator prunes, and it must travel with the corpus.
 const retireRegistryName = ".retired.json"
 
-// RetireRegistry is the set of slugs that must never be re-emitted.
+// defaultRetireOverlap is the share of a retired skill's members a new
+// cluster may repeat before it counts as the same rejected knowledge.
+// It seeds RetireRegistry.overlap rather than being read directly, so
+// the threshold is a per-registry value a test can tighten instead of a
+// package-scope knob — the same reasoning that put the exclusion window
+// on ExclusionWindow rather than in consts.
+//
+// Slug equality alone does not hold: clustering names a theme from its
+// members, so the next pass over a barely-changed corpus produces the
+// same grouping under a slightly different label, and a registry keyed
+// on the label lets it straight back in. What the operator rejected was
+// the GROUPING, not the string.
+const defaultRetireOverlap = 0.5
+
+// RetiredSkill is one rejection: why, and what was in it. The members
+// are what makes the rejection survive a rename.
+type RetiredSkill struct {
+	Reason string `json:"reason"`
+	// Members are the instinct ids the retired skill was built from.
+	// Empty means the entry predates member recording; the guard then
+	// falls back to slug equality for that entry and says so, rather
+	// than silently letting a renamed cluster through.
+	Members []string `json:"members,omitempty"`
+}
+
+// RetireRegistry is the set of skills that must never be re-emitted.
 type RetireRegistry struct {
-	// Slugs maps a retired slug to the reason the operator gave, so a
-	// later "why is this skill missing?" has an answer on disk.
-	Slugs map[string]string `json:"retired"`
+	// Slugs maps a retired slug to its rejection, so a later "why is
+	// this skill missing?" has an answer on disk.
+	Slugs map[string]RetiredSkill `json:"retired"`
+	// MergedInto maps a slug whose content was folded into another skill
+	// to the slug it now lives under. A merged key counts as retired
+	// everywhere — its dir stays on disk (nothing is deleted), but it is
+	// neither rewritten nor deployed, or the same knowledge would ship
+	// under two labels and the consolidation would silently undo itself.
+	MergedInto map[string]string `json:"merged_into,omitempty"`
+	// overlap is the member-overlap share at which a new cluster counts
+	// as a retired one. Seeded by LoadRetireRegistry; a zero value falls
+	// back to the default rather than meaning "match everything", so a
+	// registry built as a literal cannot silently reject every cluster.
+	overlap float64
+}
+
+// overlapThreshold is the share in force for this registry.
+func (r *RetireRegistry) overlapThreshold() float64 {
+	if r.overlap <= 0 {
+		return defaultRetireOverlap
+	}
+	return r.overlap
+}
+
+// UnmarshalJSON accepts both the current object form and the earlier
+// `{slug: "reason"}` string form.
+//
+// The tolerance is deliberately narrow. An unrecognised value is an
+// ERROR, not a skipped entry: a registry whose entries silently vanish
+// resurrects every skill the operator rejected, and it does so quietly
+// — which is exactly how a reader that cannot parse its writer becomes
+// indistinguishable from a reader that found nothing.
+func (r *RetireRegistry) UnmarshalJSON(b []byte) error {
+	var env struct {
+		Retired    map[string]json.RawMessage `json:"retired"`
+		MergedInto map[string]string          `json:"merged_into"`
+	}
+	if err := json.Unmarshal(b, &env); err != nil {
+		return err
+	}
+	r.MergedInto = env.MergedInto
+	r.Slugs = make(map[string]RetiredSkill, len(env.Retired))
+	for slug, raw := range env.Retired {
+		var obj RetiredSkill
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			r.Slugs[slug] = obj
+			continue
+		}
+		var reason string
+		if err := json.Unmarshal(raw, &reason); err == nil {
+			r.Slugs[slug] = RetiredSkill{Reason: reason}
+			continue
+		}
+		return fmt.Errorf("evolve: retire registry entry %q is neither an object nor a reason string: %s", slug, raw)
+	}
+	return nil
 }
 
 // LoadRetireRegistry reads the registry from a skills directory. A
@@ -74,7 +152,7 @@ func LoadRetireRegistry(skillsDir string) (*RetireRegistry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &RetireRegistry{Slugs: map[string]string{}}, nil
+			return &RetireRegistry{Slugs: map[string]RetiredSkill{}, overlap: defaultRetireOverlap}, nil
 		}
 		return nil, fmt.Errorf("evolve: read retire registry %s: %w", path, err)
 	}
@@ -83,32 +161,98 @@ func LoadRetireRegistry(skillsDir string) (*RetireRegistry, error) {
 		return nil, fmt.Errorf("evolve: parse retire registry %s: %w", path, err)
 	}
 	if reg.Slugs == nil {
-		reg.Slugs = map[string]string{}
+		reg.Slugs = map[string]RetiredSkill{}
 	}
+	if reg.MergedInto == nil {
+		reg.MergedInto = map[string]string{}
+	}
+	reg.overlap = defaultRetireOverlap
 	return reg, nil
 }
 
-// Retired reports whether a slug has been rejected.
+// Retired reports whether a slug has been rejected under that exact
+// name, or folded into another skill. This is the DEPLOY-side question
+// — "may this slug be linked where the host can load it?" — so it is
+// slug-only, matching the registry an operator edits by hand. Callers
+// deciding whether to EMIT should use RetiredAs, which also catches the
+// same grouping under a new label.
 func (r *RetireRegistry) Retired(slug string) bool {
 	if r == nil {
 		return false
 	}
-	_, ok := r.Slugs[slug]
-	return ok
+	if _, ok := r.Slugs[slug]; ok {
+		return true
+	}
+	_, merged := r.MergedInto[slug]
+	return merged
 }
 
-// Retire records a slug as rejected and persists the registry. Recording
-// the reason is not optional decoration: without it the registry becomes
-// a list of slugs nobody remembers rejecting, and the first person to
-// wonder why deletes the file.
-func (r *RetireRegistry) Retire(skillsDir, slug, reason string) error {
+// RetiredAs reports whether emitting this slug with these members would
+// resurrect something the operator rejected, and names which rejection
+// it matched. A match is either the same slug or a member overlap of at
+// least the registry's overlap threshold against a retired entry.
+//
+// Overlap is measured against the RETIRED skill's members: the question
+// is "is this the thing that was rejected", so a new cluster that
+// swallows a retired one whole is caught even when it has grown.
+func (r *RetireRegistry) RetiredAs(slug string, members []string) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	if e, ok := r.Slugs[slug]; ok {
+		return fmt.Sprintf("%s (%s)", slug, e.Reason), true
+	}
+	if target, ok := r.MergedInto[slug]; ok {
+		// Rewriting a merged-away slug would recreate content that now
+		// lives under the target, shipping the same knowledge twice.
+		return fmt.Sprintf("%s (merged into %s)", slug, target), true
+	}
+	if len(members) == 0 {
+		return "", false
+	}
+	have := make(map[string]struct{}, len(members))
+	for _, m := range members {
+		have[m] = struct{}{}
+	}
+	// Sorted, not map order: with two retired entries both over the
+	// threshold, Go's randomized iteration cited a different one on every
+	// run, so "which rejection blocked this" changed with no data change.
+	for _, retiredSlug := range r.sortedSlugs() {
+		e := r.Slugs[retiredSlug]
+		if len(e.Members) == 0 {
+			// Recorded before members were kept. Slug equality was
+			// already checked above, and guessing is worse than not.
+			continue
+		}
+		shared := 0
+		for _, m := range e.Members {
+			if _, ok := have[m]; ok {
+				shared++
+			}
+		}
+		if float64(shared)/float64(len(e.Members)) >= r.overlapThreshold() {
+			return fmt.Sprintf("%s (%s) — %d of its %d instinct(s) are in this cluster, so this is the same grouping under a new label",
+				retiredSlug, e.Reason, shared, len(e.Members)), true
+		}
+	}
+	return "", false
+}
+
+// Retire records a rejection and persists the registry. Recording the
+// reason is not optional decoration: without it the registry becomes a
+// list of slugs nobody remembers rejecting, and the first person to
+// wonder why deletes the file. Recording the members is what makes the
+// rejection outlive the label.
+func (r *RetireRegistry) Retire(skillsDir, slug, reason string, members []string) error {
 	if r.Slugs == nil {
-		r.Slugs = map[string]string{}
+		r.Slugs = map[string]RetiredSkill{}
 	}
 	if reason == "" {
 		reason = "(no reason recorded)"
 	}
-	r.Slugs[slug] = reason
+	sorted := append([]string(nil), members...)
+	sort.Strings(sorted)
+	r.Slugs[slug] = RetiredSkill{Reason: reason, Members: sorted}
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return fmt.Errorf("evolve: mkdir %s: %w", skillsDir, err)
 	}
@@ -117,10 +261,7 @@ func (r *RetireRegistry) Retire(skillsDir, slug, reason string) error {
 		return fmt.Errorf("evolve: marshal retire registry: %w", err)
 	}
 	path := filepath.Join(skillsDir, retireRegistryName)
-	if err := atomicWriteFile(path, append(raw, '\n')); err != nil {
-		return err
-	}
-	return nil
+	return atomicWriteFile(path, append(raw, '\n'))
 }
 
 // identifierRunLength is how many distinct concrete identifiers a skill

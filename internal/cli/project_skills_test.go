@@ -74,7 +74,7 @@ func TestDeployProjectSkills(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(evolved, "notaskill"), 0o755) // no SKILL.md → skip
 
 	root := filepath.Join(tmp, "mono")
-	deployProjectSkills(io.Discard, io.Discard, evolved, root)
+	deployProjectSkills(io.Discard, io.Discard, evolved, root, emptyRegistry())
 
 	got, err := os.Readlink(filepath.Join(root, ".claude", "skills", "s1"))
 	if err != nil || got != filepath.Join(evolved, "s1") {
@@ -133,7 +133,7 @@ func TestDeployProjectArtifacts(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(rulesDir, "r1.md"), []byte("# r1\n"), 0o644)
 
 	root := filepath.Join(tmp, "mono")
-	deployProjectArtifacts(io.Discard, io.Discard, skillsDir, agentsDir, commandsDir, rulesDir, root)
+	deployProjectArtifacts(io.Discard, io.Discard, skillsDir, agentsDir, commandsDir, rulesDir, root, emptyRegistry())
 
 	for _, want := range []struct{ kind, name, wantTarget string }{
 		{"skills", "s1", filepath.Join(skillsDir, "s1")},

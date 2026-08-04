@@ -6,143 +6,414 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
-// deploySkills creates n skill directories with a SKILL.md, mimicking a
-// deployed portfolio.
-func deploySkills(t *testing.T, dir string, slugs ...string) {
-	t.Helper()
-	for _, slug := range slugs {
-		d := filepath.Join(dir, slug)
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: "+slug+"\n---\n\nbody\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+var refNow = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+// gateFixture builds a project whose portfolio is registered and whose
+// telemetry says the pull path has been firing for long enough. Each
+// test then removes exactly one condition, so a WAIT can be attributed.
+type gateFixture struct {
+	skillsDir     string
+	telemetryPath string
+	coveragePath  string
 }
 
-func coverageFile(t *testing.T, dir string, entries map[string][]string) string {
+func newGateFixture(t *testing.T) gateFixture {
 	t.Helper()
-	path := filepath.Join(dir, "skill-coverage.json")
-	cov := &SkillCoverage{BySkill: map[string][]string{}}
-	for slug, ids := range entries {
-		cov.Record(slug, ids)
+	dir := t.TempDir()
+	f := gateFixture{
+		skillsDir:     filepath.Join(dir, "skills"),
+		telemetryPath: filepath.Join(dir, "telemetry.jsonl"),
+		coveragePath:  filepath.Join(dir, "skill-coverage.json"),
 	}
-	if err := cov.Save(path, time.Now()); err != nil {
+	cov := &SkillCoverage{BySkill: map[string][]string{}}
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
+		cov.Record(slug, []string{"i-" + slug})
+		if err := os.MkdirAll(filepath.Join(f.skillsDir, slug), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.skillsDir, slug, "SKILL.md"), []byte("# "+slug+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cov.Save(f.coveragePath, refNow); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return f
 }
 
-// TestExclusionBlockedWithoutDeployedSkills is the invariant the whole
-// gate exists for: flipping the switch early removes the knowledge from
-// BOTH paths — the skill does not exist to be pulled, and the instincts
-// are no longer pushed.
-func TestExclusionBlockedWithoutDeployedSkills(t *testing.T) {
-	skillsDir := t.TempDir()
-	deployed := t.TempDir() // nothing deployed
-	cov := coverageFile(t, t.TempDir(), map[string][]string{"a": {"i1"}})
-
-	r := ExclusionReadiness(skillsDir, deployed, cov)
-	if r.Ready() {
-		t.Fatal("exclusion must NOT be ready with no deployed skills")
-	}
-	blockers := r.Blockers()
-	if len(blockers) == 0 {
-		t.Fatal("a refusal must name what is missing")
-	}
-	joined := strings.Join(detailsOf(blockers), " ")
-	if !strings.Contains(joined, "need") {
-		t.Errorf("the blocker should say what is required, got: %s", joined)
+// pull appends one recorded pull at now-ago.
+func (f gateFixture) pull(t *testing.T, slug string, ago time.Duration) {
+	t.Helper()
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{TS: refNow.Add(-ago), Kind: telemetry.KindSkillPull, Slug: slug}); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// TestExclusionBlockedWithEmptyCoverage pins the other blocking check:
-// an empty registry cannot be acted on — it either suppresses nothing or
-// everything depending on how the reader interprets it.
-func TestExclusionBlockedWithEmptyCoverage(t *testing.T) {
-	skillsDir := t.TempDir()
-	deploySkills(t, skillsDir, "a", "b", "c")
-	cov := coverageFile(t, t.TempDir(), nil)
-
-	if r := ExclusionReadiness(skillsDir, skillsDir, cov); r.Ready() {
-		t.Error("an empty coverage registry must block the switch")
-	}
+func (f gateFixture) verdict() Readiness {
+	return ExclusionReadiness(f.skillsDir, f.telemetryPath, f.coveragePath, refNow, DefaultExclusionWindow())
 }
 
-// TestExclusionReadyWhenBothHold pins the passing case, so the gate is
-// not simply "always WAIT" — a gate that can never open is the same as
-// not having the feature.
-func TestExclusionReadyWhenBothHold(t *testing.T) {
-	skillsDir := t.TempDir()
-	deploySkills(t, skillsDir, "a", "b", "c")
-	cov := coverageFile(t, t.TempDir(), map[string][]string{
-		"a": {"i1"}, "b": {"i2"}, "c": {"i3"},
-	})
-
-	r := ExclusionReadiness(skillsDir, skillsDir, cov)
-	if !r.Ready() {
-		t.Errorf("expected ready, blockers: %v", detailsOf(r.Blockers()))
-	}
-}
-
-// TestStaleCoverageIsAdvisoryNotBlocking pins the distinction between
-// "this must hold" and "you should know". A registry entry whose skill
-// is gone is worth surfacing — those ids would stay suppressed while
-// nothing delivers them — but it does not by itself make exclusion
-// unsafe for the skills that DO exist.
-func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
-	skillsDir := t.TempDir()
-	deploySkills(t, skillsDir, "a", "b", "c")
-	cov := coverageFile(t, t.TempDir(), map[string][]string{
-		"a": {"i1"}, "b": {"i2"}, "c": {"i3"}, "deleted-skill": {"i9"},
-	})
-
-	// WithAdvisory: the drift check costs an os.Stat per registered skill,
-	// so it is computed only where it is rendered — never on the injector's
-	// per-prompt path, which reads Ready() and Coverage only.
-	r := ExclusionReadiness(skillsDir, skillsDir, cov)
-	if !r.Ready() {
-		t.Errorf("stale coverage must not block: %v", detailsOf(r.Blockers()))
-	}
-	for _, c := range r.Checks {
-		if strings.Contains(c.Detail, "deleted-skill") {
-			t.Error("the advisory check must NOT be computed until WithAdvisory is called")
-		}
-	}
-	r = r.WithAdvisory()
-	var found bool
-	for _, c := range r.Checks {
-		if !c.Blocking && !c.Passed && strings.Contains(c.Detail, "deleted-skill") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("stale coverage must still be reported as advisory")
-	}
-}
-
-// TestReadinessNamesTheMissingThing pins the reporting contract: a gate
-// that says "not ready (0.62)" tells the operator nothing about what to
-// go do, so every blocker carries a concrete detail.
-func TestReadinessNamesTheMissingThing(t *testing.T) {
-	r := ExclusionReadiness(t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "missing.json"))
+func blockerNames(r Readiness) string {
+	var out []string
 	for _, b := range r.Blockers() {
-		if strings.TrimSpace(b.Detail) == "" {
-			t.Errorf("blocker %q has no detail", b.Name)
+		out = append(out, b.Name)
+	}
+	return strings.Join(out, " | ")
+}
+
+func detailOf(r Readiness, name string) string {
+	for _, c := range r.Checks {
+		if c.Name == name {
+			return c.Detail
 		}
-		if strings.TrimSpace(b.Name) == "" {
-			t.Error("a blocker with no name cannot be acted on")
+	}
+	return ""
+}
+
+// healthy seeds the whole happy path: three covered skills pulled, one
+// of them recently, with 20 days of history behind it.
+func (f gateFixture) healthy(t *testing.T) {
+	t.Helper()
+	f.pull(t, "alpha", 20*24*time.Hour)
+	f.pull(t, "alpha", 3*24*time.Hour)
+	f.pull(t, "beta", 5*24*time.Hour)
+	f.pull(t, "gamma", 2*24*time.Hour)
+	f.pull(t, "delta", 4*24*time.Hour)
+}
+
+func TestReadyWhenThePullPathIsDemonstrablyFiring(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if r := f.verdict(); !r.Ready() {
+		t.Fatalf("expected READY, blocked by: %s", blockerNames(r))
+	}
+}
+
+// TestDeployedButNeverPulledIsNotReady is the defect this gate was
+// rewritten for: the old check counted skills on disk, so a portfolio
+// nothing had ever loaded passed. Everything is deployed here and
+// registered; only the pulls are missing.
+func TestDeployedButNeverPulledIsNotReady(t *testing.T) {
+	f := newGateFixture(t)
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("a portfolio that has never been pulled must not be READY")
+	}
+	if !strings.Contains(blockerNames(r), "the pull path is firing") {
+		t.Errorf("the blocker should name the pull path, got: %s", blockerNames(r))
+	}
+}
+
+func TestTooFewDistinctSkillsPulled(t *testing.T) {
+	f := newGateFixture(t)
+	f.pull(t, "alpha", 20*24*time.Hour)
+	f.pull(t, "alpha", 1*24*time.Hour)
+	f.pull(t, "beta", 2*24*time.Hour)
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("two pulled skills is below the minimum of three")
+	}
+	if d := detailOf(r, "the pull path is firing"); !strings.Contains(d, "alpha, beta") {
+		t.Errorf("the row should name which skills were pulled, got %q", d)
+	}
+}
+
+// TestOnlyRegisteredSkillsCount: pulling three skills that deliver no
+// instincts is not evidence that suppressing instincts is safe.
+func TestOnlyRegisteredSkillsCount(t *testing.T) {
+	f := newGateFixture(t)
+	f.pull(t, "alpha", 20*24*time.Hour)
+	for _, unrelated := range []string{"some-other-skill", "another", "third"} {
+		f.pull(t, unrelated, 1*24*time.Hour)
+	}
+	if f.verdict().Ready() {
+		t.Fatal("pulls of skills outside the registry must not satisfy the gate")
+	}
+}
+
+// TestRetiringSkillsNeverSubtracts is the shape guarantee. A snapshot
+// diff would read a consolidation as lost usage; counting inside a
+// window cannot.
+func TestRetiringSkillsNeverSubtracts(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	before := f.verdict()
+	f.pull(t, "alpha", 1*24*time.Hour) // only alpha is still in use
+	after := f.verdict()
+	if !before.Ready() || !after.Ready() {
+		t.Fatalf("consolidation must not flip the verdict: before=%v after=%v (%s)",
+			before.Ready(), after.Ready(), blockerNames(after))
+	}
+}
+
+// TestQuietRecentWindowBlocks: history alone is not enough — a
+// portfolio used a month ago and never since is not carrying delivery.
+func TestQuietRecentWindowBlocks(t *testing.T) {
+	f := newGateFixture(t)
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
+		f.pull(t, slug, 13*24*time.Hour) // inside history, outside the recent window
+	}
+	f.pull(t, "alpha", 20*24*time.Hour)
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("no pulls in the recent window must block")
+	}
+	if !strings.Contains(blockerNames(r), "still firing") {
+		t.Errorf("the blocker should name the recency check, got: %s", blockerNames(r))
+	}
+}
+
+// TestShortHistoryBlocksAndStatesTheRealAge: the label must name what
+// was measured, not the window that was asked for.
+func TestShortHistoryBlocksAndStatesTheRealAge(t *testing.T) {
+	f := newGateFixture(t)
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
+		f.pull(t, slug, 2*24*time.Hour)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("two days of history is not enough to judge by")
+	}
+	if d := detailOf(r, "enough history to judge by"); !strings.Contains(d, "2.0d") {
+		t.Errorf("the row must state the history it actually has, got %q", d)
+	}
+}
+
+// TestSchemaDriftBlocksInsteadOfReadingAsNoUsage is the heart of the
+// addendum's lesson: a reader that cannot parse its writer reports the
+// same thing as one that read correctly and found nothing. The pulls
+// ARE there, in a shape the reader does not understand, and the gate
+// must refuse rather than quietly say the portfolio is unused.
+func TestSchemaDriftBlocksInsteadOfReadingAsNoUsage(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if !f.verdict().Ready() {
+		t.Fatal("precondition: the fixture should be READY before drift is introduced")
+	}
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{
+		TS: refNow.Add(-time.Hour), Kind: telemetry.KindSkillPull,
+		Raw: []byte(`{"skillName":"alpha"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("a log the reader cannot parse must not pass the gate")
+	}
+	d := detailOf(r, "gate self-check")
+	if !strings.Contains(d, "SCHEMA DRIFT") || !strings.Contains(d, "skillName") {
+		t.Fatalf("the self-check row must be loud and quote the payload, got %q", d)
+	}
+}
+
+// TestHealthyLogSaysTheNumbersMeanWhatTheySay: the self-check must be
+// quiet on a clean run, or it becomes noise nobody reads.
+func TestHealthyLogSaysTheNumbersMeanWhatTheySay(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	d := detailOf(f.verdict(), "gate self-check")
+	if strings.Contains(d, "DRIFT") {
+		t.Errorf("a clean log must not raise drift, got %q", d)
+	}
+}
+
+func TestUnreadableCoverageRegistryBlocks(t *testing.T) {
+	f := newGateFixture(t)
+	if err := os.WriteFile(f.coveragePath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("an unreadable registry must block")
+	}
+	if !strings.Contains(blockerNames(r), "coverage registry readable") {
+		t.Errorf("blockers = %s", blockerNames(r))
+	}
+}
+
+func TestEmptyCoverageRegistryBlocks(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	empty := &SkillCoverage{BySkill: map[string][]string{}}
+	if err := empty.Save(f.coveragePath, refNow); err != nil {
+		t.Fatal(err)
+	}
+	if f.verdict().Ready() {
+		t.Fatal("an empty registry suppresses nothing or everything — it must block")
+	}
+}
+
+// TestStaleTelemetrySaysSo: a zero that means "nobody has recorded
+// anything lately" calls for a different action than a zero that means
+// "the portfolio is not being used", so the row distinguishes them.
+func TestStaleTelemetrySaysSo(t *testing.T) {
+	f := newGateFixture(t)
+	for _, slug := range []string{"alpha", "beta", "gamma", "delta"} {
+		f.pull(t, slug, 30*24*time.Hour)
+	}
+	if d := detailOf(f.verdict(), "and still firing"); !strings.Contains(d, "newest event is") {
+		t.Errorf("a stale log must say so rather than reporting a bare zero, got %q", d)
+	}
+}
+
+// TestStaleCoverageIsAdvisoryNotBlocking keeps the drift-vs-portfolio
+// check out of the blocking set, and pins that it is not even computed
+// until a caller asks — the injector runs this on every prompt.
+func TestStaleCoverageIsAdvisoryNotBlocking(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if err := os.RemoveAll(filepath.Join(f.skillsDir, "beta")); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if !r.Ready() {
+		t.Fatalf("a stale registry entry must not block delivery: %s", blockerNames(r))
+	}
+	// It must, however, stop suppressing what it can no longer deliver.
+	if _, ok := r.Coverage.CoveredIDs()["i-beta"]; ok {
+		t.Error("a skill that is gone must not keep suppressing its instincts")
+	}
+	if _, ok := r.Coverage.CoveredIDs()["i-alpha"]; !ok {
+		t.Error("the surviving skills must still suppress theirs")
+	}
+	if detailOf(r, "coverage registry matches the skills on disk") != "" {
+		t.Fatal("the advisory must not be computed before WithAdvisory()")
+	}
+	withAdv := r.WithAdvisory()
+	d := detailOf(withAdv, "coverage registry matches the skills on disk")
+	if d == "" {
+		t.Fatal("WithAdvisory() should materialise the drift row")
+	}
+	if !strings.Contains(d, "beta") {
+		t.Errorf("the row should name the missing skill, got %q", d)
+	}
+	for _, c := range withAdv.Checks {
+		if c.Name == "coverage registry matches the skills on disk" && (c.Passed || c.Blocking) {
+			t.Errorf("stale entry should be a failing NON-blocking row, got passed=%v blocking=%v", c.Passed, c.Blocking)
 		}
 	}
 }
 
-func detailsOf(cs []ReadinessCheck) []string {
-	out := make([]string, 0, len(cs))
-	for _, c := range cs {
-		out = append(out, c.Detail)
+// TestLongListsSayTheyAreCut: a bounded list that reads as the whole
+// set is the silent-cap failure this project's own rules forbid.
+func TestLongListsSayTheyAreCut(t *testing.T) {
+	dir := t.TempDir()
+	f := gateFixture{
+		skillsDir:     filepath.Join(dir, "skills"),
+		telemetryPath: filepath.Join(dir, "telemetry.jsonl"),
+		coveragePath:  filepath.Join(dir, "skill-coverage.json"),
 	}
-	return out
+	cov := &SkillCoverage{BySkill: map[string][]string{}}
+	for _, slug := range []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7"} {
+		cov.Record(slug, []string{"i-" + slug})
+		f.pull(t, slug, 2*24*time.Hour)
+	}
+	if err := cov.Save(f.coveragePath, refNow); err != nil {
+		t.Fatal(err)
+	}
+	f.pull(t, "s1", 20*24*time.Hour)
+	if d := detailOf(f.verdict(), "the pull path is firing"); !strings.Contains(d, "showing 5 of 7") {
+		t.Errorf("a truncated list must say it was truncated, got %q", d)
+	}
+}
+
+// TestPulledButUnregisteredSkillsAreExplained: the gate counts pulls of
+// REGISTERED skills while the usage summary counts every pull, so a
+// project with an empty registry sees "0 pulled" in one place and a
+// positive number in the other. Two true numbers that read as a
+// contradiction are how an operator learns to distrust both.
+func TestPulledButUnregisteredSkillsAreExplained(t *testing.T) {
+	f := newGateFixture(t)
+	f.pull(t, "alpha", 20*24*time.Hour)
+	for _, unrelated := range []string{"not-registered-1", "not-registered-2"} {
+		f.pull(t, unrelated, 1*24*time.Hour)
+	}
+	d := detailOf(f.verdict(), "the pull path is firing")
+	if !strings.Contains(d, "2 other skill(s) WERE pulled") {
+		t.Errorf("the row must explain the pulls it is not counting, got %q", d)
+	}
+}
+
+// TestNoNoteWhenEveryPullIsRegistered keeps the explanation from
+// becoming noise on a healthy project.
+func TestNoNoteWhenEveryPullIsRegistered(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if d := detailOf(f.verdict(), "the pull path is firing"); strings.Contains(d, "WERE pulled") {
+		t.Errorf("no note is needed when every pull is registered, got %q", d)
+	}
+}
+
+// TestDriftOlderThanTheWindowStopsBlocking is the regression for a gate
+// that could never be satisfied again. The self-check read the whole
+// log while every other row read the window, and nothing rotates the
+// log — so one unattributable line closed the gate permanently, long
+// after the writer that produced it had been fixed. Measured on the
+// released binary: a corpus reporting ON flipped to WAIT from a line
+// dated 100 days back.
+func TestDriftOlderThanTheWindowStopsBlocking(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{
+		TS:   refNow.Add(-100 * 24 * time.Hour),
+		Kind: telemetry.KindSkillPull,
+		Raw:  []byte(`{"tool_name":"Skill"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.verdict(); !r.Ready() {
+		t.Fatalf("drift 100 days outside a 14d window must not block: %s", blockerNames(r))
+	}
+}
+
+// TestDriftInsideTheWindowStillBlocks is the other half: the row must
+// keep firing while the disagreement is live, or the fix above would
+// have removed the check instead of scoping it.
+func TestDriftInsideTheWindowStillBlocks(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	w := telemetry.NewWriter(f.telemetryPath)
+	if err := w.Append(telemetry.Event{
+		TS:   refNow.Add(-2 * time.Hour),
+		Kind: telemetry.KindSkillPull,
+		Raw:  []byte(`{"tool_name":"Skill"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("drift inside the window must block")
+	}
+	if !strings.Contains(blockerNames(r), "gate self-check") {
+		t.Errorf("expected the self-check to be the blocker, got %s", blockerNames(r))
+	}
+}
+
+// TestDeletedPortfolioClosesTheGateAtOnce: telemetry is history, and
+// history keeps reporting a portfolio deleted this morning. Without an
+// on-disk check the gate stayed open for the rest of the window,
+// suppressing instincts nothing was left to deliver.
+func TestDeletedPortfolioClosesTheGateAtOnce(t *testing.T) {
+	f := newGateFixture(t)
+	f.healthy(t)
+	if r := f.verdict(); !r.Ready() {
+		t.Fatalf("fixture should start READY, blocked by: %s", blockerNames(r))
+	}
+	if err := os.RemoveAll(f.skillsDir); err != nil {
+		t.Fatal(err)
+	}
+	r := f.verdict()
+	if r.Ready() {
+		t.Fatal("a portfolio that no longer exists must not keep the gate open")
+	}
+	if d := detailOf(r, "the pull path is firing"); !strings.Contains(d, "GONE from disk") {
+		t.Errorf("the row should say the skills are gone, got %q", d)
+	}
 }

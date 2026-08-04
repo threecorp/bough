@@ -223,7 +223,24 @@ type promoteOutcome struct {
 	// limiter snapshot. The judge holds a budget separate from minting;
 	// reporting only the minting one understates what the pass spent.
 	JudgeProvider *claudecli.Provider
-	Errs          []error
+	// HeldTripwire / HeldDenylist / HeldClaimUngrounded / HeldJudge split
+	// Quarantined by the layer that made the hold. One merged number
+	// cannot say which layer is doing the work — or which has silently
+	// stopped, which is how a guard ships disabled and reports success.
+	HeldTripwire        int
+	HeldDenylist        int
+	HeldClaimUngrounded int
+	HeldJudge           int
+	// RuleUngrounded counts consensus violations RELEASED because the
+	// judge's cited category was not on the list it was given. A
+	// permanently-zero value is itself suspect — an inert grounding check
+	// reads exactly like a judge that never hallucinates.
+	RuleUngrounded int
+	// QuoteUnverified counts holds whose quoted evidence could not be
+	// located in the instinct. The holds stand; the reviewer should look
+	// harder at these.
+	QuoteUnverified int
+	Errs            []error
 }
 
 // judgeFactory builds the LLM reviewer once the CANDIDATE COUNT is known,
@@ -297,6 +314,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			br := reviewer.ReviewBatch(ctx, res.Cleared)
 			out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
 			out.ReviewCancelled = br.Cancelled
+			out.RuleUngrounded, out.QuoteUnverified = br.RuleUngrounded, br.QuoteUnverified
 			// The self-DoS cap is the operator's own setting, so exhausting it
 			// is a different fact from the model being unreachable — and the
 			// only one of the two they can act on.
@@ -334,6 +352,24 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 				res.Cleared = withoutIDs(res.Cleared, heldIDs)
 				res.Held = append(res.Held, br.Held...)
 			}
+		}
+	}
+
+	// Split the holds by the layer that made them. The layers exist for
+	// different threats — patterns for command shapes, the denylist for
+	// boundary terms, grounding for invented rules, the judge for prose
+	// intent — and one merged number cannot say which layer is doing the
+	// work, or which has silently stopped.
+	for _, d := range res.Held {
+		switch {
+		case strings.HasPrefix(d.Rule, "judge:"):
+			out.HeldJudge++
+		case strings.HasPrefix(d.Rule, "denylisted-term:"):
+			out.HeldDenylist++
+		case d.Rule == "ungrounded-rule-claim":
+			out.HeldClaimUngrounded++
+		default:
+			out.HeldTripwire++
 		}
 	}
 
@@ -397,7 +433,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 		held = append(held, movedRecord{id: d.ID, reason: d.Rule, path: dst})
 		out.Quarantined++
 	}
-	if err := writeMoveReport(batchDir, quarantineReportSpec(personalDir), held, now); err != nil {
+	if err := writeMoveReport(batchDir, quarantineReportSpec(layout.StagingDir(projectID)), held, now); err != nil {
 		out.Errs = append(out.Errs, err)
 	}
 	out.BatchDir = batchDir
@@ -496,20 +532,38 @@ type reportSpec struct {
 	banner      string
 	reasonLabel string
 	restoreDir  string
+	// reviewedFooter appends the REVIEWED-marker instruction, so the
+	// per-prompt notice for this batch can be cleared. A notice that
+	// never clears is a notice that gets ignored.
+	reviewedFooter bool
 }
 
-func quarantineReportSpec(personalDir string) reportSpec {
+func quarantineReportSpec(stagingDir string) reportSpec {
 	return reportSpec{
 		title: "Policy quarantine",
 		banner: "These instincts were HELD by the deterministic policy gate: their\n" +
 			"propagating surface (trigger + action) matched a command-shaped\n" +
 			"forbidden action. Nothing was deleted — each file was MOVED here\n" +
-			"whole and stays out of injection until you restore it. Review each\n" +
-			"one, then run the restore command in its row to put it back.\n\n" +
+			"whole and stays out of injection until you restore it.\n\n" +
+			"The restore commands point at .staging, NOT the live corpus: the\n" +
+			"next observer pass adopts whatever lands there and RE-JUDGES it.\n" +
+			"Feed every rewrite back through the same gate that held it rather\n" +
+			"than declaring it fixed — a rewrite that conditions one clause and\n" +
+			"leaves a sibling clause unconditional is exactly the miss a\n" +
+			"self-review does not catch and the judge does.\n\n" +
+			"Review guidance:\n" +
+			"- A held note is usually knowledge MISSING A PRECONDITION, not\n" +
+			"  wrong knowledge. The observer records what was done, never\n" +
+			"  whether it was authorized, so expect the fix to be \"restore the\n" +
+			"  condition\" far more often than \"delete\".\n" +
+			"- Permission to CREATE a thing is not permission to EDIT a thing\n" +
+			"  someone else wrote. An instinct bundling \"make it\" and \"then\n" +
+			"  update the related ones\" needs the second half gated separately.\n\n" +
 			"Scope: this gate matches COMMAND SHAPES ONLY. It is NOT a completeness\n" +
 			"claim — prose-shaped intent is not screened here.",
-		reasonLabel: "rule",
-		restoreDir:  personalDir,
+		reasonLabel:    "rule",
+		restoreDir:     stagingDir,
+		reviewedFooter: true,
 	}
 }
 
@@ -545,6 +599,10 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 		dst := filepath.Join(spec.restoreDir, r.id+".md")
 		fmt.Fprintf(&b, "| %s | %s | `mv %s %s` |\n", r.id, r.reason, r.path, dst)
 	}
+	if spec.reviewedFooter {
+		fmt.Fprintf(&b, "\nWhen the review is done, clear the per-prompt notice:\n\n    touch %s\n",
+			filepath.Join(batchDir, "REVIEWED"))
+	}
 	reportPath := filepath.Join(batchDir, "REPORT.md")
 	if err := os.WriteFile(reportPath, []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("write report %s: %w", reportPath, err)
@@ -558,20 +616,47 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 // than skip it. When the config loads, the operator's `instinct.gate`
 // block decides — defaulting on when the block is absent (GateEnabled).
 func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
+	c, _ := gateSettings(cmd, root)
+	return c
+}
+
+// gateSettings reads .bough.yaml ONCE and derives both halves of the
+// gate from it: the deterministic layer's config and the categories the
+// judge weighs. They were resolved by two functions that each opened the
+// file, so a run parsed it twice and — if it changed in between — could
+// screen against one version and judge against another. A tripwire and a
+// judge configured from different versions of the same file is the split
+// the configurable categories were added to close.
+func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string) {
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
 			Enabled:    true,
 			Denylist:   loadDenylistQuiet(root, ""),
 			Governance: instinctgate.LoadGovernance(governancePaths(root, nil)),
-		}
+		}, instinctgate.DefaultForbiddenActions
+	}
+	forbidden := cfg.Instinct.Gate.ForbiddenActions
+	if len(forbidden) == 0 {
+		forbidden = instinctgate.DefaultForbiddenActions
 	}
 	return instinctgate.Config{
 		Enabled:    cfg.Instinct.GateEnabled(),
 		AllowIDs:   cfg.Instinct.Gate.AllowIDs,
 		Denylist:   loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
 		Governance: instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths)),
-	}
+	}, forbidden
+}
+
+// gateForbiddenActions resolves the categories the LLM layer judges
+// against. It sits beside gateConfigFor and reads the same file, so the
+// deterministic layer and the judge cannot end up configured from
+// different places. An unreadable config falls back to the defaults
+// rather than to nothing: a judge with an empty category list clears
+// everything while reporting a full review.
+func gateForbiddenActions(cmd *cobra.Command, root string) []string {
+	_, forbidden := gateSettings(cmd, root)
+	return forbidden
 }
 
 // DefaultDenylistPath is where bough looks for the untracked denylist

@@ -348,6 +348,11 @@ func newHookHandleCmd() *cobra.Command {
 			// stdout + MEMORY.md. All pure filesystem; LLM extraction
 			// stays opt-in via the observer daemon.
 			switch event {
+			case string(hooks.EventPostToolUse):
+				// A skill load arrives here as an ordinary tool use. It is
+				// the only signal that the PULL delivery path fired, and the
+				// completion gate is built on it.
+				dispatchSkillPull(c, payload)
 			case string(hooks.EventUserPromptSubmit):
 				dispatchInjectContext(c, extractPrompt(payload))
 				dispatchObserverAutostart(c)
@@ -381,19 +386,7 @@ func newHookHandleCmd() *cobra.Command {
 // never touch the repo working tree (cf. observe.sh writing to
 // PROJECT_DIR under ~/.local/share, never the repo).
 func resolveHomunculusObsPath() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
-	if err != nil {
-		return ""
-	}
-	layout := homunculus.NewLayout()
-	if err := layout.EnsureProjectDirs(ident.ID); err != nil {
-		return ""
-	}
-	return layout.ObservationsFile(ident.ID)
+	return resolveHomunculusFile(homunculus.Layout.ObservationsFile)
 }
 
 // resolveMonorepoRoot mirrors threecorp's detect-project-wrapper.sh so

@@ -32,6 +32,25 @@ type Result struct {
 	Held    []Decision
 }
 
+// DefaultForbiddenActions are the categories the LLM layer judges an
+// instinct against when a project has not named its own. They are the
+// universal VCS-safety families the deterministic tripwires also cover,
+// stated as intent rather than as commands — the judge exists for the
+// phrasings a pattern cannot reach.
+//
+// A project with rules outside these families must say so
+// (instinct.gate.forbidden_actions): a judge cannot weigh a category
+// nobody told it about, and it will clear violations of it while
+// reporting a clean review — which is a checker covering a subset of the
+// governance it claims to enforce.
+var DefaultForbiddenActions = []string{
+	"merging, landing, or closing someone's change without being asked",
+	"discarding uncommitted or in-progress work (resetting, cleaning, stashing away, \"starting from a clean slate\", \"tidying up\" a working tree)",
+	"rewriting authorship or history the operator owns",
+	"force-pushing, or pushing directly to a protected branch",
+	"deleting a branch, tag, or remote ref",
+}
+
 // Config is value-typed so the CLI can build it from .bough.yaml without
 // this package importing config. Later units add the denylist + judge
 // fields; Unit A is the deterministic tripwire layer plus its exemptions.

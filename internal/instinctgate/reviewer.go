@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -57,6 +58,16 @@ type reviewVerdict struct {
 	Violation *bool  `json:"violation"`
 	Rule      string `json:"rule"`
 	Reason    string `json:"reason"`
+	// Category is the forbidden action the judge matched, copied
+	// verbatim from the list it was given. It is the judge's CITATION,
+	// and it is verified: a category that is not on the list is a
+	// hallucinated citation, and a note must not be held on one.
+	Category string `json:"category"`
+	// Quote is the offending span, copied verbatim from the instinct.
+	// Verified against the text; a quote that cannot be located does not
+	// release the hold — the consensus still stands — but it is flagged,
+	// because a hold whose evidence cannot be found needs a closer look.
+	Quote string `json:"quote"`
 }
 
 // Reviewer runs the consensus vote. Votes and Agree are struct fields
@@ -70,6 +81,12 @@ type Reviewer struct {
 	// instinct is held. Requiring a majority rather than any single vote
 	// keeps one unlucky sample from quarantining a good instinct.
 	Agree int
+	// Categories is the forbidden-action list the judge was prompted
+	// with, used to GROUND its citation. Consensus defeats random
+	// variance; it cannot defeat a hallucination the model commits to,
+	// which is what grounding is for — the two are not substitutes.
+	// Empty disables the check (nothing to ground against).
+	Categories []string
 }
 
 // DefaultVotes is how many independent samples NewReviewer takes per
@@ -94,6 +111,16 @@ type ReviewResult struct {
 	Rule      string
 	Reason    string
 	Failed    bool
+	// RuleUngrounded marks a consensus violation that was RELEASED
+	// because the winning vote's citation was not on the category list —
+	// a hallucinated rule must not hold a note. Violation is false when
+	// this is set; the release is the outcome, this field is the audit.
+	RuleUngrounded bool
+	// QuoteUnverified marks a hold whose quoted evidence could not be
+	// located in the instinct. The hold STANDS — the consensus is about
+	// the text, not the quote — but the operator reviewing it should
+	// know the cited words were not found.
+	QuoteUnverified bool
 	// Errs holds EVERY vote's error, not just the first. Which vote index
 	// happened to fail first says nothing about which failure matters: an
 	// unrelated transient error on vote 0 would otherwise hide a rate-limit
@@ -160,10 +187,9 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		return ReviewResult{ID: c.ID, Failed: true, Cancelled: true, Err: err}
 	}
 
-	violations := 0
 	usable := 0
 	var errs []error
-	var rule, reason string
+	var violating []reviewVerdict
 	for _, res := range results {
 		if res.err != nil {
 			errs = append(errs, res.err)
@@ -182,10 +208,7 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		}
 		usable++
 		if *v.Violation {
-			violations++
-			if rule == "" {
-				rule, reason = v.Rule, v.Reason
-			}
+			violating = append(violating, v)
 		}
 	}
 
@@ -194,13 +217,73 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 	if usable < agree {
 		return ReviewResult{ID: c.ID, Failed: true, Err: firstOf(errs), Errs: errs}
 	}
-	if violations >= agree {
+	if len(violating) >= agree {
+		// Ground the citations before acting on the verdict. Consensus
+		// defeats random variance; it cannot defeat a hallucination the
+		// model commits to, which is what grounding is for. The citation
+		// is PER-VOTE, so the verdict carries the first vote whose
+		// citation grounds (an empty citation grounds trivially — nothing
+		// was cited): one vote paraphrasing the category must not release
+		// a note that another agreeing vote cited verbatim. Measured on
+		// the real model: the first violating vote paraphrased once in 13
+		// candidates, and grounding only that vote released a genuine
+		// violation. Only when EVERY agreeing vote cites something not on
+		// the list is the note released — held on a rule nobody configured
+		// is held on nothing.
+		chosen := -1
+		for i, v := range violating {
+			if v.Category == "" || r.groundedCategory(v.Category) {
+				chosen = i
+				break
+			}
+		}
+		if chosen == -1 {
+			return ReviewResult{ID: c.ID, RuleUngrounded: true, Rule: violating[0].Rule, Reason: violating[0].Reason}
+		}
+		v := violating[chosen]
+		rule := v.Rule
 		if rule == "" {
 			rule = "judge-flagged"
 		}
-		return ReviewResult{ID: c.ID, Violation: true, Rule: rule, Reason: reason}
+		// The quote is verified but never decisive: the consensus judged
+		// the whole surface, so an unlocatable quote flags the hold for a
+		// closer look rather than undoing the judgement.
+		unverified := v.Quote != "" && !containsNormalized(c.Trigger+"\n"+c.Action, v.Quote)
+		return ReviewResult{ID: c.ID, Violation: true, Rule: rule, Reason: v.Reason, QuoteUnverified: unverified}
 	}
 	return ReviewResult{ID: c.ID}
+}
+
+// groundedCategory reports whether the judge's citation is one of the
+// categories it was prompted with. Whitespace-normalized, case-folded:
+// the prompt says "copied verbatim", and the tolerance covers line
+// wrapping, not paraphrase — a paraphrased citation is treated as not
+// on the list, which errs toward releasing, the fail-open direction.
+func (r *Reviewer) groundedCategory(category string) bool {
+	if len(r.Categories) == 0 {
+		return true // nothing to ground against — the check is off
+	}
+	want := normalizeSpace(category)
+	for _, c := range r.Categories {
+		if strings.EqualFold(normalizeSpace(c), want) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsNormalized reports whether needle occurs in haystack after
+// whitespace normalization on both sides, so a quote that wrapped
+// differently in the model's output still verifies.
+func containsNormalized(haystack, needle string) bool {
+	return strings.Contains(
+		strings.ToLower(normalizeSpace(haystack)),
+		strings.ToLower(normalizeSpace(needle)),
+	)
+}
+
+func normalizeSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // BatchResult is one batch's outcome. Reviewed counts the candidates that
@@ -218,7 +301,16 @@ type BatchResult struct {
 	Failed     int
 	Unreviewed []string
 	Cancelled  bool
-	FirstErr   error
+	// RuleUngrounded counts consensus violations RELEASED because the
+	// judge's citation was not on the category list. A permanently-zero
+	// count is itself suspect — it is how an inert check reads — so it
+	// travels to telemetry rather than living only in stdout.
+	RuleUngrounded int
+	// QuoteUnverified counts holds whose quoted evidence could not be
+	// located. The holds stand; the count tells the reviewer where to
+	// look harder.
+	QuoteUnverified int
+	FirstErr        error
 	// Errs is every vote error across the batch. The caller classifies
 	// them — it is the layer that knows the provider's sentinels — and a
 	// single FirstErr cannot carry that: whichever vote index failed first
@@ -266,8 +358,16 @@ func (r *Reviewer) ReviewBatch(ctx context.Context, cands []Candidate) BatchResu
 			if out.FirstErr == nil {
 				out.FirstErr = res.Err
 			}
+		case res.RuleUngrounded:
+			// Released, and counted: a hallucinated citation must neither
+			// hold the note nor vanish from the record.
+			out.Reviewed++
+			out.RuleUngrounded++
 		case res.Violation:
 			out.Reviewed++
+			if res.QuoteUnverified {
+				out.QuoteUnverified++
+			}
 			out.Held = append(out.Held, Decision{ID: res.ID, Rule: "judge:" + res.Rule})
 		default:
 			out.Reviewed++

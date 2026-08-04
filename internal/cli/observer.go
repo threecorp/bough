@@ -19,6 +19,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/prompts"
 	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
+	"github.com/ikeikeikeike/bough/internal/telemetry"
 )
 
 // newObserverCmd wires the `bough observer` namespace. v0.9.0 ships
@@ -205,7 +206,11 @@ func newObserverRunOnceCmd() *cobra.Command {
 					staged = append(staged, stranded...)
 				}
 			}
-			gate := instinctgate.New(gateConfigFor(cmd, root))
+			// One read of .bough.yaml for both halves of the gate: the
+			// deterministic screen and the judge's categories must come
+			// from the same version of the same file.
+			gateCfg, forbidden := gateSettings(cmd, root)
+			gate := instinctgate.New(gateCfg)
 			// The judge is opt-in per pass: it spends LLM calls, so an
 			// operator who wants only the free deterministic layers passes
 			// --no-judge rather than having to reason about cost every run.
@@ -222,7 +227,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 					if budget <= 0 {
 						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
 					}
-					return newGateReviewer(model, budget)
+					return newGateReviewer(model, budget, forbidden)
 				}
 			}
 			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, newJudge, now)
@@ -256,6 +261,54 @@ func newObserverRunOnceCmd() *cobra.Command {
 				// that could not run produces the same held count as a clean batch.
 				fmt.Fprintf(stdout, "judge: reviewed=%d unreviewed=%d (unreviewed candidates were cleared — fail-open)\n",
 					outcome.Reviewed, outcome.ReviewFailed)
+			}
+			// Record the verdict tallies. The gate fails open by design, so
+			// a candidate that got no verdict is the number worth keeping —
+			// and until now it existed only in the stdout of a run nobody
+			// kept. Written after the lines above so the log carries the
+			// same numbers the operator read.
+			//
+			// The unjudged ones are split by what actually happened to
+			// them. An interrupt or an exhausted call budget leaves them
+			// STAGED (screenAndPromote drops them from res.Cleared); only a
+			// model that could not answer promotes them unscreened. One
+			// combined number made the reader announce promotions this very
+			// run had refused to make.
+			unjudgedPromoted, unjudgedStaged := outcome.ReviewFailed, 0
+			if outcome.ReviewCapped || outcome.ReviewCancelled {
+				unjudgedPromoted, unjudgedStaged = 0, outcome.ReviewFailed
+			}
+			// The holds are split by the layer that made them, and the two
+			// judge-audit counts travel too. rule_ungrounded in particular:
+			// the grounding check released these rather than holding on a
+			// hallucinated citation, and a count that stays zero forever is
+			// how an inert check reads — it must be somewhere an operator
+			// can watch it move.
+			telemetry.NewWriter(layout.TelemetryFile(ident.ID)).
+				AppendBestEffort(telemetry.Event{
+					Kind: telemetry.KindJudge,
+					Counts: map[string]int{
+						"candidates":                    outcome.ReviewCandidates,
+						"reviewed":                      outcome.Reviewed,
+						telemetry.CountUnjudgedPromoted: unjudgedPromoted,
+						telemetry.CountUnjudgedStaged:   unjudgedStaged,
+						"held":                          outcome.Quarantined,
+						"held_tripwire":                 outcome.HeldTripwire,
+						"held_denylist":                 outcome.HeldDenylist,
+						"held_claim_ungrounded":         outcome.HeldClaimUngrounded,
+						"held_judge":                    outcome.HeldJudge,
+						"rule_ungrounded":               outcome.RuleUngrounded,
+						"quote_unverified":              outcome.QuoteUnverified,
+						"emitted":                       outcome.Emitted,
+					},
+				})
+			if outcome.RuleUngrounded > 0 {
+				fmt.Fprintf(stdout, "judge: released %d candidate(s) whose cited category was not on the list (rule_ungrounded — a note is not held on a hallucinated citation)\n",
+					outcome.RuleUngrounded)
+			}
+			if outcome.QuoteUnverified > 0 {
+				fmt.Fprintf(stdout, "judge: %d hold(s) quote text that could not be located (quote_unverified — the hold stands; review these closely)\n",
+					outcome.QuoteUnverified)
 			}
 			if outcome.Superseded > 0 {
 				fmt.Fprintf(stdout, "archived %d superseded version(s) → %s (prior text kept; see REPORT.md)\n",
