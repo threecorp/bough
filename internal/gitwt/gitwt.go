@@ -218,6 +218,152 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 		attachErr, strings.TrimSpace(string(attachOut)))
 }
 
+// SelfResolvingWorkTree reports whether `dir` is a git work tree that
+// resolves to ITSELF — the predicate a Claude Code host applies to any
+// directory offered as an isolation worktree.
+//
+// It exists because a directory can sit inside a repository without
+// being a work tree of its own: git's discovery then walks UP and
+// resolves the tree to an ancestor checkout, so a command run in `dir`
+// writes outside `dir`. A host that hands sessions an isolated tree
+// cannot accept that, and refuses.
+//
+// Resolution is the WHOLE test, deliberately. An earlier version also
+// demanded that the git dir differ from `<dir>/.git`, meaning to pin
+// "linked worktree, not the shared checkout". That extra clause rejects a
+// container which is simply its own standalone repository — and a host
+// accepts those (measured: a hook returning such a container starts the
+// session normally). A predicate stricter than the thing it models does
+// not fail safe; it tells the operator to rebuild something that works.
+//
+// A path that is not in a repository at all returns false — "not a work
+// tree" is not "resolves to itself", and callers that want to allow the
+// non-git case test for it separately.
+//
+// It is a method rather than a free function so it goes through the same
+// injectable cmd seam and the same context as every other git call here:
+// AddDetached's own guard is this check, and a Runner built with a fake
+// cmd must be able to make that guard observe the fake.
+func (r *Runner) SelfResolvingWorkTree(ctx context.Context, dir string) bool {
+	top, err := r.cmd(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return false
+	}
+	// Compare resolved paths: on macOS /tmp is a symlink to /private/tmp,
+	// and git reports the resolved spelling while the caller holds the
+	// literal one — the same directory under two names.
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
+	if err != nil {
+		return false
+	}
+	return got == want
+}
+
+// ErrPopulatedContainer says the target directory already has contents,
+// so `git worktree add` cannot adopt it. It is a distinct error because
+// it is the ORDINARY state of a worktree created before containers became
+// work trees — the caller degrades quietly rather than reporting a
+// failure the operator cannot act on and would then see on every hook
+// fire for the rest of that worktree's life.
+var ErrPopulatedContainer = errors.New("gitwt: container already exists and is not empty")
+
+// AddDetached materialises `dst` as a DETACHED worktree of the repo at
+// repoPath — a work tree with no branch of its own.
+//
+// The monorepo container `bough create` hands back is a plain directory
+// holding one sub-repo worktree per repository. Inside a git monorepo
+// that container is not a work tree, so git resolves it to the monorepo
+// root and a Claude Code host refuses it (see SelfResolvingWorkTree).
+// Making the container itself a work tree removes the condition instead
+// of documenting around it.
+//
+// Detached rather than branched on purpose: the container carries no
+// commits of its own, and cutting a branch per worktree would collide
+// with the teardown policy that deliberately keeps feature branches —
+// every create would leave a branch nothing ever deletes.
+//
+// Idempotent, and deliberately conservative about what it will touch: an
+// existing self-resolving work tree is a no-op, and a directory that
+// already has contents is left exactly as it is. `git worktree add`
+// cannot adopt a populated directory anyway, so containers created
+// before this existed keep working as plain directories rather than
+// being torn down underneath a running session.
+func (r *Runner) AddDetached(ctx context.Context, repoPath, dst string) error {
+	if r.SelfResolvingWorkTree(ctx, dst) {
+		return nil
+	}
+	if entries, err := os.ReadDir(dst); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%w: %s", ErrPopulatedContainer, dst)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("gitwt: mkdir parent of %s: %w", dst, err)
+	}
+	// An empty dir left by a previous run blocks `worktree add`; remove it
+	// (empty, so nothing can be lost) and let git create the dir itself.
+	_ = os.Remove(dst)
+	// Best-effort prune first: a stale admin entry pointing at an
+	// already-deleted dst would otherwise block the add.
+	_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "prune").Run()
+	// The container is checked out at a commit whose tree is EMPTY, not at
+	// HEAD. It exists to hold one sub-repo worktree per repository, and
+	// `git worktree add` refuses a path that already exists — so checking
+	// out the root's tree here would materialise every tracked top-level
+	// entry, and a repository sharing a name with one of them could never
+	// be given its own worktree. Measured before this: a root tracking
+	// `alpha/` plus a repo named `alpha` failed with
+	// "'<container>/alpha' already exists", and the operator's `alpha/`
+	// silently held the root's files instead.
+	//
+	// An empty tree also keeps `git status` honest. --no-checkout with a
+	// sparse-checkout hides the files but leaves index entries behind, and
+	// once a sub-repo worktree materialises a directory over one of those
+	// paths git reports it as a staged deletion — a mass deletion one
+	// careless `commit -a` away. With no index entries there is nothing to
+	// report but the untracked sub-repo dirs.
+	base, err := r.emptyCommit(ctx, repoPath)
+	if err != nil {
+		return err
+	}
+	out, err := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", dst, base).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gitwt: worktree add --detach %s: %w (%s)", dst, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// emptyCommit returns a commit in repoPath whose tree has no entries.
+//
+// Identity and dates are pinned so the commit hash is the same every time:
+// the object is written once and reused by every later container rather
+// than leaving one dangling commit per `bough create`. The pinned identity
+// also means this works in an environment with no user.name/user.email
+// configured, which `git commit-tree` would otherwise refuse.
+func (r *Runner) emptyCommit(ctx context.Context, repoPath string) (string, error) {
+	tree, err := r.cmd(ctx, "git", "-C", repoPath, "hash-object", "-w", "-t", "tree", os.DevNull).Output()
+	if err != nil {
+		return "", fmt.Errorf("gitwt: write empty tree: %w", err)
+	}
+	cmd := r.cmd(ctx, "git", "-C", repoPath, "commit-tree", strings.TrimSpace(string(tree)), "-m", emptyContainerSubject)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=bough", "GIT_AUTHOR_EMAIL=bough@localhost", "GIT_AUTHOR_DATE=@0 +0000",
+		"GIT_COMMITTER_NAME=bough", "GIT_COMMITTER_EMAIL=bough@localhost", "GIT_COMMITTER_DATE=@0 +0000",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gitwt: commit-tree for the empty container: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// emptyContainerSubject is part of the pinned commit's hash, so changing it
+// changes which object every container is checked out at. It is only ever
+// read by a human running `git log` on a container.
+const emptyContainerSubject = "bough: empty worktree container"
+
 // Clone acquires a repo into dst when it is not already present. A
 // remote git URL (git@host:org/repo, https://…, ssh://…, file://…) is
 // cloned over its transport; any other value is treated as a local

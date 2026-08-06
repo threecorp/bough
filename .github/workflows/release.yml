@@ -40,3 +40,32 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  post-release-smoke:
+    name: Post-release smoke (published asset)
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      # The point of this job is that it runs the artifact operators will
+      # actually download — not a binary this workflow built. A release
+      # that publishes fine and then fails at its first real use is a
+      # broken release, and nothing before this step would have said so.
+      - name: Download the published archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p /tmp/rel
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*linux_amd64.tar.gz' --dir /tmp/rel
+          tar xzf /tmp/rel/*linux_amd64.tar.gz -C /tmp/rel bough
+          chmod +x /tmp/rel/bough
+
+      - name: Entry-point smoke against the released binary
+        env:
+          BOUGH_EXPECT_VERSION: ${{ github.ref_name }}
+        run: ./scripts/entrypoint-smoke.sh /tmp/rel/bough

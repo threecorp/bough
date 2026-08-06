@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+`claude --worktree <name>` stopped working against a git monorepo, and every
+test stayed green while it did. The provisioning was never the problem: the
+worktree, its sub-repos, its ports and its env files were all correct, and the
+host refused the one thing bough hands back — the directory to cd into. This
+release removes the condition, and adds the gate that would have caught it.
+
+### Fixed
+
+- **The worktree container is now a work tree of its own.** It holds one
+  sub-repo worktree per repository and carries no commits, so it used to be an
+  ordinary directory — which, inside a git monorepo, git resolves UP to the
+  monorepo root. A host that isolates sessions refuses such a directory, since
+  commands run there would write outside it. `bough create` now materialises the
+  container as a **detached** worktree of the root (no branch, so nothing
+  accumulates under a teardown policy that keeps feature branches), checked out
+  at an **empty tree** so it still starts empty: the sub-repo worktrees are
+  added into it, and a repository sharing a name with a root-tracked path could
+  otherwise never be materialised. Outside a git repo nothing above the
+  container can capture the resolution and a plain directory stays correct —
+  the documented non-git escape hatch is unchanged.
+- **`bough remove` no longer leaves a stale worktree record** in the monorepo
+  root now that the container is registered there.
+
+### Added
+
+- **A post-release smoke gate** (`scripts/entrypoint-smoke.sh`). CI runs it
+  against the built binary; the release workflow downloads the PUBLISHED archive
+  and runs the same script against that. It drives the real
+  WorktreeCreate/WorktreeRemove hook contract and asserts the host's own
+  acceptance criteria, so "the tests pass" and "the thing operators download
+  works where they use it" stop being the same claim by assumption.
+- **A worktree-isolation section in `bough doctor`** — how many containers
+  resolve to themselves, of how many, and the names of the ones a host would
+  refuse. Containers created before this release stay plain directories
+  (`git worktree add` cannot adopt a populated one), so they are named rather
+  than migrated underneath a running session; recreating one fixes it.
+
 ## v0.21.0
 
 Two things the loop could not previously answer for itself: whether it is safe

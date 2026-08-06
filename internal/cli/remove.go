@@ -144,6 +144,18 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		}
 	}
 
+	// The container is itself a detached worktree of the monorepo root
+	// whenever that root is a git repo (see materializeWorktreeRoot), so a
+	// bare rm -rf would leave the root repo holding an admin entry for a
+	// directory that no longer exists — `git worktree list` keeps naming
+	// it, and the next create of the same name has to prune before it can
+	// add. Runner.Remove already degrades to rm + prune, which is exactly
+	// the right fallback here and also covers legacy plain containers.
+	if runner.SelfResolvingWorkTree(ctx, worktreePath) {
+		if err := runner.Remove(ctx, monorepoRoot, worktreePath, true); err != nil {
+			logf(stderr, "[bough] worktree remove %s: %v", worktreePath, err)
+		}
+	}
 	if err := os.RemoveAll(worktreePath); err != nil {
 		logf(stderr, "[bough] rm -rf %s: %v", worktreePath, err)
 	}

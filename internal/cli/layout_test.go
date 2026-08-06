@@ -57,7 +57,8 @@ func TestWarnIfRootNotGit(t *testing.T) {
 	t.Run("fresh non-git root suggests the v0.11 layout", func(t *testing.T) {
 		root := t.TempDir()
 		var buf bytes.Buffer
-		warnIfRootNotGit(&buf, &config.Config{}, root)
+		inside, determined := insideGitWorkTree(root)
+		warnIfRootNotGit(&buf, &config.Config{}, root, inside, determined)
 		out := buf.String()
 		for _, want := range []string{"not a git repository", "--resume", ".bough/", "worktrees/"} {
 			if !strings.Contains(out, want) {
@@ -74,7 +75,8 @@ func TestWarnIfRootNotGit(t *testing.T) {
 		// A pre-v0.11 root-level checkout that .bough/ would NOT cover.
 		mkGitRepo(t, filepath.Join(root, "auba-api"))
 		var buf bytes.Buffer
-		warnIfRootNotGit(&buf, &config.Config{Repositories: []config.Repository{{Name: "auba-api"}}}, root)
+		inside, determined := insideGitWorkTree(root)
+		warnIfRootNotGit(&buf, &config.Config{Repositories: []config.Repository{{Name: "auba-api"}}}, root, inside, determined)
 		got := gitignoreSuggestions(&config.Config{Repositories: []config.Repository{{Name: "auba-api"}}}, root)
 		want := []string{".bough/", ".worktrees/", "auba-api/"}
 		if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -91,7 +93,8 @@ func TestWarnIfRootNotGit(t *testing.T) {
 			t.Fatalf("git init: %v\n%s", err, out)
 		}
 		var buf bytes.Buffer
-		warnIfRootNotGit(&buf, &config.Config{}, root)
+		inside, determined := insideGitWorkTree(root)
+		warnIfRootNotGit(&buf, &config.Config{}, root, inside, determined)
 		if buf.Len() != 0 {
 			t.Errorf("git root must stay silent; got:\n%s", buf.String())
 		}
