@@ -30,8 +30,23 @@ import (
 // instinct exercised during a session that showed a correction marker
 // drops one. The low bands (0.30 / 0.40) sit BELOW inject's
 // MinConfidence (0.50), so a repeatedly-contradicted instinct decays
-// out of the injected set entirely — bough's analogue of ECC's
-// demotion toward removal (ECC clamps to [0.1, 0.95]).
+// out of the injected set entirely.
+//
+// Evaluate is ADVISORY: it reports what it would have done and writes
+// nothing. This algorithm cannot assign per-instinct credit — the
+// correction signal is one flag for the whole session, and "exercised"
+// is a token overlap, so one occurrence of a correction word demotes
+// every instinct the session brushed against. Measured on this
+// project's live corpus (2026-08-07): 109 of 144 sessions (76%) carry a
+// correction word somewhere in their observations, and 407 of 409
+// instincts had been driven to the 0.30 floor — below the injection
+// gate, so a corpus that cost hundreds of LLM mints delivered nothing.
+// The reference implementation this ports hit the same failure and
+// deliberately keeps its own version of this loop inert for the same
+// reason. Until observations record WHICH instinct influenced an
+// action, not writing is the correct behaviour, and this comment is
+// load-bearing: reconnecting the write path without attribution
+// re-sinks the corpus within days.
 var confidenceBands = []float64{0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85}
 
 // correctionMarkerRE matches a USER correction of the assistant as a whole
@@ -87,7 +102,6 @@ func Evaluate(layout homunculus.Layout, projectID, sessionID string, observation
 
 	obsTokens := tokenizeObservations(observations)
 	correction := sessionHadCorrection(observations)
-	dir := layout.InstinctsDir(projectID)
 
 	for _, in := range instincts {
 		if instinctOverlap(in, obsTokens) < 0.15 {
@@ -107,12 +121,13 @@ func Evaluate(layout homunculus.Layout, projectID, sessionID string, observation
 			res.Unchanged++
 			continue
 		}
-		in.Confidence = newConf
-		in.LastSeen = now.UTC()
-		in.Observed++
-		if _, err := homunculus.WriteInstinctFile(dir, in); err != nil {
-			return res, err
-		}
+		// ADVISORY ONLY — count what would have happened, write nothing.
+		// See the confidenceBands comment: without per-instinct
+		// attribution the session-wide correction flag demotes everything
+		// a busy session touched, and 76% of real sessions carry a
+		// correction word. The counts still land in eval/scores.jsonl so
+		// the false-positive rate stays measurable for whoever builds the
+		// attribution this needs.
 		if correction {
 			res.Contradicted++
 		} else {

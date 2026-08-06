@@ -40,6 +40,17 @@ var AnthropicAPIEnvVars = []string{
 // exec.Cmd.Env so the spawned `claude --print` subprocess falls
 // back to the operator's subscription auth (= ~/.claude.json
 // oauth_token) instead of API billing.
+// SelfInvocationEnv marks a claude subprocess as one BOUGH ITSELF
+// spawned (the observer mint, the gate judge, the CLAUDE.md proposal).
+// The hooks installed in that subprocess's session see this variable and
+// record nothing: without it, bough's own judge/mint prompts were
+// captured as UserPromptSubmit observations, and the correction words
+// those prompts legitimately contain ("a wrong \"true\" quarantines a
+// useful instinct") read as the OPERATOR correcting the assistant —
+// measured 2026-08-07: 106 of the 107 correction-flagged sessions owed
+// their flag to bough's own prompt text, not to the operator.
+const SelfInvocationEnv = "BOUGH_SELF_INVOCATION"
+
 func SanitizeAnthropicEnv(env []string) []string {
 	if len(env) == 0 {
 		return env

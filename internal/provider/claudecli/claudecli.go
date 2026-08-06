@@ -135,6 +135,10 @@ func (p *Provider) Generate(ctx context.Context, req GenerateRequest) (*Generate
 
 	args := p.buildArgs()
 	env := observe.SanitizeAnthropicEnv(os.Environ())
+	// Mark the subprocess as self-spawned so its session's hooks record
+	// nothing — bough must never observe its own prompts (see
+	// observe.SelfInvocationEnv).
+	env = append(env, observe.SelfInvocationEnv+"=1")
 	start := time.Now()
 
 	raw, err := p.invoke(ctx, args, env, body)
@@ -192,6 +196,10 @@ func (p *Provider) GenerateRaw(ctx context.Context, promptBody string) ([]byte, 
 	}
 	args := p.buildArgs()
 	env := observe.SanitizeAnthropicEnv(os.Environ())
+	// Mark the subprocess as self-spawned so its session's hooks record
+	// nothing — bough must never observe its own prompts (see
+	// observe.SelfInvocationEnv).
+	env = append(env, observe.SelfInvocationEnv+"=1")
 	raw, err := p.invoke(ctx, args, env, promptBody)
 	if err != nil {
 		if DefaultRetryOnce && isTransient(err) {

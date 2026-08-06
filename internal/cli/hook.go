@@ -16,6 +16,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/hooks"
 	"github.com/ikeikeikeike/bough/internal/inject"
+	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/qualitygate"
 )
 
@@ -272,6 +273,17 @@ func newHookHandleCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, _ []string) error {
 			if event == "" {
 				return fmt.Errorf("--event is required (= called by Claude Code's settings.json wiring; see `bough hook install`)")
+			}
+			// A session bough itself spawned (`claude --print` for the
+			// observer mint / gate judge / CLAUDE.md proposal) inherits
+			// this marker, and its events are bough talking to itself —
+			// recording them poisons the corpus: the judge prompt's own
+			// correction vocabulary ("a wrong \"true\" ...") was captured
+			// as an operator prompt and demoted every exercised instinct,
+			// session after session. Exit 0 so the subprocess's tool
+			// calls are unaffected.
+			if os.Getenv(observe.SelfInvocationEnv) != "" {
+				return nil
 			}
 			payload, err := io.ReadAll(c.InOrStdin())
 			if err != nil {

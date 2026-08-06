@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The session evaluator no longer sinks the corpus.** Confidence
+  reinforce/demote is now ADVISORY — counted in `eval/scores.jsonl`, never
+  written back. The correction signal is one flag per session and
+  "exercised" is a token overlap, so one correction word demoted every
+  instinct a busy session brushed; measured live, 407 of 409 instincts had
+  been driven below the injection gate and `bough inject-context` returned
+  nothing from a corpus of hundreds of LLM mints. The write path stays off
+  until observations can attribute an outcome to a specific instinct.
+- **bough no longer observes itself.** Its own `claude --print`
+  subprocesses (observer mint, gate judge, CLAUDE.md proposal) carry a
+  self-invocation marker and their sessions' hooks record nothing.
+  Without it, the judge prompt's own vocabulary — "a wrong \"true\"
+  quarantines a useful instinct" — was captured as an operator prompt,
+  and 106 of the 107 correction-flagged sessions owed their flag to
+  bough's own text: a self-poisoning loop feeding the evaluator above.
+
 ## v0.22.0
 
 `claude --worktree <name>` stopped working against a git monorepo, and every
