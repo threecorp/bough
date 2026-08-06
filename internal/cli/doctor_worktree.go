@@ -30,9 +30,11 @@ const maxNamedWorktrees = 5
 // are no containers to judge", which a boolean cannot.
 //
 // Containers created before bough made them work trees of their own stay
-// plain directories on disk (a populated dir cannot be adopted by
-// `git worktree add`), so they are named here rather than silently
-// migrated — recreating one is the fix, and it is the operator's call.
+// plain directories on disk until something converts them: the
+// WorktreeCreate hook heals the one it is asked for, and `bough repair`
+// converts a whole fleet. Doctor still names them because a container no
+// session has resumed into stays legacy indefinitely — and the operator
+// should learn that from a diagnostic, not from a host refusing to cd.
 func renderWorktreeIsolation(ctx context.Context, w io.Writer) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -83,9 +85,9 @@ func renderWorktreeIsolation(ctx context.Context, w io.Writer) {
 	}
 	fmt.Fprintf(w, "    %s refused           %s\n", st.Mark(termio.StatusWarn), namedList(refused))
 	fmt.Fprintf(w, "          `claude --worktree <name>` refuses these: git resolves them to %s,\n", root)
-	fmt.Fprintf(w, "          so commands run there would write outside the worktree. Recreate one\n")
-	fmt.Fprintf(w, "          (`bough remove <name>` then `bough create <name>`) to fix it, or start\n")
-	fmt.Fprintf(w, "          the session with `cd %s/<name> && claude`.\n", dir)
+	fmt.Fprintf(w, "          so commands run there would write outside the worktree. Run `bough repair`\n")
+	fmt.Fprintf(w, "          to convert them in place (contents untouched), or start the session with\n")
+	fmt.Fprintf(w, "          `cd %s/<name> && claude`.\n", dir)
 }
 
 // refusedContainers returns the container names a host would refuse.

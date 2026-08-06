@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+v0.22.0 fixed the refused-container condition for NEW containers; this closes
+the loop for the ones that already exist. Resuming into a pre-v0.22.0 container
+is worse than a refusal — the host clears the session's worktree binding and
+keeps running WITHOUT isolation, so edits meant for the worktree land wherever
+the session happened to start (#138).
+
+### Added
+
+- **The WorktreeCreate hook heals a legacy container in place.** The hook fires
+  on every `claude --worktree … --resume`, so it is the one place that can
+  convert the container before the host ever sees the refused shape. Nothing
+  inside is moved, deleted or checked out over: the worktree admin entry is
+  created at a throwaway path against the pinned empty-tree commit, only its
+  `.git` link moves into the container, and `git worktree repair` re-points the
+  record.
+- **`bough repair`** — the same in-place conversion for a whole fleet in one
+  pass (`--dry-run` to report first), for containers no session has resumed
+  into yet. Per-container failures are reported and counted rather than
+  stopping the sweep; `bough doctor`'s refused-container hint now names it.
+
 ## v0.22.0
 
 `claude --worktree <name>` stopped working against a git monorepo, and every

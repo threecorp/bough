@@ -584,8 +584,20 @@ func isGitRepo(p string) bool {
 // containers once, when the operator is actually looking.
 func materializeWorktreeRoot(ctx context.Context, stderr io.Writer, monorepoRoot, worktreeRoot string, rootInGit bool) error {
 	if rootInGit {
-		err := gitwt.NewRunner().AddDetached(ctx, monorepoRoot, worktreeRoot)
-		if err != nil && !errors.Is(err, gitwt.ErrPopulatedContainer) {
+		runner := gitwt.NewRunner()
+		err := runner.AddDetached(ctx, monorepoRoot, worktreeRoot)
+		if errors.Is(err, gitwt.ErrPopulatedContainer) {
+			// A populated container is the ordinary pre-v0.22.0 state, and
+			// the host does worse than refuse it: it CLEARS the session's
+			// worktree binding and keeps running unisolated. The hook fires
+			// on every `--resume`, so this is the one place that can heal
+			// the container before the host ever sees the refused shape.
+			err = runner.RepairInPlace(ctx, monorepoRoot, worktreeRoot)
+			if err == nil {
+				logf(stderr, "[bough] converted legacy container %s into a work tree of its own (contents untouched)", worktreeRoot)
+			}
+		}
+		if err != nil {
 			logf(stderr, "[bough] note: %s could not be made a git work tree of its own: %v", worktreeRoot, err)
 			logf(stderr, "[bough]   `claude --worktree` refuses a container that resolves to %s.", monorepoRoot)
 			logf(stderr, "[bough]   Everything else still works; start the session with `cd %s && claude`.", worktreeRoot)

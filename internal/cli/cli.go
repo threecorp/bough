@@ -49,6 +49,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newStatusCmd(),
 		newOpsCmd(),
 		newBackfillCmd(),
+		newRepairCmd(),
 		newConfigCmd(),
 		newPluginsCmd(),
 		// Claude Code integration (v0.18+): the one namespace for what bough
