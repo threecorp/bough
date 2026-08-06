@@ -386,7 +386,7 @@ git -C worktrees/<name> rev-parse --show-toplevel
 ```
 
 `bough doctor` reports this for every container it finds, and names the
-ones a host would refuse. Containers created before v0.22.0 stay plain
+ones a host would refuse. Containers created before this landed stay plain
 directories — `git worktree add` cannot adopt a populated directory —
 so recreate one (`bough remove <name>` && `bough create <name>`) to fix
 it, or start the session with `cd worktrees/<name> && claude`.

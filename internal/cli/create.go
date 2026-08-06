@@ -570,9 +570,18 @@ func isGitRepo(p string) bool {
 // directory so the operator gets their environment, but it says plainly
 // that `claude --worktree` will refuse it, because the alternative is an
 // unexplained failure several steps later.
+//
+// One case is deliberately silent: a container that already exists with
+// contents. That is every worktree made before this behaviour landed, and
+// `git worktree add` cannot adopt a populated directory, so nothing is
+// wrong and nothing can be done here. Saying so would print three lines on
+// EVERY hook fire — the host re-fires WorktreeCreate on each `--resume` —
+// for the rest of that worktree's life. `bough doctor` names those
+// containers once, when the operator is actually looking.
 func materializeWorktreeRoot(ctx context.Context, stderr io.Writer, monorepoRoot, worktreeRoot string) error {
 	if inside, determined := insideGitWorkTree(monorepoRoot); inside && determined {
-		if err := gitwt.NewRunner().AddDetached(ctx, monorepoRoot, worktreeRoot); err != nil {
+		err := gitwt.NewRunner().AddDetached(ctx, monorepoRoot, worktreeRoot)
+		if err != nil && !errors.Is(err, gitwt.ErrPopulatedContainer) {
 			logf(stderr, "[bough] note: %s could not be made a git work tree of its own: %v", worktreeRoot, err)
 			logf(stderr, "[bough]   `claude --worktree` refuses a container that resolves to %s.", monorepoRoot)
 			logf(stderr, "[bough]   Everything else still works; start the session with `cd %s && claude`.", worktreeRoot)

@@ -2,7 +2,9 @@ package gitwt
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -47,6 +49,53 @@ func TestAddDetachedMakesTheContainerResolveToItself(t *testing.T) {
 		if filepath.Base(wt.Path) == "F-Iso" && wt.Branch != "" {
 			t.Errorf("container was branched (%q); it must be detached", wt.Branch)
 		}
+	}
+}
+
+// TestSelfResolvingWorkTreeAcceptsAStandaloneRepo pins the boundary the
+// predicate must NOT overshoot. A container that is simply its own
+// repository resolves to itself, and a host accepts it — measured: a hook
+// returning such a container started the session normally. An earlier
+// version of this predicate additionally required the git dir to differ
+// from `<dir>/.git`, which rejected exactly this shape; `bough doctor`
+// then told the operator to rebuild a worktree that worked, and gave a
+// reason ("git resolves them to <root>") that was not true of it.
+func TestSelfResolvingWorkTreeAcceptsAStandaloneRepo(t *testing.T) {
+	root := initBareRepo(t)
+	container := filepath.Join(root, "worktrees", "F-Own")
+	if err := os.MkdirAll(container, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", container}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if !SelfResolvingWorkTree(container) {
+		t.Error("a container that is its own repository resolves to itself; the host accepts it and so must this")
+	}
+}
+
+// TestPopulatedContainerIsATypedError lets the caller tell the ordinary
+// legacy state apart from a real failure. Without the distinction, create
+// printed a three-line warning on every hook fire — and the host re-fires
+// WorktreeCreate on each `--resume` — for a condition nothing can act on.
+func TestPopulatedContainerIsATypedError(t *testing.T) {
+	root := initBareRepo(t)
+	container := filepath.Join(root, "worktrees", "F-Full")
+	if err := os.MkdirAll(container, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(container, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	err := NewRunner().AddDetached(context.Background(), root, container)
+	if !errors.Is(err, ErrPopulatedContainer) {
+		t.Errorf("want ErrPopulatedContainer, got %v", err)
 	}
 }
 

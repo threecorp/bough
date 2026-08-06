@@ -77,16 +77,15 @@ ok "hook emitted $WT"
 echo "== the host's acceptance predicate =="
 # A host refuses an isolation worktree whose working tree git resolves
 # somewhere else — commands run there would write outside the worktree.
+# Resolution is the whole test: asserting anything beyond it (e.g. that the
+# git dir is not the container's own) rejects shapes the host accepts.
 TOP="$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$TOP" ] || fail "$WT is not inside any git work tree"
 # Compare resolved paths: macOS /tmp is a symlink to /private/tmp, and the
 # two spellings name the same directory.
 [ "$(cd "$TOP" && pwd -P)" = "$(cd "$WT" && pwd -P)" ] \
   || fail "git resolves $WT to $TOP — a host refuses this (work-tree-elsewhere)"
-GITDIR="$(git -C "$WT" rev-parse --absolute-git-dir)"
-[ "$GITDIR" != "$(cd "$MONO" && pwd -P)/.git" ] \
-  || fail "$WT runs on the monorepo's own git dir rather than its own"
-ok "resolves to itself, git dir $GITDIR"
+ok "resolves to itself, git dir $(git -C "$WT" rev-parse --absolute-git-dir)"
 
 echo "== the environment it was supposed to provision =="
 for r in alpha beta; do

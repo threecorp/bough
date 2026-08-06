@@ -226,11 +226,15 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 // being a work tree of its own: git's discovery then walks UP and
 // resolves the tree to an ancestor checkout, so a command run in `dir`
 // writes outside `dir`. A host that hands sessions an isolated tree
-// cannot accept that, and refuses. Both halves are checked because
-// either one alone can be satisfied by the wrong thing: `--show-toplevel`
-// matching pins that discovery stopped here, and a git dir distinct from
-// the ancestor's own `.git` pins that this is a linked worktree rather
-// than the shared checkout itself.
+// cannot accept that, and refuses.
+//
+// Resolution is the WHOLE test, deliberately. An earlier version also
+// demanded that the git dir differ from `<dir>/.git`, meaning to pin
+// "linked worktree, not the shared checkout". That extra clause rejects a
+// container which is simply its own standalone repository — and a host
+// accepts those (measured: a hook returning such a container starts the
+// session normally). A predicate stricter than the thing it models does
+// not fail safe; it tells the operator to rebuild something that works.
 //
 // A path that is not in a repository at all returns false — "not a work
 // tree" is not "resolves to itself", and callers that want to allow the
@@ -240,6 +244,9 @@ func SelfResolvingWorkTree(dir string) bool {
 	if err != nil {
 		return false
 	}
+	// Compare resolved paths: on macOS /tmp is a symlink to /private/tmp,
+	// and git reports the resolved spelling while the caller holds the
+	// literal one — the same directory under two names.
 	want, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return false
@@ -248,15 +255,16 @@ func SelfResolvingWorkTree(dir string) bool {
 	if err != nil {
 		return false
 	}
-	if got != want {
-		return false
-	}
-	gitDir, err := exec.Command("git", "-C", dir, "rev-parse", "--absolute-git-dir").Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(gitDir)) != filepath.Join(got, ".git")
+	return got == want
 }
+
+// ErrPopulatedContainer says the target directory already has contents,
+// so `git worktree add` cannot adopt it. It is a distinct error because
+// it is the ORDINARY state of a worktree created before containers became
+// work trees — the caller degrades quietly rather than reporting a
+// failure the operator cannot act on and would then see on every hook
+// fire for the rest of that worktree's life.
+var ErrPopulatedContainer = errors.New("gitwt: container already exists and is not empty")
 
 // AddDetached materialises `dst` as a DETACHED worktree of the repo at
 // repoPath — a work tree with no branch of its own.
@@ -284,7 +292,7 @@ func (r *Runner) AddDetached(ctx context.Context, repoPath, dst string) error {
 		return nil
 	}
 	if entries, err := os.ReadDir(dst); err == nil && len(entries) > 0 {
-		return fmt.Errorf("gitwt: %s already exists and is not empty", dst)
+		return fmt.Errorf("%w: %s", ErrPopulatedContainer, dst)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("gitwt: mkdir parent of %s: %w", dst, err)
