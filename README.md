@@ -370,6 +370,27 @@ too. `bough create` prints a one-time heads-up (with the two `.gitignore`
 lines above) when it notices the root is not a git repository — it never
 edits `.gitignore` for you.
 
+**The container is a work tree of its own.** `worktrees/<name>/` holds
+one sub-repo worktree per repository and carries no commits itself, so it
+used to be an ordinary directory. Inside a git monorepo that is not
+enough: git discovery walks up and resolves the container to the monorepo
+root, and Claude Code refuses an isolation worktree whose working tree
+resolves elsewhere — commands run there would write outside it. So when
+the root is a repo, `bough create` materialises the container as a
+**detached** worktree of it (no branch, nothing to clean up later). You
+can check any container the way the host does:
+
+```bash
+# must print the container's own path, not the monorepo root
+git -C worktrees/<name> rev-parse --show-toplevel
+```
+
+`bough doctor` reports this for every container it finds, and names the
+ones a host would refuse. Containers created before v0.22.0 stay plain
+directories — `git worktree add` cannot adopt a populated directory —
+so recreate one (`bough remove <name>` && `bough create <name>`) to fix
+it, or start the session with `cd worktrees/<name> && claude`.
+
 > **Upgrading from a pre-v0.11 layout is transparent.** A monorepo whose
 > checkouts still sit at `<root>/<name>` and whose worktrees still live
 > under `.worktrees/` keeps working unchanged — bough detects and reuses

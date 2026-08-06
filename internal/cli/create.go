@@ -104,8 +104,8 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
 	warnIfRootNotGit(stderr, cfg, monorepoRoot)
 	worktreeRoot := filepath.Join(worktreesDir(monorepoRoot), name)
-	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
-		return fmt.Errorf("mkdir worktree root: %w", err)
+	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot); err != nil {
+		return err
 	}
 
 	// 1. Registry: load, allocate, save in one mutation block. The
@@ -547,6 +547,45 @@ func isGitRepo(p string) bool {
 	return err == nil
 }
 
+// materializeWorktreeRoot creates the container directory `bough create`
+// hands back to Claude Code, as a work tree of its own whenever it can be
+// one.
+//
+// The container holds one sub-repo worktree per configured repository and
+// carries no commits itself, so for a long time it was simply MkdirAll'd.
+// That is fine until the monorepo root is a git repository: the plain
+// container is then not a work tree, git discovery walks up, and the
+// container "resolves" to the monorepo root. A Claude Code host refuses
+// such a directory as an isolation worktree — correctly, since commands
+// run there would write outside it — and `claude --worktree <name>` fails
+// at the last step, after everything else has already been provisioned.
+//
+// So when the root is inside a work tree, the container is materialised as
+// a DETACHED worktree of it (gitwt.AddDetached), which makes the container
+// resolve to itself. When it is not — the documented non-git escape hatch,
+// see warnIfRootNotGit — nothing above it can capture the resolution and a
+// plain directory is exactly right.
+//
+// A failure to materialise is not fatal: create still proceeds on a plain
+// directory so the operator gets their environment, but it says plainly
+// that `claude --worktree` will refuse it, because the alternative is an
+// unexplained failure several steps later.
+func materializeWorktreeRoot(ctx context.Context, stderr io.Writer, monorepoRoot, worktreeRoot string) error {
+	if inside, determined := insideGitWorkTree(monorepoRoot); inside && determined {
+		if err := gitwt.NewRunner().AddDetached(ctx, monorepoRoot, worktreeRoot); err != nil {
+			logf(stderr, "[bough] note: %s could not be made a git work tree of its own: %v", worktreeRoot, err)
+			logf(stderr, "[bough]   `claude --worktree` refuses a container that resolves to %s.", monorepoRoot)
+			logf(stderr, "[bough]   Everything else still works; start the session with `cd %s && claude`.", worktreeRoot)
+		}
+	}
+	// Idempotent, and the whole story for a non-git root: an existing
+	// container (worktree or legacy plain dir) is left untouched.
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		return fmt.Errorf("mkdir worktree root: %w", err)
+	}
+	return nil
+}
+
 // insideGitWorkTree reports whether dir sits inside a git work tree —
 // the exact condition Claude Code's `--worktree` flag enforces (its
 // "Can only use --worktree in a git repository" error is this check
@@ -692,6 +731,16 @@ func linkWorktreeClaudeMd(stderr io.Writer, monorepoRoot, worktreeRoot string) {
 		return // no root CLAUDE.md to expose; nothing to do
 	}
 	dst := filepath.Join(worktreeRoot, "CLAUDE.md")
+	// When the container is a work tree of the monorepo root (see
+	// materializeWorktreeRoot) and the root TRACKS its CLAUDE.md, git has
+	// already checked out a real file here — the session reads it without
+	// help. Replacing it with a symlink would be a downgrade, and
+	// ensureSymlink refuses a non-symlink anyway; skipping silently keeps
+	// that non-event out of the operator's stderr. An untracked (or
+	// ignored) root CLAUDE.md leaves nothing here and still gets linked.
+	if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
+		return
+	}
 	if err := ensureSymlink(src, dst); err != nil {
 		logf(stderr, "[bough] CLAUDE.md: %v", err)
 		return

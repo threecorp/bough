@@ -50,6 +50,29 @@ jobs:
       - name: actionlint
         run: nix develop .#ci -c actionlint
 
+  entrypoint-smoke:
+    name: Entry-point smoke (built binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # `go test` answers "does the code do what it says". It does not
+      # answer "does the binary still work where it is used" — the hook
+      # contract runs a real `bough` from a real Claude Code host, and a
+      # release once shipped with that contract broken while every test
+      # was green. This job drives the WorktreeCreate/Remove hooks through
+      # the built binary and asserts the host's own acceptance criteria.
+      - name: Build bough
+        run: go build -o /tmp/bough ./cmd/bough
+
+      - name: Entry-point smoke
+        run: ./scripts/entrypoint-smoke.sh /tmp/bough
+
   conformance:
     name: Plugin conformance (real Docker)
     needs: test

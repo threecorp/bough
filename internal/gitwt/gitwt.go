@@ -218,6 +218,90 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 		attachErr, strings.TrimSpace(string(attachOut)))
 }
 
+// SelfResolvingWorkTree reports whether `dir` is a git work tree that
+// resolves to ITSELF — the predicate a Claude Code host applies to any
+// directory offered as an isolation worktree.
+//
+// It exists because a directory can sit inside a repository without
+// being a work tree of its own: git's discovery then walks UP and
+// resolves the tree to an ancestor checkout, so a command run in `dir`
+// writes outside `dir`. A host that hands sessions an isolated tree
+// cannot accept that, and refuses. Both halves are checked because
+// either one alone can be satisfied by the wrong thing: `--show-toplevel`
+// matching pins that discovery stopped here, and a git dir distinct from
+// the ancestor's own `.git` pins that this is a linked worktree rather
+// than the shared checkout itself.
+//
+// A path that is not in a repository at all returns false — "not a work
+// tree" is not "resolves to itself", and callers that want to allow the
+// non-git case test for it separately.
+func SelfResolvingWorkTree(dir string) bool {
+	top, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return false
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
+	if err != nil {
+		return false
+	}
+	if got != want {
+		return false
+	}
+	gitDir, err := exec.Command("git", "-C", dir, "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(gitDir)) != filepath.Join(got, ".git")
+}
+
+// AddDetached materialises `dst` as a DETACHED worktree of the repo at
+// repoPath — a work tree with no branch of its own.
+//
+// The monorepo container `bough create` hands back is a plain directory
+// holding one sub-repo worktree per repository. Inside a git monorepo
+// that container is not a work tree, so git resolves it to the monorepo
+// root and a Claude Code host refuses it (see SelfResolvingWorkTree).
+// Making the container itself a work tree removes the condition instead
+// of documenting around it.
+//
+// Detached rather than branched on purpose: the container carries no
+// commits of its own, and cutting a branch per worktree would collide
+// with the teardown policy that deliberately keeps feature branches —
+// every create would leave a branch nothing ever deletes.
+//
+// Idempotent, and deliberately conservative about what it will touch: an
+// existing self-resolving work tree is a no-op, and a directory that
+// already has contents is left exactly as it is. `git worktree add`
+// cannot adopt a populated directory anyway, so containers created
+// before this existed keep working as plain directories rather than
+// being torn down underneath a running session.
+func (r *Runner) AddDetached(ctx context.Context, repoPath, dst string) error {
+	if SelfResolvingWorkTree(dst) {
+		return nil
+	}
+	if entries, err := os.ReadDir(dst); err == nil && len(entries) > 0 {
+		return fmt.Errorf("gitwt: %s already exists and is not empty", dst)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("gitwt: mkdir parent of %s: %w", dst, err)
+	}
+	// An empty dir left by a previous run blocks `worktree add`; remove it
+	// (empty, so nothing can be lost) and let git create the dir itself.
+	_ = os.Remove(dst)
+	// Best-effort prune first: a stale admin entry pointing at an
+	// already-deleted dst would otherwise block the add.
+	_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "prune").Run()
+	out, err := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", dst, "HEAD").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gitwt: worktree add --detach %s: %w (%s)", dst, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Clone acquires a repo into dst when it is not already present. A
 // remote git URL (git@host:org/repo, https://…, ssh://…, file://…) is
 // cloned over its transport; any other value is treated as a local
