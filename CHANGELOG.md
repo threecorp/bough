@@ -16,9 +16,12 @@ release removes the condition, and adds the gate that would have caught it.
   monorepo root. A host that isolates sessions refuses such a directory, since
   commands run there would write outside it. `bough create` now materialises the
   container as a **detached** worktree of the root (no branch, so nothing
-  accumulates under a teardown policy that keeps feature branches). Outside a
-  git repo nothing above the container can capture the resolution and a plain
-  directory stays correct — the documented non-git escape hatch is unchanged.
+  accumulates under a teardown policy that keeps feature branches), checked out
+  at an **empty tree** so it still starts empty: the sub-repo worktrees are
+  added into it, and a repository sharing a name with a root-tracked path could
+  otherwise never be materialised. Outside a git repo nothing above the
+  container can capture the resolution and a plain directory stays correct —
+  the documented non-git escape hatch is unchanged.
 - **`bough remove` no longer leaves a stale worktree record** in the monorepo
   root now that the container is registered there.
 

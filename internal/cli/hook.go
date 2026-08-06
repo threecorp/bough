@@ -217,7 +217,7 @@ func runDoctor(c *cobra.Command) error {
 	}
 	w := c.OutOrStdout()
 	report.Render(w)
-	renderWorktreeIsolation(w)
+	renderWorktreeIsolation(commandCtx(c), w)
 	renderContinuousLearningPosture(w)
 	return nil
 }

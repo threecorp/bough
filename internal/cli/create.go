@@ -102,9 +102,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// wrapper and behave as before.
 	stderr = termio.Wrap(stderr)
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
-	warnIfRootNotGit(stderr, cfg, monorepoRoot)
+	// One probe, two consumers: whether the root is inside a work tree
+	// decides both the heads-up below and how the container is materialised,
+	// and monorepoRoot cannot change between them.
+	rootInGit, gitDetermined := insideGitWorkTree(monorepoRoot)
+	warnIfRootNotGit(stderr, cfg, monorepoRoot, rootInGit, gitDetermined)
 	worktreeRoot := filepath.Join(worktreesDir(monorepoRoot), name)
-	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot); err != nil {
+	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot, rootInGit && gitDetermined); err != nil {
 		return err
 	}
 
@@ -578,8 +582,8 @@ func isGitRepo(p string) bool {
 // EVERY hook fire — the host re-fires WorktreeCreate on each `--resume` —
 // for the rest of that worktree's life. `bough doctor` names those
 // containers once, when the operator is actually looking.
-func materializeWorktreeRoot(ctx context.Context, stderr io.Writer, monorepoRoot, worktreeRoot string) error {
-	if inside, determined := insideGitWorkTree(monorepoRoot); inside && determined {
+func materializeWorktreeRoot(ctx context.Context, stderr io.Writer, monorepoRoot, worktreeRoot string, rootInGit bool) error {
+	if rootInGit {
 		err := gitwt.NewRunner().AddDetached(ctx, monorepoRoot, worktreeRoot)
 		if err != nil && !errors.Is(err, gitwt.ErrPopulatedContainer) {
 			logf(stderr, "[bough] note: %s could not be made a git work tree of its own: %v", worktreeRoot, err)
@@ -659,8 +663,8 @@ func worktreeSourceRepo(worktreeDst string) (string, bool) {
 // suggested lines reflect the layout THIS monorepo actually uses (see
 // gitignoreSuggestions), so an operator on the legacy layout is not
 // told to ignore paths that do not exist while the real ones leak in.
-func warnIfRootNotGit(stderr io.Writer, cfg *config.Config, monorepoRoot string) {
-	if inside, determined := insideGitWorkTree(monorepoRoot); inside || !determined {
+func warnIfRootNotGit(stderr io.Writer, cfg *config.Config, monorepoRoot string, inside, determined bool) {
+	if inside || !determined {
 		return
 	}
 	logf(stderr, "[bough] note: %s is not a git repository.", monorepoRoot)

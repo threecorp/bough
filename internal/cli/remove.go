@@ -151,7 +151,7 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	// it, and the next create of the same name has to prune before it can
 	// add. Runner.Remove already degrades to rm + prune, which is exactly
 	// the right fallback here and also covers legacy plain containers.
-	if gitwt.SelfResolvingWorkTree(worktreePath) {
+	if runner.SelfResolvingWorkTree(ctx, worktreePath) {
 		if err := runner.Remove(ctx, monorepoRoot, worktreePath, true); err != nil {
 			logf(stderr, "[bough] worktree remove %s: %v", worktreePath, err)
 		}

@@ -21,7 +21,7 @@ func TestSelfResolvingWorkTreeRejectsAPlainContainer(t *testing.T) {
 	if err := os.MkdirAll(container, 0o755); err != nil {
 		t.Fatalf("mkdir container: %v", err)
 	}
-	if SelfResolvingWorkTree(container) {
+	if NewRunner().SelfResolvingWorkTree(context.Background(), container) {
 		t.Error("a plain directory inside a repo must not pass as an isolated work tree")
 	}
 }
@@ -37,7 +37,7 @@ func TestAddDetachedMakesTheContainerResolveToItself(t *testing.T) {
 	if err := NewRunner().AddDetached(context.Background(), root, container); err != nil {
 		t.Fatalf("AddDetached: %v", err)
 	}
-	if !SelfResolvingWorkTree(container) {
+	if !NewRunner().SelfResolvingWorkTree(context.Background(), container) {
 		t.Fatal("AddDetached produced a container that still resolves elsewhere")
 	}
 
@@ -75,7 +75,7 @@ func TestSelfResolvingWorkTreeAcceptsAStandaloneRepo(t *testing.T) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	if !SelfResolvingWorkTree(container) {
+	if !NewRunner().SelfResolvingWorkTree(context.Background(), container) {
 		t.Error("a container that is its own repository resolves to itself; the host accepts it and so must this")
 	}
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -32,7 +33,7 @@ const maxNamedWorktrees = 5
 // plain directories on disk (a populated dir cannot be adopted by
 // `git worktree add`), so they are named here rather than silently
 // migrated — recreating one is the fix, and it is the operator's call.
-func renderWorktreeIsolation(w io.Writer) {
+func renderWorktreeIsolation(ctx context.Context, w io.Writer) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return
@@ -47,22 +48,27 @@ func renderWorktreeIsolation(w io.Writer) {
 	fmt.Fprintln(w)
 	st := termio.NewStyler(w)
 
-	// Outside a git work tree nothing above a container can capture git's
-	// resolution, so a plain directory is correct and there is no verdict
-	// to give. Saying so beats printing a failure the operator cannot act on.
-	if inside, determined := insideGitWorkTree(root); determined && !inside {
+	// Two different "no verdict" cases, kept apart because conflating them
+	// is how a diagnostic starts lying. Undetermined means git could not be
+	// RUN — every per-container probe below would fail for that same reason
+	// and the report would blame the containers for it.
+	inside, determined := insideGitWorkTree(root)
+	switch {
+	case !determined:
+		fmt.Fprintf(w, "%s Worktree isolation:\n", st.Section(termio.StatusNeutral))
+		fmt.Fprintf(w, "    %s containers        %d, but git could not be run here — nothing can be judged\n",
+			st.Mark(termio.StatusNeutral), len(names))
+		return
+	case !inside:
+		// Outside a git work tree nothing above a container can capture
+		// git's resolution, so a plain directory is correct.
 		fmt.Fprintf(w, "%s Worktree isolation:\n", st.Section(termio.StatusNeutral))
 		fmt.Fprintf(w, "    %s containers        %d, none inside a git repo — a host has nothing to refuse\n",
 			st.Mark(termio.StatusNeutral), len(names))
 		return
 	}
 
-	var refused []string
-	for _, name := range names {
-		if !gitwt.SelfResolvingWorkTree(filepath.Join(dir, name)) {
-			refused = append(refused, name)
-		}
-	}
+	refused := refusedContainers(ctx, root, dir, names)
 	isolated := len(names) - len(refused)
 
 	status := termio.StatusOK
@@ -80,6 +86,42 @@ func renderWorktreeIsolation(w io.Writer) {
 	fmt.Fprintf(w, "          so commands run there would write outside the worktree. Recreate one\n")
 	fmt.Fprintf(w, "          (`bough remove <name>` then `bough create <name>`) to fix it, or start\n")
 	fmt.Fprintf(w, "          the session with `cd %s/<name> && claude`.\n", dir)
+}
+
+// refusedContainers returns the container names a host would refuse.
+//
+// One `git worktree list --porcelain` against the monorepo root answers
+// for every container bough itself created, in a single subprocess. Only
+// the leftovers — a legacy plain directory, or a container that is its own
+// standalone repository — need the per-directory probe, so the cost is
+// 1 + misses rather than 2 per container on every `bough doctor`.
+func refusedContainers(ctx context.Context, root, dir string, names []string) []string {
+	runner := gitwt.NewRunner()
+	registered := map[string]struct{}{}
+	if wts, err := runner.List(ctx, root); err == nil {
+		for _, wt := range wts {
+			if !wt.Prunable {
+				registered[wt.Path] = struct{}{}
+			}
+		}
+	}
+	var refused []string
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		// git reports the symlink-resolved path; the caller holds the
+		// literal one, and on stock macOS those differ for the same dir.
+		resolved := path
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			resolved = real
+		}
+		if _, ok := registered[resolved]; ok {
+			continue
+		}
+		if !runner.SelfResolvingWorkTree(ctx, path) {
+			refused = append(refused, name)
+		}
+	}
+	return refused
 }
 
 // containerNames lists the worktree containers directly under dir.

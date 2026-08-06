@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,13 +51,61 @@ func TestWorktreeRootIsAnIsolatedWorkTree(t *testing.T) {
 
 	got := worktreeCreateHook(t, root, "F-Iso")
 
-	if !gitwt.SelfResolvingWorkTree(got) {
+	if !gitwt.NewRunner().SelfResolvingWorkTree(context.Background(), got) {
 		top, _ := exec.Command("git", "-C", got, "rev-parse", "--show-toplevel").Output()
 		t.Fatalf("emitted worktree root %q is not a self-resolving work tree (git resolves it to %q) — a Claude Code host refuses it",
 			got, strings.TrimSpace(string(top)))
 	}
 	if _, err := os.Stat(filepath.Join(got, "demo", ".git")); err != nil {
 		t.Errorf("sub-repo worktree not materialised inside the container: %v", err)
+	}
+}
+
+// TestContainerStaysEmptyForSubRepos is the regression for what making the
+// container a work tree nearly cost: the sub-repo worktrees are added INTO
+// it, and `git worktree add` refuses a path that already exists. Checking
+// out the root's tree would materialise every tracked top-level entry, so a
+// repository sharing a name with one of them could never be materialised —
+// measured before the fix as `fatal: '<container>/demo' already exists`,
+// reported only as a WARNING while the operator's `demo/` silently held the
+// monorepo root's own files.
+func TestContainerStaysEmptyForSubRepos(t *testing.T) {
+	root := t.TempDir()
+	gitInitMain(t, root)
+	// The root TRACKS a directory named exactly like the configured repo.
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "demo", "root-owned.txt"), []byte("root\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "root tracks demo/"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitInitMain(t, filepath.Join(root, "demo"))
+	writeMinimalBoughYAML(t, root)
+
+	got := worktreeCreateHook(t, root, "F-Collide")
+
+	if _, err := os.Stat(filepath.Join(got, "demo", ".git")); err != nil {
+		t.Fatalf("sub-repo worktree lost to a name collision with the root's tree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got, "demo", "root-owned.txt")); !os.IsNotExist(err) {
+		t.Errorf("the container holds the monorepo root's own file; it must start empty (err=%v)", err)
+	}
+	// And the container must still be clean: --no-checkout without the empty
+	// sparse-checkout leaves the index claiming every tracked file exists.
+	out, err := exec.Command("git", "-C", got, "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.HasPrefix(line, "D ") || strings.HasPrefix(line, " D") {
+			t.Errorf("container reports tracked files as deleted — one careless commit from a mass deletion:\n%s", out)
+			break
+		}
 	}
 }
 
