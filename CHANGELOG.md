@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.22.0
 
 `claude --worktree <name>` stopped working against a git monorepo, and every
 test stayed green while it did. The provisioning was never the problem: the
