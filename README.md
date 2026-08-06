@@ -125,7 +125,7 @@ curl -fsSL "https://github.com/threecorp/bough/releases/download/${tag}/bough_${
 # notarized, so Gatekeeper kills them on first run ("zsh: killed").
 # Ad-hoc re-sign locally once after install (and clear quarantine if
 # you downloaded via a browser):
-#   xattr -dr com.apple.quarantine ~/.local/bin/bough ~/.local/bin/bough-plugin-* 2>/dev/null
+#   xattr -d com.apple.quarantine ~/.local/bin/bough ~/.local/bin/bough-plugin-* 2>/dev/null
 #   codesign --force --sign - ~/.local/bin/bough ~/.local/bin/bough-plugin-*
 
 # 2. go install (per-binary; requires Go toolchain on PATH)
@@ -559,9 +559,13 @@ default:
    each worktree's `.claude/skills` at the monorepo copy). Generated
    artifacts cite a resolvable source-instinct path so a reader can
    trace a skill back to the instincts it came from (v0.9.22).
-3. **Inject.** The `UserPromptSubmit` hook prints a confidence-ranked
+3. **Inject.** The `UserPromptSubmit` hook prints a RELEVANCE-ranked
    instinct block into your next turn as ordinary input tokens — no
-   separate call.
+   separate call. Ranking fuses three channels (exact identifier hits,
+   BM25, recency) against the prompt; confidence gates entry and is
+   deliberately not a ranking key, since a corpus where every note
+   scores 0.85 has no order to give. See
+   [Continuous learning](#continuous-learning-v09) for the budgets.
 
 ```sh
 # Wire bough's hook handlers into .claude/settings.json (idempotent;
@@ -639,13 +643,16 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 | v0.5.0-v0.8.0 | (superseded) An earlier continuous-learning design, replaced wholesale in v0.9.0; pin v0.8.1 if you depend on it |
 | v0.9.0    | The "ECC verbatim port" reset. Deleted the v0.5-v0.8 surface and rebuilt continuous learning as a faithful Go port of [everything-claude-code](https://github.com/affaan-m/everything-claude-code): the `~/.local/share/bough-homunculus/` corpus, `observations.jsonl`, and a subscription-only `claude --print` mechanism (no Anthropic API, no separate billing) |
 | v0.9.1-v0.9.22 | The observe → evolve → inject loop: `bough instinct evolve --generate` 5-gate clustering into skills / agents / commands, `UserPromptSubmit` instinct injection, `SessionEnd` / `PreCompact` hooks, secret-scrub at capture, project-scope evolved skills (v0.9.20), resolvable source-instinct paths (v0.9.22), plus a retrospective `/review` bug-fix sweep of the merged infra PRs |
+| v0.10.0-v0.20.3 | Iteration on that loop — see [CHANGELOG](CHANGELOG.md) for the per-release detail |
+| v0.21.0   | The loop stops trusting configuration and starts trusting measurement: a completion gate that decides on pull telemetry (and withdraws its own PASS when its reader cannot parse a row), `bough ops`, lifetime selector-health checks, and ECC-conformant selection — per-channel depth, a relevance floor scaled to the prompt, a restatement skip, a per-family cap whose stamped POPULATION is printed by `bough claude doctor` so an inert cap cannot hide, and the published byte budgets |
+| v0.22.0   | `claude --worktree` works against a git monorepo again: the worktree container is a work tree of its own (checked out at an empty tree, so it still starts empty), `bough doctor` names any container a host would refuse, and the release pipeline runs the published archive through the real WorktreeCreate/Remove hook contract before the release is called good |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 
 ## Status
 
-v0.9.22 (current; v0.9.23 in progress). Three of the four bundled
+v0.22.0 (current). Three of the four bundled
 engine plugins (`bough-plugin-{mysql,redis,elasticsearch}`) are
 battle-tested in a real Go + Rails + Remix multi-sub-repo monorepo
 (MySQL 8.4 LTS + Redis 7 + Elasticsearch 7) on the Docker backend; the
