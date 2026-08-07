@@ -16,6 +16,7 @@ import (
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/hooks"
 	"github.com/ikeikeikeike/bough/internal/inject"
+	"github.com/ikeikeikeike/bough/internal/observe"
 	"github.com/ikeikeikeike/bough/internal/qualitygate"
 )
 
@@ -273,6 +274,21 @@ func newHookHandleCmd() *cobra.Command {
 			if event == "" {
 				return fmt.Errorf("--event is required (= called by Claude Code's settings.json wiring; see `bough hook install`)")
 			}
+			// A session bough itself spawned (`claude --print` for the
+			// observer mint / gate judge / CLAUDE.md proposal) inherits
+			// this marker, and its events are bough talking to itself —
+			// recording them poisons the corpus: the judge prompt's own
+			// correction vocabulary ("a wrong \"true\" ...") was captured
+			// as an operator prompt and demoted every exercised instinct,
+			// session after session.
+			//
+			// It suppresses the LEARNING side only — capture, gates,
+			// injection, session-end evaluation. The worktree verbs below
+			// are the host's create/remove contract and must keep working:
+			// returning early for those would make `claude --worktree`
+			// hand back nothing, and the session would run unisolated with
+			// no error at all — the exact failure v0.22.0 exists to stop.
+			selfInvoked := os.Getenv(observe.SelfInvocationEnv) != ""
 			payload, err := io.ReadAll(c.InOrStdin())
 			if err != nil {
 				return fmt.Errorf("read stdin: %w", err)
@@ -298,6 +314,9 @@ func newHookHandleCmd() *cobra.Command {
 			// never fail the operator's tool call.
 			if outPath == "" {
 				outPath = resolveHomunculusObsPath()
+			}
+			if selfInvoked {
+				outPath = "" // record nothing from bough's own subprocess
 			}
 			if outPath != "" {
 				rotateIfLarge(outPath)
@@ -332,7 +351,9 @@ func newHookHandleCmd() *cobra.Command {
 			// next turn can see it. The runner ships its own
 			// per-gate TimeoutSeconds cap (= default 60s) so a
 			// hanging gate cannot block the hook.
-			dispatchQualityGates(c, event, payload)
+			if !selfInvoked {
+				dispatchQualityGates(c, event, payload)
+			}
 
 			// v0.9.2: UserPromptSubmit also injects the confidence-
 			// ranked instinct block to stdout so Claude Code folds
@@ -348,6 +369,30 @@ func newHookHandleCmd() *cobra.Command {
 			// confidence, PreCompact preserves the top instincts to
 			// stdout + MEMORY.md. All pure filesystem; LLM extraction
 			// stays opt-in via the observer daemon.
+			// The worktree verbs are the HOST's create/remove contract, not
+			// part of the learning loop, so they run whatever the session
+			// is. Dispatching them first also keeps the self-invocation
+			// guard below from ever reaching them: an early return there
+			// would make `claude --worktree` hand back no path and the
+			// session would run unisolated with no error.
+			switch event {
+			case string(hooks.EventWorktreeCreate):
+				// The unified wiring `bough hook install` writes routes
+				// WorktreeCreate here; run the create pipeline and emit the
+				// worktree path to stdout (the hook contract Claude Code
+				// reads to cd into the new tree). Returning the error makes a
+				// create failure surface as a hook failure.
+				return dispatchWorktreeCreate(c, payload)
+			case string(hooks.EventWorktreeRemove):
+				return dispatchWorktreeRemove(c, payload)
+			}
+			// Everything below is the learning loop, and a session bough
+			// itself spawned must not drive it: injecting into bough's own
+			// judge prompt, or evaluating that session at the end, feeds the
+			// loop its own text.
+			if selfInvoked {
+				return nil
+			}
 			switch event {
 			case string(hooks.EventPostToolUse):
 				// A skill load arrives here as an ordinary tool use. It is
@@ -362,15 +407,6 @@ func newHookHandleCmd() *cobra.Command {
 				dispatchEvolveClaudeMD(c)
 			case string(hooks.EventPreCompact):
 				_ = runPreserveInstincts(c.OutOrStdout(), "")
-			case string(hooks.EventWorktreeCreate):
-				// The unified wiring `bough hook install` writes routes
-				// WorktreeCreate here; run the create pipeline and emit the
-				// worktree path to stdout (the hook contract Claude Code
-				// reads to cd into the new tree). Returning the error makes a
-				// create failure surface as a hook failure.
-				return dispatchWorktreeCreate(c, payload)
-			case string(hooks.EventWorktreeRemove):
-				return dispatchWorktreeRemove(c, payload)
 			}
 			return nil
 		},

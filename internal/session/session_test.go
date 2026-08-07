@@ -55,6 +55,46 @@ func writeInstinct(t *testing.T, dir, id string, conf float64, action string) {
 	}
 }
 
+// TestEvaluate_RecordsThatAnInstinctWasExercised separates the two
+// halves the advisory switch has to keep apart. The CONFIDENCE verdict
+// is advisory and must not be written; LastSeen / Observed are not
+// credit assignment — they record that the session used the instinct,
+// which the overlap check just established. The first cut froze them
+// too, which made `instinct status` report an instinct used every day
+// as weeks old and left the injection ranker's recency prior ordering
+// by mint date.
+func TestEvaluate_RecordsThatAnInstinctWasExercised(t *testing.T) {
+	root := t.TempDir()
+	layout := homunculus.FromRoot(root)
+	pid := "abc123"
+	dir := layout.InstinctsDir(pid)
+	_ = os.MkdirAll(dir, 0o755)
+	writeInstinct(t, dir, "migration-discipline", 0.70, "Run migration after schema change to keep database models in sync")
+
+	obs := []observe.Observation{
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"make migration database schema sync models"}`)},
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"run migration change schema"}`)},
+	}
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := Evaluate(layout, pid, "s-recency", obs, now); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+
+	reloaded, err := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.LastSeen.Equal(now) {
+		t.Errorf("LastSeen = %v, want %v (an exercised instinct must record that it was used)", reloaded.LastSeen, now)
+	}
+	if reloaded.Observed != 1 {
+		t.Errorf("Observed = %d, want 1", reloaded.Observed)
+	}
+	if reloaded.Confidence != 0.70 {
+		t.Errorf("confidence = %v, want 0.70 — the band move stays advisory", reloaded.Confidence)
+	}
+}
+
 func TestEvaluate_ReinforcesExercisedInstinct(t *testing.T) {
 	root := t.TempDir()
 	layout := homunculus.FromRoot(root)
@@ -77,10 +117,12 @@ func TestEvaluate_ReinforcesExercisedInstinct(t *testing.T) {
 	if res.Reinforced != 1 {
 		t.Errorf("Reinforced = %d, want 1 (overlap should trigger reinforce)", res.Reinforced)
 	}
-	// confidence should have climbed to 0.75
+	// ADVISORY: the count is reported but the file is NOT rewritten. The
+	// write path stays off until observations can attribute an outcome to
+	// a specific instinct (see the confidenceBands comment in evaluate.go).
 	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
-	if reloaded.Confidence != 0.75 {
-		t.Errorf("confidence = %v, want 0.75 after reinforce", reloaded.Confidence)
+	if reloaded.Confidence != 0.70 {
+		t.Errorf("confidence = %v, want 0.70 unchanged (advisory evaluation must not write)", reloaded.Confidence)
 	}
 }
 
@@ -111,9 +153,14 @@ func TestEvaluate_DemotesExercisedInstinctOnCorrection(t *testing.T) {
 	if res.Contradicted != 1 || res.Reinforced != 0 {
 		t.Errorf("want Contradicted=1 Reinforced=0, got %+v", res)
 	}
+	// ADVISORY: the contradiction is counted for the audit log, but the
+	// corpus is untouched. A session-wide correction flag cannot say WHICH
+	// instinct was wrong; on the live corpus it demoted everything a busy
+	// session brushed and sank 407 of 409 instincts below the injection
+	// gate. Not writing is the regression being pinned here.
 	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
-	if reloaded.Confidence != 0.65 {
-		t.Errorf("confidence = %v, want 0.65 after demotion", reloaded.Confidence)
+	if reloaded.Confidence != 0.70 {
+		t.Errorf("confidence = %v, want 0.70 unchanged (advisory evaluation must not demote the corpus)", reloaded.Confidence)
 	}
 }
 
@@ -144,8 +191,8 @@ func TestEvaluate_ToolOutputMarkersDoNotDemote(t *testing.T) {
 		t.Errorf("tool-output markers must not demote: want Reinforced=1 Contradicted=0, got %+v", res)
 	}
 	reloaded, _ := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
-	if reloaded.Confidence != 0.75 {
-		t.Errorf("confidence = %v, want 0.75 (reinforced, not demoted)", reloaded.Confidence)
+	if reloaded.Confidence != 0.70 {
+		t.Errorf("confidence = %v, want 0.70 unchanged (advisory; classification still must not read tool output as a correction)", reloaded.Confidence)
 	}
 }
 
