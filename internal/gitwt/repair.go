@@ -25,14 +25,29 @@ import (
 //
 // Idempotent: a container that already resolves to itself is a no-op.
 // Conservative: a container holding a real `.git` directory of its own
-// is left alone (the rename refuses to clobber it), and the throwaway
-// admin entry is rolled back so no stale record survives a failure.
+// is left alone (any existing .git — file or directory — is refused
+// before anything is touched), and the throwaway admin entry is rolled
+// back so no stale record survives a failure.
 func (r *Runner) RepairInPlace(ctx context.Context, repoPath, dst string) error {
 	if r.SelfResolvingWorkTree(ctx, dst) {
 		return nil
 	}
 	if _, err := os.Stat(dst); err != nil {
 		return fmt.Errorf("gitwt: repair %s: %w", dst, err)
+	}
+	// A container that already carries git state of its own is not the
+	// legacy shape this converts, and rename(2) would not protect it: it
+	// only refuses when the DESTINATION is a directory, so a `.git` FILE —
+	// a linked worktree whose admin entry was pruned, or whose source
+	// checkout moved — would be silently overwritten and the container
+	// re-parented to the monorepo's empty tree, orphaning the branch it had
+	// checked out. Refuse either shape and say which.
+	if fi, err := os.Lstat(filepath.Join(dst, ".git")); err == nil {
+		kind := "file"
+		if fi.IsDir() {
+			kind = "directory"
+		}
+		return fmt.Errorf("gitwt: repair %s: refusing to replace the existing .git %s (this container carries git state of its own)", dst, kind)
 	}
 	base, err := r.emptyCommit(ctx, repoPath)
 	if err != nil {
@@ -44,6 +59,16 @@ func (r *Runner) RepairInPlace(ctx context.Context, repoPath, dst string) error 
 	}
 	// Empty-only removal: a concurrent repair's staging entry survives.
 	defer func() { _ = os.Remove(filepath.Dir(tmp)) }()
+	// A staging path left behind by an interrupted run would make every
+	// later repair of this container die on "already exists" — with nothing
+	// in the error naming the directory to delete. Clear it first: it only
+	// ever holds an empty-tree worktree, so nothing of the operator's can
+	// be in it.
+	if _, err := os.Stat(tmp); err == nil {
+		_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", tmp).Run()
+		_ = os.RemoveAll(tmp)
+		_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "prune").Run()
+	}
 	out, err := r.cmd(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", tmp, base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("gitwt: repair %s: staging worktree add: %w (%s)", dst, err, strings.TrimSpace(string(out)))

@@ -64,6 +64,72 @@ func TestRepairInPlaceConvertsAPopulatedContainer(t *testing.T) {
 	}
 }
 
+// TestRepairInPlaceRefusesToClobberAGitFile is the half rename(2) cannot
+// enforce: it only errors when the DESTINATION is a directory, so a
+// container whose `.git` is a FILE — a linked worktree whose admin entry
+// was pruned, or whose source checkout moved — would be silently
+// overwritten and re-parented to the monorepo's empty tree, orphaning the
+// branch it had checked out.
+func TestRepairInPlaceRefusesToClobberAGitFile(t *testing.T) {
+	root := initBareRepo(t)
+	container := filepath.Join(root, "worktrees", "F-Linked")
+	if err := os.MkdirAll(container, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitfile := filepath.Join(container, ".git")
+	original := "gitdir: /somewhere/else/.git/worktrees/F-Linked\n"
+	if err := os.WriteFile(gitfile, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := NewRunner().RepairInPlace(context.Background(), root, container); err == nil {
+		t.Fatal("RepairInPlace must refuse a container that already owns a .git file")
+	}
+	got, err := os.ReadFile(gitfile)
+	if err != nil || string(got) != original {
+		t.Errorf("the container's own .git file was modified (err=%v):\n%s", err, got)
+	}
+}
+
+// TestRepairInPlaceClearsAStaleStagingDir covers the wedge: an
+// interrupted run leaves .bough-repair-tmp/<name> populated, and every
+// later repair of that container then died on "already exists" with
+// nothing naming the directory to delete. The staging path only ever
+// holds an empty-tree worktree, so clearing it can lose nothing.
+func TestRepairInPlaceClearsAStaleStagingDir(t *testing.T) {
+	root := initBareRepo(t)
+	container := filepath.Join(root, "worktrees", "F-Wedged")
+	if err := os.MkdirAll(container, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(container, "keep.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the interrupted run: a real staging worktree, left behind.
+	stale := filepath.Join(root, ".bough-repair-tmp", "F-Wedged")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner()
+	base, err := r.emptyCommit(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", stale, base).CombinedOutput(); err != nil {
+		t.Fatalf("seed staging worktree: %v\n%s", err, out)
+	}
+
+	if err := r.RepairInPlace(context.Background(), root, container); err != nil {
+		t.Fatalf("a stale staging dir must not wedge repair: %v", err)
+	}
+	if !r.SelfResolvingWorkTree(context.Background(), container) {
+		t.Error("container was not converted")
+	}
+	if _, err := os.Stat(filepath.Join(container, "keep.txt")); err != nil {
+		t.Errorf("contents lost: %v", err)
+	}
+}
+
 // TestRepairInPlaceIsIdempotent mirrors AddDetached's contract: the hook
 // self-heal runs on every `--resume`, so a second pass over an
 // already-converted container must be a no-op.
