@@ -37,8 +37,9 @@ import (
 // correction signal is one flag for the whole session, and "exercised"
 // is a token overlap, so one occurrence of a correction word demotes
 // every instinct the session brushed against. Measured on this
-// project's live corpus (2026-08-07): 109 of 144 sessions (76%) carry a
-// correction word somewhere in their observations, and 407 of 409
+// project's live corpus (2026-08-07), applying the rule this code
+// actually implements (prompts only, whole-word markers): 107 of 143
+// sessions (75%) carry a correction word in a PROMPT, and 407 of 409
 // instincts had been driven to the 0.30 floor — below the injection
 // gate, so a corpus that cost hundreds of LLM mints delivered nothing.
 // The reference implementation this ports hit the same failure and
@@ -124,7 +125,7 @@ func Evaluate(layout homunculus.Layout, projectID, sessionID string, observation
 		// ADVISORY ONLY — count what would have happened, write nothing.
 		// See the confidenceBands comment: without per-instinct
 		// attribution the session-wide correction flag demotes everything
-		// a busy session touched, and 76% of real sessions carry a
+		// a busy session touched, and 75% of real sessions carry a
 		// correction word. The counts still land in eval/scores.jsonl so
 		// the false-positive rate stays measurable for whoever builds the
 		// attribution this needs.

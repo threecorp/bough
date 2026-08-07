@@ -34,12 +34,6 @@ var AnthropicAPIEnvVars = []string{
 	"CLAUDE_CODE_USE_VERTEX",
 }
 
-// SanitizeAnthropicEnv returns a copy of env (KEY=VALUE strings as
-// returned by os.Environ()) with every API-key-style variable
-// removed. The result is intended to be passed into
-// exec.Cmd.Env so the spawned `claude --print` subprocess falls
-// back to the operator's subscription auth (= ~/.claude.json
-// oauth_token) instead of API billing.
 // SelfInvocationEnv marks a claude subprocess as one BOUGH ITSELF
 // spawned (the observer mint, the gate judge, the CLAUDE.md proposal).
 // The hooks installed in that subprocess's session see this variable and
@@ -51,6 +45,12 @@ var AnthropicAPIEnvVars = []string{
 // their flag to bough's own prompt text, not to the operator.
 const SelfInvocationEnv = "BOUGH_SELF_INVOCATION"
 
+// SanitizeAnthropicEnv returns a copy of env (KEY=VALUE strings as
+// returned by os.Environ()) with every API-key-style variable
+// removed. The result is intended to be passed into
+// exec.Cmd.Env so the spawned `claude --print` subprocess falls
+// back to the operator's subscription auth (= ~/.claude.json
+// oauth_token) instead of API billing.
 func SanitizeAnthropicEnv(env []string) []string {
 	if len(env) == 0 {
 		return env
