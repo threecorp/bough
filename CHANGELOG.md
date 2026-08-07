@@ -6,7 +6,8 @@ v0.22.0 fixed the refused-container condition for NEW containers; this closes
 the loop for the ones that already exist. Resuming into a pre-v0.22.0 container
 is worse than a refusal — the host clears the session's worktree binding and
 keeps running WITHOUT isolation, so edits meant for the worktree land wherever
-the session happened to start (#138).
+the session happened to start (#138). The learning loop is separately repaired:
+it had been sinking its own corpus and feeding on its own prompts.
 
 ### Added
 
@@ -21,6 +22,42 @@ the session happened to start (#138).
   pass (`--dry-run` to report first), for containers no session has resumed
   into yet. Per-container failures are reported and counted rather than
   stopping the sweep; `bough doctor`'s refused-container hint now names it.
+
+### Fixed
+
+- **The session evaluator no longer sinks the corpus.** Confidence
+  reinforce/demote is now ADVISORY — counted in `eval/scores.jsonl`, never
+  written back. The correction signal is one flag per session and
+  "exercised" is a token overlap, so one correction word demoted every
+  instinct a busy session brushed; measured live, 407 of 409 instincts had
+  been driven below the injection gate and `bough inject-context` returned
+  nothing from a corpus of hundreds of LLM mints. The write path stays off
+  until observations can attribute an outcome to a specific instinct.
+
+  **What this costs, stated plainly:** the same write path was the only
+  thing that ever RAISED confidence, so until attribution exists an
+  instinct cannot climb past the value it was minted at — `bough instinct
+  promote` (0.80), the CLAUDE.md proposal path (0.80) and evolve's agent
+  gate (0.75) will not fire for anything minted below them. That is the
+  price of not sinking the corpus, not an oversight.
+
+  **What is still written:** `LastSeen` / `Observed`. They are not credit
+  assignment — they record that a session exercised the instinct, which
+  the overlap check establishes — and freezing them would make
+  `bough instinct status` report an instinct used daily as weeks old and
+  leave the injection ranker's recency prior ordering by mint date.
+- **bough no longer observes itself.** Its own `claude --print`
+  subprocesses (observer mint, gate judge, CLAUDE.md proposal) carry a
+  self-invocation marker and their sessions' hooks record nothing,
+  inject nothing and run no session-end evaluation. Without it, the judge
+  prompt's own vocabulary — "a wrong \"true\" quarantines a useful
+  instinct" — was captured as an operator prompt, and 106 of the 107
+  correction-flagged sessions owed their flag to bough's own text: a
+  self-poisoning loop feeding the evaluator above. The marker suppresses
+  the LEARNING loop only: `WorktreeCreate` / `WorktreeRemove` are the
+  host's contract and still run, since a hook that returned early for
+  those would hand the host no worktree path and leave the session
+  running unisolated with no error at all.
 
 ## v0.22.0
 
