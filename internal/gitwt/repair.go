@@ -48,18 +48,31 @@ func (r *Runner) RepairInPlace(ctx context.Context, repoPath, dst string) error 
 	if err != nil {
 		return fmt.Errorf("gitwt: repair %s: staging worktree add: %w (%s)", dst, err, strings.TrimSpace(string(out)))
 	}
+	// Every failure from here on rolls the container back to the plain
+	// directory it was. A half-converted container — a .git link whose
+	// admin record was never re-pointed — is worse than the legacy shape
+	// this is fixing: the operator gets neither isolation nor a directory
+	// git can explain.
+	rollback := func() {
+		_ = os.Rename(filepath.Join(dst, ".git"), filepath.Join(tmp, ".git"))
+		_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", tmp).Run()
+	}
 	if err := os.Rename(filepath.Join(tmp, ".git"), filepath.Join(dst, ".git")); err != nil {
-		// A failed move (e.g. dst owns a real .git directory) must not
-		// leave the staging entry behind in `git worktree list`.
+		// The move never happened (e.g. dst owns a real .git directory),
+		// so only the staging entry needs removing.
 		_ = r.cmd(ctx, "git", "-C", repoPath, "worktree", "remove", "--force", tmp).Run()
 		return fmt.Errorf("gitwt: repair %s: move .git link: %w", dst, err)
 	}
-	_ = os.Remove(tmp)
 	if out, err := r.cmd(ctx, "git", "-C", repoPath, "worktree", "repair", dst).CombinedOutput(); err != nil {
+		rollback()
 		return fmt.Errorf("gitwt: repair %s: worktree repair: %w (%s)", dst, err, strings.TrimSpace(string(out)))
 	}
 	if !r.SelfResolvingWorkTree(ctx, dst) {
+		rollback()
 		return fmt.Errorf("gitwt: repair %s: container still resolves outside itself", dst)
 	}
+	// Only now is the staging path disposable: it is empty, and the admin
+	// record points at dst.
+	_ = os.Remove(tmp)
 	return nil
 }

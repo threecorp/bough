@@ -106,6 +106,37 @@ func TestRunRepairDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+// TestRepairCmdNeedsNoConfig drives the COMMAND, not runRepair, because
+// that is where the defect was: the RunE loaded .bough.yaml and exited 1
+// without one, while `bough doctor` — which tells the operator to run
+// repair — needs no config. Every unit test here called runRepair
+// directly and sailed past the wiring, so the binary failed where the
+// suite was green.
+func TestRepairCmdNeedsNoConfig(t *testing.T) {
+	root := t.TempDir() // no .bough.yaml anywhere
+	gitInitMain(t, root)
+	legacy := filepath.Join(root, "worktrees", "F-NoConfig")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "keep.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	cmd := newRepairCmd()
+	cmd.SetArgs(nil)
+	var out, errBuf bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("repair must run without a config file: %v\nstderr:\n%s", err, errBuf.String())
+	}
+	if !gitwt.NewRunner().SelfResolvingWorkTree(context.Background(), legacy) {
+		t.Errorf("container not converted:\n%s", errBuf.String())
+	}
+}
+
 // TestRunRepairOutsideARepoIsANoOp is the same boundary the create path
 // keeps: outside a git repo nothing above a container can capture git's
 // resolution, so a plain directory is the CORRECT shape and repair must

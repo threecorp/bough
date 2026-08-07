@@ -30,11 +30,16 @@ container, and ` + "`git worktree repair`" + ` re-points the record.
 own the next time it fires; repair covers a whole fleet in one pass, before
 any session resumes into a container the host would refuse.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			monorepoRoot, _, err := loadConfigAndRoot(cmd, "")
+			// Deliberately NOT loadConfigAndRoot: repair reads no config,
+			// and `bough doctor` — the command that tells the operator to
+			// run this — resolves the root the same way, without one. A
+			// remediation that refuses to start where the diagnostic ran
+			// is worse than no remediation.
+			cwd, err := os.Getwd()
 			if err != nil {
-				return err
+				return fmt.Errorf("repair: getwd: %w", err)
 			}
-			return runRepair(cmd.Context(), cmd.ErrOrStderr(), monorepoRoot, dryRun)
+			return runRepair(cmd.Context(), cmd.ErrOrStderr(), resolveMonorepoRoot(cwd), dryRun)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would be converted without changing anything")
