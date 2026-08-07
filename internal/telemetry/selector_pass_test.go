@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,10 +94,23 @@ func TestSelectionStatsCountsWhatTheLogHolds(t *testing.T) {
 	if s.Volume != 3 || s.Empty != 1 || s.Distinct != 3 || len(s.Timed) != 3 {
 		t.Errorf("stats = %+v, want Volume=3 Empty=1 Distinct=3 Timed=3", s)
 	}
-	// And the folded stats drive a coherent report line.
+	// And the folded stats drive a report line that carries the OBSERVED
+	// value, not just the threshold. Asserting on a parenthesis would be
+	// vacuous — every Detail has one, including the "no timed runs yet"
+	// branch — so a formatter that dropped s.Volume would stay green.
+	details := map[string]string{}
 	for _, c := range DefaultSelectorBar().Check(s) {
-		if !strings.Contains(c.Detail, "(") {
-			t.Errorf("check %q detail must carry its comparison: %s", c.Name, c.Detail)
+		details[c.Name] = c.Detail
+	}
+	for name, want := range map[string]string{
+		"selection volume":   strconv.Itoa(s.Volume),   // 3 logged selections
+		"distinct instincts": strconv.Itoa(s.Distinct), // 3 distinct ids
+	} {
+		if !strings.Contains(details[name], want) {
+			t.Errorf("check %q must state the observed value %q, got: %s", name, want, details[name])
 		}
+	}
+	if !strings.Contains(details["p95 latency"], strconv.Itoa(len(s.Timed))) {
+		t.Errorf("p95 row must state how many runs it measured, got: %s", details["p95 latency"])
 	}
 }
