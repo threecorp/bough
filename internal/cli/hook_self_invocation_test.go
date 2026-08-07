@@ -39,6 +39,41 @@ func TestHookHandle_SelfInvocationRecordsNothing(t *testing.T) {
 	}
 }
 
+// TestHookHandle_SelfInvocationStillServesTheWorktreeContract pins the
+// line the guard must not cross. WorktreeCreate/Remove are the HOST's
+// contract, not part of the learning loop: an early return for them
+// makes `claude --worktree` receive no path and the session runs
+// UNISOLATED with no error — strictly worse than the failure v0.22.0
+// exists to prevent. The marker must silence recording, not the verb.
+func TestHookHandle_SelfInvocationStillServesTheWorktreeContract(t *testing.T) {
+	t.Setenv(observe.SelfInvocationEnv, "1")
+	root := t.TempDir()
+	gitInitMain(t, root)
+	gitInitMain(t, filepath.Join(root, "demo"))
+	writeMinimalBoughYAML(t, root)
+
+	cmd := newHookHandleCmd()
+	cmd.SetArgs([]string{"--event", "WorktreeCreate", "--out", filepath.Join(root, "obs.jsonl")})
+	cmd.SetIn(strings.NewReader(`{"name":"F-Self","cwd":"` + root + `"}`))
+	var out, errBuf bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("WorktreeCreate must still run under the marker: %v\nstderr:\n%s", err, errBuf.String())
+	}
+	got := strings.TrimSpace(out.String())
+	if got == "" {
+		t.Fatal("the host reads the worktree path from stdout; the marker must not silence it")
+	}
+	if _, err := os.Stat(filepath.Join(got, "demo", ".git")); err != nil {
+		t.Errorf("sub-repo worktree not materialised: %v", err)
+	}
+	// ...and the session still records nothing.
+	if _, err := os.Stat(filepath.Join(root, "obs.jsonl")); !os.IsNotExist(err) {
+		t.Errorf("a self-invoked session must not record (err=%v)", err)
+	}
+}
+
 // TestHookHandle_OperatorSessionStillRecords is the other direction —
 // without the marker the capture path must keep working, or the fix for
 // self-poisoning would silently kill the whole loop.

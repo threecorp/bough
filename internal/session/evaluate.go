@@ -80,13 +80,15 @@ type EvalResult struct {
 	Unchanged    int       `json:"unchanged"`
 }
 
-// Evaluate reinforces / demotes each project instinct based on the
-// session's observations, then rewrites the instinct files with the
-// adjusted confidence + bumped LastSeen. The heuristic is token
-// overlap: if an instinct's trigger/action tokens appear in the
-// observation stream, the session exercised it (= reinforce). The
-// ECC reference uses a richer signal (explicit success/failure
-// markers); bough's token-overlap proxy is deterministic + LLM-free.
+// Evaluate decides, per project instinct, whether this session
+// exercised it — token overlap: the instinct's trigger/action tokens
+// appearing in the observation stream. For every instinct it did
+// exercise, LastSeen / Observed are written.
+//
+// The CONFIDENCE verdict is ADVISORY and is NOT written: the reinforce
+// / demote counts are reported for eval/scores.jsonl and nothing else.
+// See the confidenceBands comment for why the write path stays off —
+// reconnecting it without per-instinct attribution re-sinks the corpus.
 //
 // now is injected for deterministic audit timestamps. Returns the
 // EvalResult; the caller appends it to eval/scores.jsonl.
@@ -103,32 +105,41 @@ func Evaluate(layout homunculus.Layout, projectID, sessionID string, observation
 
 	obsTokens := tokenizeObservations(observations)
 	correction := sessionHadCorrection(observations)
+	dir := layout.InstinctsDir(projectID)
 
 	for _, in := range instincts {
 		if instinctOverlap(in, obsTokens) < 0.15 {
 			res.Unchanged++ // not exercised this session
 			continue
 		}
-		// Exercised. Reinforce by default; demote if the session showed
-		// a correction marker (the instinct was active while something
-		// went wrong) — ECC's hurt/helped split, targeted to the
-		// instincts the session actually used.
+		// Exercised. Record THAT, always: LastSeen / Observed are not
+		// credit assignment — the overlap check just established the
+		// session used this instinct. Freezing them (as the first cut of
+		// the advisory switch did) made `instinct status` report an
+		// instinct used every day as "37 days ago", and left the injection
+		// ranker's recency prior ordering by MINT date instead of by use.
+		in.LastSeen = now.UTC()
+		in.Observed++
+		if _, err := homunculus.WriteInstinctFile(dir, in); err != nil {
+			return res, err
+		}
+
+		// The CONFIDENCE move, by contrast, is ADVISORY: counted here,
+		// never written. Reinforce by default; demote if the session
+		// showed a correction marker — ECC's hurt/helped split. See the
+		// confidenceBands comment: without per-instinct attribution the
+		// session-wide correction flag demotes everything a busy session
+		// touched, and 75% of real sessions carry a correction word. The
+		// counts still land in eval/scores.jsonl so the false-positive
+		// rate stays measurable for whoever builds the attribution.
 		steps := reinforceSteps
 		if correction {
 			steps = -contradictSteps
 		}
-		newConf := stepBand(in.Confidence, steps)
-		if newConf == in.Confidence {
-			res.Unchanged++
+		if stepBand(in.Confidence, steps) == in.Confidence {
+			res.Unchanged++ // already at the end of the ladder
 			continue
 		}
-		// ADVISORY ONLY — count what would have happened, write nothing.
-		// See the confidenceBands comment: without per-instinct
-		// attribution the session-wide correction flag demotes everything
-		// a busy session touched, and 75% of real sessions carry a
-		// correction word. The counts still land in eval/scores.jsonl so
-		// the false-positive rate stays measurable for whoever builds the
-		// attribution this needs.
 		if correction {
 			res.Contradicted++
 		} else {
@@ -294,6 +305,9 @@ func Summary(res EvalResult, observations []observe.Observation) string {
 	for _, e := range events {
 		fmt.Fprintf(&b, "  %-16s %d\n", e, byEvent[e])
 	}
-	fmt.Fprintf(&b, "instincts: reinforced=%d contradicted=%d unchanged=%d\n", res.Reinforced, res.Contradicted, res.Unchanged)
+	// "would" is load-bearing: the confidence move is advisory, so a bare
+	// `reinforced=3` reads as three instincts having climbed a band and
+	// sends the operator to `instinct status` to find nothing moved.
+	fmt.Fprintf(&b, "instincts (advisory): would reinforce=%d contradict=%d unchanged=%d\n", res.Reinforced, res.Contradicted, res.Unchanged)
 	return b.String()
 }

@@ -55,6 +55,46 @@ func writeInstinct(t *testing.T, dir, id string, conf float64, action string) {
 	}
 }
 
+// TestEvaluate_RecordsThatAnInstinctWasExercised separates the two
+// halves the advisory switch has to keep apart. The CONFIDENCE verdict
+// is advisory and must not be written; LastSeen / Observed are not
+// credit assignment — they record that the session used the instinct,
+// which the overlap check just established. The first cut froze them
+// too, which made `instinct status` report an instinct used every day
+// as weeks old and left the injection ranker's recency prior ordering
+// by mint date.
+func TestEvaluate_RecordsThatAnInstinctWasExercised(t *testing.T) {
+	root := t.TempDir()
+	layout := homunculus.FromRoot(root)
+	pid := "abc123"
+	dir := layout.InstinctsDir(pid)
+	_ = os.MkdirAll(dir, 0o755)
+	writeInstinct(t, dir, "migration-discipline", 0.70, "Run migration after schema change to keep database models in sync")
+
+	obs := []observe.Observation{
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"make migration database schema sync models"}`)},
+		{Event: "PostToolUse", Tool: "Bash", ToolInput: json.RawMessage(`{"command":"run migration change schema"}`)},
+	}
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := Evaluate(layout, pid, "s-recency", obs, now); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+
+	reloaded, err := homunculus.ReadInstinctFile(filepath.Join(dir, "migration-discipline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.LastSeen.Equal(now) {
+		t.Errorf("LastSeen = %v, want %v (an exercised instinct must record that it was used)", reloaded.LastSeen, now)
+	}
+	if reloaded.Observed != 1 {
+		t.Errorf("Observed = %d, want 1", reloaded.Observed)
+	}
+	if reloaded.Confidence != 0.70 {
+		t.Errorf("confidence = %v, want 0.70 — the band move stays advisory", reloaded.Confidence)
+	}
+}
+
 func TestEvaluate_ReinforcesExercisedInstinct(t *testing.T) {
 	root := t.TempDir()
 	layout := homunculus.FromRoot(root)

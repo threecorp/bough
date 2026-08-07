@@ -12,13 +12,31 @@
   been driven below the injection gate and `bough inject-context` returned
   nothing from a corpus of hundreds of LLM mints. The write path stays off
   until observations can attribute an outcome to a specific instinct.
+
+  **What this costs, stated plainly:** the same write path was the only
+  thing that ever RAISED confidence, so until attribution exists an
+  instinct cannot climb past the value it was minted at — `bough instinct
+  promote` (0.80), the CLAUDE.md proposal path (0.80) and evolve's agent
+  gate (0.75) will not fire for anything minted below them. That is the
+  price of not sinking the corpus, not an oversight.
+
+  **What is still written:** `LastSeen` / `Observed`. They are not credit
+  assignment — they record that a session exercised the instinct, which
+  the overlap check establishes — and freezing them would make
+  `bough instinct status` report an instinct used daily as weeks old and
+  leave the injection ranker's recency prior ordering by mint date.
 - **bough no longer observes itself.** Its own `claude --print`
   subprocesses (observer mint, gate judge, CLAUDE.md proposal) carry a
-  self-invocation marker and their sessions' hooks record nothing.
-  Without it, the judge prompt's own vocabulary — "a wrong \"true\"
-  quarantines a useful instinct" — was captured as an operator prompt,
-  and 106 of the 107 correction-flagged sessions owed their flag to
-  bough's own text: a self-poisoning loop feeding the evaluator above.
+  self-invocation marker and their sessions' hooks record nothing,
+  inject nothing and run no session-end evaluation. Without it, the judge
+  prompt's own vocabulary — "a wrong \"true\" quarantines a useful
+  instinct" — was captured as an operator prompt, and 106 of the 107
+  correction-flagged sessions owed their flag to bough's own text: a
+  self-poisoning loop feeding the evaluator above. The marker suppresses
+  the LEARNING loop only: `WorktreeCreate` / `WorktreeRemove` are the
+  host's contract and still run, since a hook that returned early for
+  those would hand the host no worktree path and leave the session
+  running unisolated with no error at all.
 
 ## v0.22.0
 
