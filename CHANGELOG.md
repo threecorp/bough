@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.23.0
 
 v0.22.0 fixed the refused-container condition for NEW containers; this closes
 the loop for the ones that already exist. Resuming into a pre-v0.22.0 container
