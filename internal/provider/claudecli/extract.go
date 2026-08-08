@@ -90,21 +90,38 @@ func unquoteResult(rawResult json.RawMessage) []byte {
 	return rawResult
 }
 
-// stripCodeFence removes a leading ```json (or ```) fence line and a
-// trailing ``` from a model reply, plus surrounding whitespace, so what
-// remains is the bare JSON payload.
+// stripCodeFence returns the JSON payload of a model reply, whether the
+// ```json fence opens the reply or follows some prose.
+//
+// The fence is not always first. Asked for a verdict, the model may
+// reason aloud and THEN emit the block — measured 2026-08-08 on a real
+// GATE 5 run: the judge answered "All 7 members describe the same
+// procedure … \n\n```json\n{...}\n```", a valid PASS. An earlier version
+// of this only stripped a fence at position 0, so that reply reached
+// json.Unmarshal whole, failed on the leading 'A', and the cluster fell
+// back to DOUBT — a correct verdict discarded and an LLM call wasted.
+// Searching for the fence anywhere costs nothing and keeps the answer.
 func stripCodeFence(b []byte) []byte {
 	s := bytes.TrimSpace(b)
-	if !bytes.HasPrefix(s, []byte("```")) {
-		return s
+	if i := bytes.Index(s, []byte("```")); i >= 0 {
+		s = s[i:]
+		if nl := bytes.IndexByte(s, '\n'); nl >= 0 {
+			s = s[nl+1:] // drop the opening ```json line
+		} else {
+			s = bytes.TrimPrefix(s, []byte("```"))
+		}
+		if j := bytes.LastIndex(s, []byte("```")); j >= 0 {
+			s = s[:j] // drop the closing fence
+		}
+		return bytes.TrimSpace(s)
 	}
-	if nl := bytes.IndexByte(s, '\n'); nl >= 0 {
-		s = s[nl+1:] // drop the opening ```json line
-	} else {
-		s = bytes.TrimPrefix(s, []byte("```"))
+	// No fence at all. If the reply is prose wrapped around a bare JSON
+	// object, keep the object; otherwise return it untouched so the
+	// caller's unmarshal error still names what actually arrived.
+	if start := bytes.IndexByte(s, '{'); start > 0 {
+		if end := bytes.LastIndexByte(s, '}'); end > start {
+			return bytes.TrimSpace(s[start : end+1])
+		}
 	}
-	if i := bytes.LastIndex(s, []byte("```")); i >= 0 {
-		s = s[:i] // drop the closing fence
-	}
-	return bytes.TrimSpace(s)
+	return s
 }
