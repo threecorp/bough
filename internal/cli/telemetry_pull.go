@@ -103,6 +103,14 @@ func resolveHomunculusTelemetryPath() string {
 // resolveHomunculusFile resolves the current project and returns the
 // file `pick` names for it, or "" when the project cannot be resolved.
 // Callers differ only in which file they want.
+//
+// Naming a path creates nothing. The hook resolves the observations
+// path on every invocation, so an EnsureProjectDirs here minted a full
+// seven-directory subtree for every cwd bough was ever run from —
+// throwaway checkouts and `mktemp -d` monorepos included — each one
+// permanent, absent from projects.json, and never pruned. Both writers
+// (observe.Writer.Append, telemetry.Writer) MkdirAll their own parent,
+// so the directory now appears when something is actually recorded.
 func resolveHomunculusFile(pick func(homunculus.Layout, string) string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -112,9 +120,5 @@ func resolveHomunculusFile(pick func(homunculus.Layout, string) string) string {
 	if err != nil {
 		return ""
 	}
-	layout := homunculus.NewLayout()
-	if err := layout.EnsureProjectDirs(ident.ID); err != nil {
-		return ""
-	}
-	return pick(layout, ident.ID)
+	return pick(homunculus.NewLayout(), ident.ID)
 }
