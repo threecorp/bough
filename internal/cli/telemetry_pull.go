@@ -108,9 +108,14 @@ func resolveHomunculusTelemetryPath() string {
 // path on every invocation, so an EnsureProjectDirs here minted a full
 // seven-directory subtree for every cwd bough was ever run from —
 // throwaway checkouts and `mktemp -d` monorepos included — each one
-// permanent, absent from projects.json, and never pruned. Both writers
-// (observe.Writer.Append, telemetry.Writer) MkdirAll their own parent,
-// so the directory now appears when something is actually recorded.
+// permanent, absent from projects.json, and never pruned.
+//
+// What keeps the directory there when it IS needed is the writer, not
+// this: the observations append MkdirAll's its own parent inline (see
+// the capture block in hook.go), and telemetry.Writer does the same.
+// Do not drop either one on the assumption that this function still
+// prepares the tree — the hook exits 0 either way, so losing that
+// MkdirAll would empty the corpus silently.
 func resolveHomunculusFile(pick func(homunculus.Layout, string) string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
