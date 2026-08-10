@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.23.1
+
+Two paths that quietly discarded work: a GATE 5 verdict the judge put after its
+prose, and a project subtree minted for every directory bough was ever run from.
+
+### Fixed
+
+- **A verdict that follows prose is no longer thrown away.** Asked to judge a
+  cluster, the model may reason aloud and emit its ```json block after the
+  prose; the extractor only stripped a fence at position 0, so the whole reply
+  reached `json.Unmarshal`, died on the first letter, and the cluster fell back
+  to DOUBT with the call already paid for. Measured against a live reply.
+
+  Position alone is not enough to find the payload, so every step now validates
+  before it commits: a reply that already parses is never touched (a ``` inside
+  a string value is not a fence), fenced blocks are tried last-first and used
+  only if they parse (a quoted snippet before the answer no longer swallows it),
+  and the fenceless rescue keeps prose on either side of the value while pairing
+  whichever bracket opens first, so a top-level array survives whole.
+
+- **Naming a path no longer mints a project.** The observations path is resolved
+  on every hook invocation — including the worktree verbs, which record nothing
+  — and the resolver created the full seven-directory subtree before returning.
+  Every cwd bough had ever run from therefore left one behind: absent from
+  `projects.json`, never pruned, 41 of them for 4 real projects on one machine.
+  The directory now appears when something is actually recorded. `bough doctor`
+  shares the one resolver instead of a byte-identical copy.
+
 ## v0.23.0
 
 v0.22.0 fixed the refused-container condition for NEW containers; this closes
