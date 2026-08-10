@@ -212,7 +212,11 @@ func runDoctor(c *cobra.Command) error {
 		return err
 	}
 	m := hooks.New(settingsPath)
-	report, err := m.Doctor(commandCtx(c), resolveObserverObsPath())
+	// The same resolver the capture path uses, so doctor probes the file
+	// the hook actually writes to (since v0.9.10) rather than the dead
+	// working-tree .bough/observations.jsonl. It is read-only now that
+	// naming a path no longer creates anything, so a diagnostic can share it.
+	report, err := m.Doctor(commandCtx(c), resolveHomunculusObsPath())
 	if err != nil {
 		return err
 	}
@@ -221,25 +225,6 @@ func runDoctor(c *cobra.Command) error {
 	renderWorktreeIsolation(commandCtx(c), w)
 	renderContinuousLearningPosture(w)
 	return nil
-}
-
-// resolveObserverObsPath returns the central homunculus observations.jsonl
-// for the resolved monorepo project so `bough doctor` probes the path the
-// hook actually writes to (since v0.9.10) instead of the dead working-tree
-// .bough/observations.jsonl. Read-only by design: unlike
-// resolveHomunculusObsPath it does NOT EnsureProjectDirs — a diagnostic must
-// not create directories. Returns "" when no project identity resolves
-// (non-git dir, no .bough.yaml), and doctor then reports not-yet-capturing.
-func resolveObserverObsPath() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	ident, err := homunculus.DetectIdentity(resolveMonorepoRoot(cwd))
-	if err != nil {
-		return ""
-	}
-	return homunculus.NewLayout().ObservationsFile(ident.ID)
 }
 
 // newHookHandleCmd wires `bough hook handle`, the v0.7.0 O-1.6
