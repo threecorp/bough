@@ -118,51 +118,90 @@ func TestStripCodeFence(t *testing.T) {
 	}
 }
 
-// TestExtractResultJSONKeepsAVerdictThatFollowsProse is the case a real
-// GATE 5 run produced on 2026-08-08: asked for a verdict, the judge
-// reasoned in prose first and put the ```json block after it. The fence
-// was not at position 0, so the whole reply reached json.Unmarshal, died
-// on the leading 'A', and a PASS verdict became DOUBT — the cluster was
-// dropped and the LLM call wasted. Verbatim shape, trimmed.
-func TestExtractResultJSONKeepsAVerdictThatFollowsProse(t *testing.T) {
-	reply := "All 7 members describe the same procedure — download the *published* " +
-		"release asset, extract it, verify the version.\n\n" +
-		"```json\n{\"verdict\":\"PASS\",\"confidence\":0.9,\"label\":\"release-asset-verification\"}\n```"
-	envelope := []byte(`{"type":"result","result":` + strconv.Quote(reply) + `}`)
+// resultEnvelope wraps a model reply the way the CLI does, so each case
+// below states only the reply it is about.
+func resultEnvelope(reply string) []byte {
+	return []byte(`{"type":"result","result":` + strconv.Quote(reply) + `}`)
+}
 
-	got, err := ExtractResultJSON(envelope)
+// extractVerdict runs the extractor and parses the bytes into the shared
+// verdictShape, failing with the raw bytes when either step breaks —
+// "which reply shapes survive" is the whole subject of these cases.
+func extractVerdict(t *testing.T, reply string) verdictShape {
+	t.Helper()
+	got, err := ExtractResultJSON(resultEnvelope(reply))
 	if err != nil {
 		t.Fatalf("ExtractResultJSON: %v", err)
 	}
-	var v struct {
-		Verdict string  `json:"verdict"`
-		Conf    float64 `json:"confidence"`
-	}
+	var v verdictShape
 	if err := json.Unmarshal(got, &v); err != nil {
-		t.Fatalf("the verdict must survive prose before the fence: %v\ngot: %s", err, got)
+		t.Fatalf("the verdict must survive this reply shape: %v\ngot: %s", err, got)
 	}
-	if v.Verdict != "PASS" || v.Conf != 0.9 {
-		t.Errorf("verdict = %+v, want PASS/0.9 (got bytes: %s)", v, got)
+	return v
+}
+
+// The shapes a GATE 5 judge actually produces. Every one of these was a
+// lost verdict at some point: the reply parsed as prose, json.Unmarshal
+// failed, and the cluster fell back to DOUBT with the LLM call wasted.
+// The first is verbatim from a real run on 2026-08-08.
+func TestExtractResultJSONSurvivesTheJudgesReplyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply string
+		want  verdictShape
+	}{
+		{
+			name: "prose then fence",
+			reply: "All 7 members describe the same procedure — download the *published* " +
+				"release asset, extract it, verify the version.\n\n" +
+				"```json\n{\"verdict\":\"PASS\",\"confidence\":0.9}\n```",
+			want: verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			name:  "prose then bare object",
+			reply: "Here is my verdict.\n\n{\"verdict\":\"FAIL\",\"confidence\":0.2}",
+			want:  verdictShape{Verdict: "FAIL", Confidence: 0.2},
+		},
+		{
+			name:  "bare object then trailing prose",
+			reply: "{\"verdict\":\"PASS\",\"confidence\":0.9}\n\nLet me know if you want more detail.",
+			want:  verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			name: "a quoted snippet block before the verdict block",
+			reply: "They all run\n\n```bash\nmake test\n```\n\nbefore commit.\n\n" +
+				"```json\n{\"verdict\":\"PASS\",\"confidence\":0.9}\n```",
+			want: verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			// Clean JSON that merely mentions a fence inside a string. The
+			// extractor must not read those backticks as a block opener.
+			name:  "fence inside a string value",
+			reply: `{"verdict":"PASS","confidence":0.9,"reason":"members all run ` + "```make test```" + ` first"}`,
+			want:  verdictShape{Verdict: "PASS", Confidence: 0.9, Reason: "members all run ```make test``` first"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractVerdict(t, tc.reply); got != tc.want {
+				t.Errorf("verdict = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
-// TestExtractResultJSONKeepsABareObjectAfterProse covers the same shape
-// without a fence: some replies just narrate and then emit the object.
-func TestExtractResultJSONKeepsABareObjectAfterProse(t *testing.T) {
-	reply := "Here is my verdict.\n\n{\"verdict\":\"FAIL\",\"confidence\":0.2}"
-	envelope := []byte(`{"type":"result","result":` + strconv.Quote(reply) + `}`)
-
-	got, err := ExtractResultJSON(envelope)
+// A payload that is a top-level array must come back whole. unquoteResult
+// documents that shape as reachable, and slicing brace-to-brace would hand
+// the caller `{...},{...}` with the brackets gone.
+func TestExtractResultJSONKeepsATopLevelArrayIntact(t *testing.T) {
+	got, err := ExtractResultJSON([]byte(`{"type":"result","result":[{"a":1},{"b":2}]}`))
 	if err != nil {
 		t.Fatalf("ExtractResultJSON: %v", err)
 	}
-	var v struct {
-		Verdict string `json:"verdict"`
+	var arr []map[string]int
+	if err := json.Unmarshal(got, &arr); err != nil {
+		t.Fatalf("an array payload must survive: %v\ngot: %s", err, got)
 	}
-	if err := json.Unmarshal(got, &v); err != nil {
-		t.Fatalf("a bare object after prose must survive: %v\ngot: %s", err, got)
-	}
-	if v.Verdict != "FAIL" {
-		t.Errorf("verdict = %q, want FAIL", v.Verdict)
+	if len(arr) != 2 || arr[0]["a"] != 1 || arr[1]["b"] != 2 {
+		t.Errorf("array = %v, want [{a:1} {b:2}] (got bytes: %s)", arr, got)
 	}
 }
