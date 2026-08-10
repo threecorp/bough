@@ -90,21 +90,90 @@ func unquoteResult(rawResult json.RawMessage) []byte {
 	return rawResult
 }
 
-// stripCodeFence removes a leading ```json (or ```) fence line and a
-// trailing ``` from a model reply, plus surrounding whitespace, so what
-// remains is the bare JSON payload.
+// stripCodeFence returns the JSON payload of a model reply, wherever in
+// the reply it sits.
+//
+// The fence is not always first. Asked for a verdict, the model may
+// reason aloud and THEN emit the block — measured 2026-08-08 on a real
+// GATE 5 run: the judge answered "All 7 members describe the same
+// procedure … \n\n```json\n{...}\n```", a valid PASS. An earlier version
+// only stripped a fence at position 0, so that reply reached
+// json.Unmarshal whole, failed on the leading 'A', and the cluster fell
+// back to DOUBT — a correct verdict discarded and an LLM call wasted.
+//
+// Every step below validates before it commits, because searching for a
+// fence by position alone cuts the other way: a reply that is already
+// clean JSON can carry ``` inside a string value ("members all run
+// ```make test``` first"), and a reply can hold several blocks. So a
+// payload that already parses is never touched, and a candidate block is
+// used only if it parses.
 func stripCodeFence(b []byte) []byte {
 	s := bytes.TrimSpace(b)
-	if !bytes.HasPrefix(s, []byte("```")) {
+	if json.Valid(s) {
 		return s
 	}
-	if nl := bytes.IndexByte(s, '\n'); nl >= 0 {
-		s = s[nl+1:] // drop the opening ```json line
-	} else {
-		s = bytes.TrimPrefix(s, []byte("```"))
+	if inner, ok := lastJSONFencedBlock(s); ok {
+		return inner
 	}
-	if i := bytes.LastIndex(s, []byte("```")); i >= 0 {
-		s = s[:i] // drop the closing fence
+	if inner, ok := widestJSONValue(s); ok {
+		return inner
 	}
-	return bytes.TrimSpace(s)
+	// Nothing parseable: hand back what arrived so the caller's unmarshal
+	// error still names it.
+	return s
+}
+
+// lastJSONFencedBlock returns the contents of the last ``` … ``` block
+// that parses as JSON. Last, not first: a judge that quotes a snippet
+// before answering leaves its verdict in the final block.
+func lastJSONFencedBlock(s []byte) ([]byte, bool) {
+	var marks []int
+	for off := 0; ; {
+		i := bytes.Index(s[off:], []byte("```"))
+		if i < 0 {
+			break
+		}
+		marks = append(marks, off+i)
+		off += i + 3
+	}
+	for i := len(marks) - 1; i > 0; i -= 2 {
+		inner := s[marks[i-1]+3 : marks[i]]
+		if nl := bytes.IndexByte(inner, '\n'); nl >= 0 {
+			inner = inner[nl+1:] // drop the ```json info-string line
+		}
+		if inner = bytes.TrimSpace(inner); json.Valid(inner) {
+			return inner, true
+		}
+	}
+	// An unterminated opening fence still brackets the payload on one side.
+	if len(marks) == 1 {
+		inner := s[marks[0]+3:]
+		if nl := bytes.IndexByte(inner, '\n'); nl >= 0 {
+			inner = inner[nl+1:]
+		}
+		if inner = bytes.TrimSpace(inner); json.Valid(inner) {
+			return inner, true
+		}
+	}
+	return nil, false
+}
+
+// widestJSONValue keeps the outermost bracketed value a fenceless reply
+// wraps in prose — on either side of it, and for an array as readily as
+// an object. Which bracket opens first decides the pair, so a `[` nested
+// inside an object cannot be mistaken for the payload.
+func widestJSONValue(s []byte) ([]byte, bool) {
+	obj, arr := bytes.IndexByte(s, '{'), bytes.IndexByte(s, '[')
+	open, close := byte('{'), byte('}')
+	if arr >= 0 && (obj < 0 || arr < obj) {
+		open, close = '[', ']'
+	}
+	start, end := bytes.IndexByte(s, open), bytes.LastIndexByte(s, close)
+	if start < 0 || end <= start {
+		return nil, false
+	}
+	if v := bytes.TrimSpace(s[start : end+1]); json.Valid(v) {
+		return v, true
+	}
+	return nil, false
 }

@@ -3,6 +3,7 @@ package claudecli
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 )
 
@@ -114,5 +115,93 @@ func TestStripCodeFence(t *testing.T) {
 		if got := string(stripCodeFence([]byte(in))); got != want {
 			t.Errorf("stripCodeFence(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// resultEnvelope wraps a model reply the way the CLI does, so each case
+// below states only the reply it is about.
+func resultEnvelope(reply string) []byte {
+	return []byte(`{"type":"result","result":` + strconv.Quote(reply) + `}`)
+}
+
+// extractVerdict runs the extractor and parses the bytes into the shared
+// verdictShape, failing with the raw bytes when either step breaks —
+// "which reply shapes survive" is the whole subject of these cases.
+func extractVerdict(t *testing.T, reply string) verdictShape {
+	t.Helper()
+	got, err := ExtractResultJSON(resultEnvelope(reply))
+	if err != nil {
+		t.Fatalf("ExtractResultJSON: %v", err)
+	}
+	var v verdictShape
+	if err := json.Unmarshal(got, &v); err != nil {
+		t.Fatalf("the verdict must survive this reply shape: %v\ngot: %s", err, got)
+	}
+	return v
+}
+
+// The shapes a GATE 5 judge actually produces. Every one of these was a
+// lost verdict at some point: the reply parsed as prose, json.Unmarshal
+// failed, and the cluster fell back to DOUBT with the LLM call wasted.
+// The first is verbatim from a real run on 2026-08-08.
+func TestExtractResultJSONSurvivesTheJudgesReplyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply string
+		want  verdictShape
+	}{
+		{
+			name: "prose then fence",
+			reply: "All 7 members describe the same procedure — download the *published* " +
+				"release asset, extract it, verify the version.\n\n" +
+				"```json\n{\"verdict\":\"PASS\",\"confidence\":0.9}\n```",
+			want: verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			name:  "prose then bare object",
+			reply: "Here is my verdict.\n\n{\"verdict\":\"FAIL\",\"confidence\":0.2}",
+			want:  verdictShape{Verdict: "FAIL", Confidence: 0.2},
+		},
+		{
+			name:  "bare object then trailing prose",
+			reply: "{\"verdict\":\"PASS\",\"confidence\":0.9}\n\nLet me know if you want more detail.",
+			want:  verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			name: "a quoted snippet block before the verdict block",
+			reply: "They all run\n\n```bash\nmake test\n```\n\nbefore commit.\n\n" +
+				"```json\n{\"verdict\":\"PASS\",\"confidence\":0.9}\n```",
+			want: verdictShape{Verdict: "PASS", Confidence: 0.9},
+		},
+		{
+			// Clean JSON that merely mentions a fence inside a string. The
+			// extractor must not read those backticks as a block opener.
+			name:  "fence inside a string value",
+			reply: `{"verdict":"PASS","confidence":0.9,"reason":"members all run ` + "```make test```" + ` first"}`,
+			want:  verdictShape{Verdict: "PASS", Confidence: 0.9, Reason: "members all run ```make test``` first"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractVerdict(t, tc.reply); got != tc.want {
+				t.Errorf("verdict = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A payload that is a top-level array must come back whole. unquoteResult
+// documents that shape as reachable, and slicing brace-to-brace would hand
+// the caller `{...},{...}` with the brackets gone.
+func TestExtractResultJSONKeepsATopLevelArrayIntact(t *testing.T) {
+	got, err := ExtractResultJSON([]byte(`{"type":"result","result":[{"a":1},{"b":2}]}`))
+	if err != nil {
+		t.Fatalf("ExtractResultJSON: %v", err)
+	}
+	var arr []map[string]int
+	if err := json.Unmarshal(got, &arr); err != nil {
+		t.Fatalf("an array payload must survive: %v\ngot: %s", err, got)
+	}
+	if len(arr) != 2 || arr[0]["a"] != 1 || arr[1]["b"] != 2 {
+		t.Errorf("array = %v, want [{a:1} {b:2}] (got bytes: %s)", arr, got)
 	}
 }
