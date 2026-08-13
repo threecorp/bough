@@ -1,12 +1,18 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
+	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/inject"
 )
 
 // injectFixture stands up the smallest thing runInjectContext will act
@@ -44,4 +50,72 @@ func injectFixture(t *testing.T, confidence string) string {
 		t.Fatal(err)
 	}
 	return repo
+}
+
+// TestInjectContext_NothingToSayIsCleanNoOp pins the hook contract: with
+// nothing to say, stdout stays byte-empty so the prompt is completely
+// unaffected. It lived beside the lessons tests and is not about lessons —
+// it is the only assertion that the UserPromptSubmit hook can stay silent.
+func TestInjectContext_NothingToSayIsCleanNoOp(t *testing.T) {
+	repo := injectFixture(t, "0.10") // below the confidence floor
+	var buf bytes.Buffer
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected a clean no-op, got:\n%s", buf.String())
+	}
+}
+
+// TestInjectContext_OffTopicPromptInjectsNothing pins the drop rule at the
+// CLI boundary: a prompt matching no instinct must produce an empty block,
+// not the corpus's alphabetical head.
+func TestInjectContext_OffTopicPromptInjectsNothing(t *testing.T) {
+	repo := injectFixture(t, "0.9")
+	var buf bytes.Buffer
+	opts := inject.Options{Prompt: "photosynthesis in alpine wildflowers"}
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, opts); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("off-topic prompt injected something:\n%s", buf.String())
+	}
+}
+
+// injectConfigOnly drops the broken-config path so the exclusion tests,
+// which are about which ids are suppressed, read as one expression.
+func injectConfigOnly(cmd *cobra.Command, root string) *config.Config {
+	cfg, _ := injectConfig(cmd, root)
+	return cfg
+}
+
+// A config file that exists but will not parse must SAY so in the block.
+// Degrading to defaults is right on the prompt path, but doing it silently
+// turns the operator's exclusion register and alias file off with no symptom
+// other than muted instincts quietly returning.
+func TestInjectContext_UnparseableConfigIsAnnounced(t *testing.T) {
+	repo := injectFixture(t, "0.9")
+	if err := os.WriteFile(filepath.Join(repo, ".bough.yaml"), []byte("schema_version: 2\nnope: {{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if !strings.Contains(buf.String(), "does not parse") {
+		t.Errorf("a broken config must be announced, got:\n%s", buf.String())
+	}
+}
+
+// ...and a project with no config at all is the ordinary unconfigured case,
+// which must stay a clean no-op.
+func TestInjectContext_MissingConfigIsSilent(t *testing.T) {
+	repo := injectFixture(t, "0.10")
+	var buf bytes.Buffer
+	if err := runInjectContext(&cobra.Command{}, &buf, repo, inject.Options{}); err != nil {
+		t.Fatalf("runInjectContext: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no config is not a problem to announce, got:\n%s", buf.String())
+	}
 }

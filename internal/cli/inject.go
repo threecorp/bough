@@ -65,7 +65,7 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// relative to the monorepo root, so the repo name itself — which
 	// matches a large share of the corpus and would drown short prompts
 	// — contributes nothing.
-	cfg := injectConfig(cmd, monoRoot)
+	cfg, brokenCfg := injectConfig(cmd, monoRoot)
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
 	}
@@ -166,9 +166,11 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// operator has silenced, has been routed. Counting it would leave the
 	// number stuck no matter what the operator did about individual notes.
 	backlog := arrivalBacklogNotice(project, assignments, opts.ExcludeIDs)
-	if notice == "" && backlog == "" && len(ids) == 0 {
+	broken := brokenConfigNotice(brokenCfg)
+	if notice == "" && broken == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
+	fmt.Fprint(out, broken)
 	fmt.Fprint(out, notice)
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
@@ -235,7 +237,17 @@ func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.Cl
 // missing or unreadable config is not an error: the hook fires on every
 // prompt, so it degrades to the conventions and defaults rather than
 // failing the turn. nil means "nothing configured".
-func injectConfig(cmd *cobra.Command, root string) *config.Config {
+// injectConfig loads the config and, when a file IS there but will not
+// parse, returns the path so the caller can say so. Degrading to defaults
+// is right for the prompt path — the hook must never cost a turn — but
+// doing it silently is not: the alias file and the manual exclusion
+// register live in this config, so a typo three keys away turns off
+// suppression and Japanese retrieval at once, with the only symptom being
+// instincts the operator had muted quietly coming back.
+//
+// broken is "" when there is no config to read, which is the ordinary
+// unconfigured case and not worth a word.
+func injectConfig(cmd *cobra.Command, root string) (cfg *config.Config, broken string) {
 	// The REAL command, so an operator's --config is honoured. Resolving
 	// against a throwaway &cobra.Command{} looks equivalent and is not: the
 	// flag is not registered on it, so the lookup always misses and the
@@ -243,11 +255,30 @@ func injectConfig(cmd *cobra.Command, root string) *config.Config {
 	if cmd == nil {
 		cmd = &cobra.Command{}
 	}
-	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
-	if err != nil {
-		return nil
+	path := resolveConfigPath(cmd, root)
+	cfg, err := loadConfigQuiet(path)
+	if err == nil {
+		return cfg, ""
 	}
-	return cfg
+	if _, statErr := os.Stat(path); statErr != nil {
+		return nil, "" // nothing there to be broken
+	}
+	return nil, path
+}
+
+// brokenConfigNotice is prepended for the same reason the quarantine
+// notice is: the hook's stderr goes nowhere an operator reads, so the
+// prompt is the one place a silent degradation is guaranteed to be seen.
+// It clears by itself as soon as the file parses again.
+func brokenConfigNotice(path string) string {
+	if path == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"[bough] %s does not parse — running on defaults, so the alias file and the "+
+			"manual exclusion register are NOT in effect. `bough config validate` prints the reason.\n\n",
+		path,
+	)
 }
 
 // projectRelativeFiles reduces transcript file paths to the part that

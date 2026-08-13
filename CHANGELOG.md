@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **BREAKING: the lessons / corrections-file injection is gone.** It was
+  prepended to every prompt with its own 3000-byte budget and no way to turn
+  it off — the only knob was which path to read, and an empty `paths` fell
+  back to the conventional set. `instinct.lessons` is no longer a key, and
+  because the loader decodes with `KnownFields(true)`, a `.bough.yaml` that
+  still sets it **fails to parse** until the key is deleted: `bough create`,
+  `list`, `status` and `config validate` all exit 1 with the offending line.
+  Delete the two lines and they work again. The corpus and its notices are
+  now the whole of what the prompt hook injects.
+
+### Fixed
+
+- **A config that exists but will not parse is announced instead of ignored.**
+  The prompt hook degrades to defaults on any config error — right, because it
+  must never cost a turn — but it did so silently, so a typo three keys away
+  switched off the alias file and the manual exclusion register with no symptom
+  beyond muted instincts quietly coming back. The block now says which file did
+  not parse and what is therefore inactive, and clears itself once it parses.
+  A project with no config at all stays silent, as before.
+
 ## v0.23.1
 
 Two paths that quietly discarded work: a GATE 5 verdict the judge put after its
