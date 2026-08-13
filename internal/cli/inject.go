@@ -28,7 +28,7 @@ import (
 // both places).
 func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts inject.Options) error {
 	// The hook's whole budget is 5s; selection gets opts.SelfLimit of it
-	// so the lessons block can still print if the corpus scan runs long.
+	// so the remaining blocks can still print if the corpus scan runs long.
 	// Checked between phases rather than mid-scan: the scan is the only
 	// unbounded step, and a check after it converts "the hook timed out
 	// and the prompt lost every block" into "the prompt lost the
@@ -135,25 +135,6 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	if !timedOut {
 		block, ids = inject.Build(project, global, opts)
 	}
-	// Human-authored corrections outrank minted instincts and are not
-	// scored, so they are prepended rather than merged into the ranking
-	// — and they are emitted even when nothing cleared the confidence
-	// floor, since ground truth does not depend on the corpus having
-	// anything to say.
-	// Both the config lookup and the file lookup anchor on the SAME
-	// monorepo root the identity resolved from. Passing the raw `root`
-	// parameter here would read a different (possibly empty) directory,
-	// so an operator's configured path would be silently ignored when the
-	// hook fires from a sub-repo.
-	// Zero = the lessons block's own default budget. It is deliberately
-	// NOT derived from opts.MaxBytes: the two blocks have separate
-	// allowances that sum under the total, so tuning the instinct block
-	// must not silently shrink the operator's corrections.
-	var lessonPaths []string
-	if cfg != nil {
-		lessonPaths = cfg.Instinct.Lessons.Paths
-	}
-	lessons := inject.LessonsBlock(monoRoot, lessonPaths, 0)
 	// The selection is recorded even when it chose NOTHING. A prompt that
 	// correctly selected zero instincts is a data point — the share of
 	// empty selections is a selector-health signal, and skipping the
@@ -185,11 +166,10 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// operator has silenced, has been routed. Counting it would leave the
 	// number stuck no matter what the operator did about individual notes.
 	backlog := arrivalBacklogNotice(project, assignments, opts.ExcludeIDs)
-	if notice == "" && lessons == "" && backlog == "" && len(ids) == 0 {
+	if notice == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
 	fmt.Fprint(out, notice)
-	fmt.Fprint(out, lessons)
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
@@ -251,7 +231,7 @@ func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.Cl
 }
 
 // injectConfig loads .bough.yaml for the injector's optional inputs
-// (lessons paths, the manual exclusion register, the alias file). A
+// (the manual exclusion register, the alias file). A
 // missing or unreadable config is not an error: the hook fires on every
 // prompt, so it degrades to the conventions and defaults rather than
 // failing the turn. nil means "nothing configured".
@@ -362,7 +342,7 @@ pure filesystem.`,
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000; the lessons block has its own 3000)")
+	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000)")
 	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to render (default 12)")
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")
