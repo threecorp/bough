@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +30,7 @@ import (
 // both places).
 func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts inject.Options) error {
 	// The hook's whole budget is 5s; selection gets opts.SelfLimit of it
-	// so the lessons block can still print if the corpus scan runs long.
+	// so the remaining blocks can still print if the corpus scan runs long.
 	// Checked between phases rather than mid-scan: the scan is the only
 	// unbounded step, and a check after it converts "the hook timed out
 	// and the prompt lost every block" into "the prompt lost the
@@ -65,7 +67,7 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// relative to the monorepo root, so the repo name itself — which
 	// matches a large share of the corpus and would drown short prompts
 	// — contributes nothing.
-	cfg := injectConfig(cmd, monoRoot)
+	cfg, cfgFailure := injectConfig(cmd, monoRoot)
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
 	}
@@ -135,25 +137,6 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	if !timedOut {
 		block, ids = inject.Build(project, global, opts)
 	}
-	// Human-authored corrections outrank minted instincts and are not
-	// scored, so they are prepended rather than merged into the ranking
-	// — and they are emitted even when nothing cleared the confidence
-	// floor, since ground truth does not depend on the corpus having
-	// anything to say.
-	// Both the config lookup and the file lookup anchor on the SAME
-	// monorepo root the identity resolved from. Passing the raw `root`
-	// parameter here would read a different (possibly empty) directory,
-	// so an operator's configured path would be silently ignored when the
-	// hook fires from a sub-repo.
-	// Zero = the lessons block's own default budget. It is deliberately
-	// NOT derived from opts.MaxBytes: the two blocks have separate
-	// allowances that sum under the total, so tuning the instinct block
-	// must not silently shrink the operator's corrections.
-	var lessonPaths []string
-	if cfg != nil {
-		lessonPaths = cfg.Instinct.Lessons.Paths
-	}
-	lessons := inject.LessonsBlock(monoRoot, lessonPaths, 0)
 	// The selection is recorded even when it chose NOTHING. A prompt that
 	// correctly selected zero instincts is a data point — the share of
 	// empty selections is a selector-health signal, and skipping the
@@ -185,11 +168,12 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// operator has silenced, has been routed. Counting it would leave the
 	// number stuck no matter what the operator did about individual notes.
 	backlog := arrivalBacklogNotice(project, assignments, opts.ExcludeIDs)
-	if notice == "" && lessons == "" && backlog == "" && len(ids) == 0 {
+	broken := brokenConfigNotice(cfgFailure)
+	if notice == "" && broken == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
+	fmt.Fprint(out, broken)
 	fmt.Fprint(out, notice)
-	fmt.Fprint(out, lessons)
 	if len(ids) > 0 {
 		fmt.Fprint(out, block)
 	}
@@ -250,12 +234,19 @@ func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.Cl
 		n)
 }
 
-// injectConfig loads .bough.yaml for the injector's optional inputs
-// (lessons paths, the manual exclusion register, the alias file). A
-// missing or unreadable config is not an error: the hook fires on every
-// prompt, so it degrades to the conventions and defaults rather than
-// failing the turn. nil means "nothing configured".
-func injectConfig(cmd *cobra.Command, root string) *config.Config {
+// injectConfig loads the config for the injector's optional inputs and,
+// when the config cannot be used, reports why so the caller can say so.
+// Degrading to defaults is right for the prompt path — the hook must never
+// cost a turn — but doing it silently is not: the same file drives the
+// quality gates and the observer autostart on this very hook, and both of
+// those return silently on the identical error.
+//
+// The two cases are NOT the same. A project with no config is the ordinary
+// unconfigured state and gets no word. A config the operator NAMED, or one
+// that is there and unusable, is a fault: `failure` describes it. The
+// distinction is fs.ErrNotExist on a path nobody asked for — every other
+// error, and every explicitly-named path, is worth saying out loud.
+func injectConfig(cmd *cobra.Command, root string) (cfg *config.Config, failure string) {
 	// The REAL command, so an operator's --config is honoured. Resolving
 	// against a throwaway &cobra.Command{} looks equivalent and is not: the
 	// flag is not registered on it, so the lookup always misses and the
@@ -263,11 +254,48 @@ func injectConfig(cmd *cobra.Command, root string) *config.Config {
 	if cmd == nil {
 		cmd = &cobra.Command{}
 	}
-	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
-	if err != nil {
-		return nil
+	// $BOUGH_CONFIG wins, exactly as it does for the quality-gate and
+	// evolve-claudemd dispatchers on this same hook. Without it this
+	// function would name — and judge — a file bough is not reading.
+	path := resolveConfigPath(cmd, root)
+	named := false
+	if p, _ := cmd.Flags().GetString("config"); p != "" {
+		named = true
 	}
-	return cfg
+	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
+		path, named = v, true
+	}
+	cfg, err := loadConfigQuiet(path)
+	if err == nil {
+		return cfg, ""
+	}
+	// Absent and nobody asked for it: nothing is wrong.
+	if errors.Is(err, fs.ErrNotExist) && !named {
+		return nil, ""
+	}
+	return nil, fmt.Sprintf("%s: %v", path, err)
+}
+
+// brokenConfigNotice is prepended for the same reason the quarantine
+// notice is: the hook's stderr goes nowhere an operator reads, so the
+// prompt is the one place a silent degradation is guaranteed to be seen.
+// It clears by itself as soon as the config loads.
+//
+// It quotes the loader's own error rather than asserting a cause. Load
+// fails on a missing file, an unreadable one and a schema violation as
+// readily as on bad YAML, and naming the wrong one sends the operator
+// hunting for a syntax error in a file that has none.
+func brokenConfigNotice(failure string) string {
+	if failure == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"[bough] config not loaded — %s\n"+
+			"        Running on defaults for this turn: the alias file, the manual exclusion\n"+
+			"        register, the configured quality gates and the observer autostart are ALL\n"+
+			"        inactive until it loads. `bough config validate` prints the same reason.\n\n",
+		failure,
+	)
 }
 
 // projectRelativeFiles reduces transcript file paths to the part that
@@ -362,7 +390,7 @@ pure filesystem.`,
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000; the lessons block has its own 3000)")
+	cmd.Flags().IntVar(&maxBytes, "max-bytes", 0, "byte cap on the instinct block (default 5000)")
 	cmd.Flags().IntVar(&maxN, "max-instincts", 0, "max instincts to render (default 12)")
 	cmd.Flags().Float64Var(&minConf, "min-confidence", 0, "drop instincts below this confidence (default 0.50)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "rank against this prompt (the hook passes the real one; empty falls back to confidence order)")

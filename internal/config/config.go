@@ -274,7 +274,6 @@ type InstinctConfig struct {
 	Observer                   InstinctObserver       `yaml:"observer"`
 	PluginSecurity             InstinctPluginSecurity `yaml:"plugin_security"`
 	Gate                       InstinctGate           `yaml:"gate"`
-	Lessons                    InstinctLessons        `yaml:"lessons"`
 	// ExcludeSkillCovered asks the injector to stop pushing instincts an
 	// evolved skill already delivers. It is a REQUEST, not a switch: the
 	// readiness gate (evolve.ExclusionReadiness) decides whether it takes
@@ -306,19 +305,6 @@ type InstinctSelect struct {
 	// this a Japanese prompt retrieves only what it happens to name in
 	// English. Keys starting with "_" are treated as comments.
 	AliasPath string `yaml:"alias_path"`
-}
-
-// InstinctLessons points at the operator's hand-written corrections
-// file. It is injected ABOVE the minted instincts and is never subject
-// to the confidence floor: a minted instinct is an LLM's inference from
-// tool traces, while a lessons file is a person recording what went
-// wrong — ground truth, with no score to rank it against.
-type InstinctLessons struct {
-	// Paths are candidate locations relative to the monorepo root; the
-	// first that exists wins. Empty falls back to the conventional set
-	// (inject.DefaultLessonsPaths), because in most repos that have such
-	// a file it predates bough — bough should find it, not demand it move.
-	Paths []string `yaml:"paths"`
 }
 
 // InstinctGate configures the deterministic policy gate that screens

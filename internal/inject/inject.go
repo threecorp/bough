@@ -29,15 +29,16 @@ import (
 // is bounded to balance "useful context" against "cost per prompt".
 // ~9.5 KB ≈ a few thousand tokens.
 //
-// It is not enforced by a truncation pass: the two budgets below sum
-// under it BY CONSTRUCTION, and a test pins that. A ceiling maintained
-// by arithmetic that no one checks is a ceiling that drifts.
+// It is not enforced by a truncation pass: DefaultBlockBytes sits under
+// it BY CONSTRUCTION, leaving room for the notices printed alongside the
+// block, and a test pins that. A ceiling maintained by arithmetic that no
+// one checks is a ceiling that drifts.
 const DefaultTotalBytes = 9500
 
-// DefaultBlockBytes is the instinct block's share of the total. The
-// remainder is the operator's lessons file (DefaultLessonsBytes), which
-// gets its own budget rather than competing for one, so a long lessons
-// file cannot starve the minted block or the reverse.
+// DefaultBlockBytes is the instinct block's share of the total. It is
+// kept below DefaultTotalBytes rather than equal to it so the quarantine
+// notice and the arrival backlog, which are emitted alongside the block,
+// still fit under the ceiling.
 const DefaultBlockBytes = 5000
 
 // DefaultMaxInstincts bounds how many instincts are RENDERED. It is a
