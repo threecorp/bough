@@ -10,7 +10,8 @@
   back to the conventional set. `instinct.lessons` is no longer a key, and
   because the loader decodes with `KnownFields(true)`, a `.bough.yaml` that
   still sets it **fails to parse** until the key is deleted: `bough create`,
-  `list`, `status` and `config validate` all exit 1 with the offending line.
+  `remove`, `list`, `status`, `verify`, `backfill` and `config validate` all exit 1
+  with the offending line — `remove` included, which is the one needed to back out.
   Delete the two lines and they work again. The corpus and its notices are
   now the whole of what the prompt hook injects.
 

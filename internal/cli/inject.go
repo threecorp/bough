@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +67,7 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// relative to the monorepo root, so the repo name itself — which
 	// matches a large share of the corpus and would drown short prompts
 	// — contributes nothing.
-	cfg, brokenCfg := injectConfig(cmd, monoRoot)
+	cfg, cfgFailure := injectConfig(cmd, monoRoot)
 	if len(opts.ContextTokens) == 0 {
 		opts.ContextTokens = retrieve.ContextTokens(monoRoot, cwd)
 	}
@@ -166,7 +168,7 @@ func runInjectContext(cmd *cobra.Command, out io.Writer, root string, opts injec
 	// operator has silenced, has been routed. Counting it would leave the
 	// number stuck no matter what the operator did about individual notes.
 	backlog := arrivalBacklogNotice(project, assignments, opts.ExcludeIDs)
-	broken := brokenConfigNotice(brokenCfg)
+	broken := brokenConfigNotice(cfgFailure)
 	if notice == "" && broken == "" && backlog == "" && len(ids) == 0 {
 		return nil // nothing to say → clean no-op
 	}
@@ -232,22 +234,19 @@ func arrivalBacklogNotice(project []*homunculus.Instinct, assignments *evolve.Cl
 		n)
 }
 
-// injectConfig loads .bough.yaml for the injector's optional inputs
-// (the manual exclusion register, the alias file). A
-// missing or unreadable config is not an error: the hook fires on every
-// prompt, so it degrades to the conventions and defaults rather than
-// failing the turn. nil means "nothing configured".
-// injectConfig loads the config and, when a file IS there but will not
-// parse, returns the path so the caller can say so. Degrading to defaults
-// is right for the prompt path — the hook must never cost a turn — but
-// doing it silently is not: the alias file and the manual exclusion
-// register live in this config, so a typo three keys away turns off
-// suppression and Japanese retrieval at once, with the only symptom being
-// instincts the operator had muted quietly coming back.
+// injectConfig loads the config for the injector's optional inputs and,
+// when the config cannot be used, reports why so the caller can say so.
+// Degrading to defaults is right for the prompt path — the hook must never
+// cost a turn — but doing it silently is not: the same file drives the
+// quality gates and the observer autostart on this very hook, and both of
+// those return silently on the identical error.
 //
-// broken is "" when there is no config to read, which is the ordinary
-// unconfigured case and not worth a word.
-func injectConfig(cmd *cobra.Command, root string) (cfg *config.Config, broken string) {
+// The two cases are NOT the same. A project with no config is the ordinary
+// unconfigured state and gets no word. A config the operator NAMED, or one
+// that is there and unusable, is a fault: `failure` describes it. The
+// distinction is fs.ErrNotExist on a path nobody asked for — every other
+// error, and every explicitly-named path, is worth saying out loud.
+func injectConfig(cmd *cobra.Command, root string) (cfg *config.Config, failure string) {
 	// The REAL command, so an operator's --config is honoured. Resolving
 	// against a throwaway &cobra.Command{} looks equivalent and is not: the
 	// flag is not registered on it, so the lookup always misses and the
@@ -255,29 +254,47 @@ func injectConfig(cmd *cobra.Command, root string) (cfg *config.Config, broken s
 	if cmd == nil {
 		cmd = &cobra.Command{}
 	}
+	// $BOUGH_CONFIG wins, exactly as it does for the quality-gate and
+	// evolve-claudemd dispatchers on this same hook. Without it this
+	// function would name — and judge — a file bough is not reading.
 	path := resolveConfigPath(cmd, root)
+	named := false
+	if p, _ := cmd.Flags().GetString("config"); p != "" {
+		named = true
+	}
+	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
+		path, named = v, true
+	}
 	cfg, err := loadConfigQuiet(path)
 	if err == nil {
 		return cfg, ""
 	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		return nil, "" // nothing there to be broken
+	// Absent and nobody asked for it: nothing is wrong.
+	if errors.Is(err, fs.ErrNotExist) && !named {
+		return nil, ""
 	}
-	return nil, path
+	return nil, fmt.Sprintf("%s: %v", path, err)
 }
 
 // brokenConfigNotice is prepended for the same reason the quarantine
 // notice is: the hook's stderr goes nowhere an operator reads, so the
 // prompt is the one place a silent degradation is guaranteed to be seen.
-// It clears by itself as soon as the file parses again.
-func brokenConfigNotice(path string) string {
-	if path == "" {
+// It clears by itself as soon as the config loads.
+//
+// It quotes the loader's own error rather than asserting a cause. Load
+// fails on a missing file, an unreadable one and a schema violation as
+// readily as on bad YAML, and naming the wrong one sends the operator
+// hunting for a syntax error in a file that has none.
+func brokenConfigNotice(failure string) string {
+	if failure == "" {
 		return ""
 	}
 	return fmt.Sprintf(
-		"[bough] %s does not parse — running on defaults, so the alias file and the "+
-			"manual exclusion register are NOT in effect. `bough config validate` prints the reason.\n\n",
-		path,
+		"[bough] config not loaded — %s\n"+
+			"        Running on defaults for this turn: the alias file, the manual exclusion\n"+
+			"        register, the configured quality gates and the observer autostart are ALL\n"+
+			"        inactive until it loads. `bough config validate` prints the same reason.\n\n",
+		failure,
 	)
 }
 
