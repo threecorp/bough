@@ -103,4 +103,54 @@ if git -C "$MONO" worktree list --porcelain | grep -qF "$WT"; then
 fi
 ok "removed, no stale worktree record"
 
+# A shipped binary that cannot LAUNCH its engine plugins is useless, and
+# nothing above notices: every check so far runs the host binary alone.
+# The plugins ship in the same archive and are reached only by exec, so an
+# archive missing one, an unrunnable one (wrong arch, stripped signature,
+# an in-place overwrite that invalidated the kernel's cached signature),
+# or one whose handshake has drifted all look identical to a green run.
+# This exercises the thing an operator's first `--worktree` does.
+echo "== engine plugins: present, and they actually run =="
+plugin_dir="$(cd "$(dirname "$BOUGH")" && pwd -P)"
+missing=""
+for kind in mysql postgres redis elasticsearch compose; do
+  bin="$plugin_dir/bough-plugin-$kind"
+  [ -x "$bin" ] || { missing="$missing $kind"; continue; }
+  # A plugin refuses to be run directly and exits non-zero saying so. That
+  # refusal IS the pass: it proves the process started. What must never
+  # happen is a signal — 137 (SIGKILL) is how macOS reports a binary whose
+  # code signature no longer matches its bytes, and it is silent otherwise.
+  # errexit off across the call: a plugin's refusal to run directly is a
+  # NON-ZERO exit, which is exactly the outcome being measured. Letting
+  # set -e act on it would abort the smoke on the healthy path.
+  set +e
+  out="$("$bin" </dev/null 2>&1)"
+  rc=$?
+  set -e
+  case "$rc" in
+    0|1) ;;
+    *)   fail "bough-plugin-$kind did not start (exit $rc): ${out:-<no output>}" ;;
+  esac
+  printf '%s' "$out" | grep -qi 'plugin' \
+    || fail "bough-plugin-$kind started but did not identify itself: ${out:-<no output>}"
+done
+[ -z "$missing" ] || fail "archive is missing engine plugin(s):$missing"
+ok "5 engine plugins present and startable"
+
+# The host discovers plugins over the go-plugin handshake, which is a
+# different code path from exec'ing them: a version-skewed protocol starts
+# fine and fails only here. This is the call `bough create` makes first.
+echo "== plugin discovery over the handshake =="
+set +e
+discovered="$(cd "$MONO" && PATH="$plugin_dir:$PATH" "$BOUGH" plugins list 2>&1)"
+drc=$?
+set -e
+[ "$drc" -eq 0 ] || fail "bough plugins list exited $drc: $discovered"
+for kind in mysql postgres redis elasticsearch compose; do
+  printf '%s' "$discovered" | grep -q "^$kind\b" \
+    || fail "handshake did not discover $kind:
+$discovered"
+done
+ok "5 engine plugins discovered over the handshake"
+
 echo "SMOKE PASS"

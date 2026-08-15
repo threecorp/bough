@@ -67,11 +67,21 @@ jobs:
       # release once shipped with that contract broken while every test
       # was green. This job drives the WorktreeCreate/Remove hooks through
       # the built binary and asserts the host's own acceptance criteria.
-      - name: Build bough
-        run: go build -o /tmp/bough ./cmd/bough
+      # The engine plugins are built beside bough because the smoke drives
+      # plugin discovery, which resolves them from the binary's own
+      # directory. Building only bough would leave that half untested —
+      # which is how a release once shipped with every plugin unable to
+      # start.
+      - name: Build bough and its engine plugins
+        run: |
+          mkdir -p /tmp/boughbin
+          go build -o /tmp/boughbin/bough ./cmd/bough
+          for kind in mysql postgres redis elasticsearch compose; do
+            go build -o "/tmp/boughbin/bough-plugin-$kind" "./cmd/bough-plugin-$kind"
+          done
 
       - name: Entry-point smoke
-        run: ./scripts/entrypoint-smoke.sh /tmp/bough
+        run: ./scripts/entrypoint-smoke.sh /tmp/boughbin/bough
 
   conformance:
     name: Plugin conformance (real Docker)

@@ -198,6 +198,9 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// deploys into (see resolveIdentityRoot / #60) — so the two commands agree.
 	linkWorktreeClaudeMd(stderr, monorepoRoot, worktreeRoot)
 	linkWorktreeArtifacts(stderr, identityRoot, worktreeRoot)
+	// The host refuses to open a worktree it has no trust record for, and a
+	// path bough just created can never have one — see worktree_trust.go.
+	trustWorktree(stderr, worktreeRoot)
 
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can

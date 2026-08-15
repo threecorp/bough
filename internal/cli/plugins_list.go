@@ -42,10 +42,11 @@ func newPluginsListCmd() *cobra.Command {
 	return cmd
 }
 
-func runPluginsList(ctx context.Context, stdout interface{ Write([]byte) (int, error) }) error {
-	// Brute-force scan of PATH for `bough-plugin-*` binaries. We don't
-	// invoke them here — discovery alone is plenty for `bough plugins
-	// list`; bringing each plugin up via gRPC would be heavyweight.
+// discoverPluginBinaries scans PATH for `bough-plugin-*` and returns
+// kind → binary path, first match per kind winning as PATH order does.
+// It resolves the same way pluginhost.Discover does, so what it reports
+// is what an engine would actually launch.
+func discoverPluginBinaries() map[string]string {
 	dirs := strings.Split(pathEnv(), string(filepath.ListSeparator))
 	seen := map[string]string{}
 	for _, dir := range dirs {
@@ -60,11 +61,24 @@ func runPluginsList(ctx context.Context, stdout interface{ Write([]byte) (int, e
 			}
 		}
 	}
+	return seen
+}
+
+func sortedKinds(seen map[string]string) []string {
 	kinds := make([]string, 0, len(seen))
 	for k := range seen {
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
+	return kinds
+}
+
+func runPluginsList(ctx context.Context, stdout interface{ Write([]byte) (int, error) }) error {
+	// Discovery only: `bough plugins list` answers "what is installed",
+	// not "does it run". `bough doctor` answers the second one, because
+	// launching every plugin is too heavyweight for a listing.
+	seen := discoverPluginBinaries()
+	kinds := sortedKinds(seen)
 	if len(kinds) == 0 {
 		fmt.Fprintln(stdout, "(no bough-plugin-* binaries on PATH — install bough-plugin-mysql etc.)")
 		return nil

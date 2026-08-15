@@ -223,6 +223,7 @@ func runDoctor(c *cobra.Command) error {
 	w := c.OutOrStdout()
 	report.Render(w)
 	renderWorktreeIsolation(commandCtx(c), w)
+	renderEnginePlugins(commandCtx(c), w)
 	renderContinuousLearningPosture(w)
 	return nil
 }
