@@ -30,6 +30,15 @@ MONO="$WORK/mono"
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok — $*"; }
 
+# create records the worktree as a trusted workspace in the host's state
+# file, so the smoke must be pointed at a throwaway one — otherwise a
+# local run writes into the operator's real ~/.claude.json. Seeded with a
+# key bough does not model, which the trust assertion below re-reads.
+export CLAUDE_CONFIG_DIR="$WORK/claude-home"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+printf '{"mcpServers":{"smoke":{"command":"true"}},"projects":{}}\n' \
+  > "$CLAUDE_CONFIG_DIR/.claude.json"
+
 echo "== binary =="
 echo "  path   : $BOUGH"
 echo "  version: $("$BOUGH" --version)"
@@ -86,6 +95,26 @@ TOP="$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)"
 [ "$(cd "$TOP" && pwd -P)" = "$(cd "$WT" && pwd -P)" ] \
   || fail "git resolves $WT to $TOP — a host refuses this (work-tree-elsewhere)"
 ok "resolves to itself, git dir $(git -C "$WT" rev-parse --absolute-git-dir)"
+
+echo "== the host's other acceptance predicate: workspace trust =="
+# A host refuses to open a path it has no trust record for, and a path
+# bough just created can never have one. Asserted through the state file
+# the host reads, not through bough's own report of what it wrote.
+state="$CLAUDE_CONFIG_DIR/.claude.json"
+python3 - "$state" "$WT" <<'PY' || fail "workspace trust was not recorded (see $state)"
+import json, sys
+state, wt = sys.argv[1], sys.argv[2]
+doc = json.load(open(state))
+entry = doc.get("projects", {}).get(wt)
+if not entry or entry.get("hasTrustDialogAccepted") is not True:
+    print(f"no trust record for {wt}: {doc.get('projects')}", file=sys.stderr)
+    sys.exit(1)
+# The file is the operator's, not bough's: anything else in it must survive.
+if doc.get("mcpServers", {}).get("smoke", {}).get("command") != "true":
+    print(f"an unrelated key was lost: {doc.get('mcpServers')}", file=sys.stderr)
+    sys.exit(1)
+PY
+ok "trusted workspace recorded, unrelated keys intact"
 
 echo "== the environment it was supposed to provision =="
 for r in alpha beta; do
