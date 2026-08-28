@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.25.0
+
+### Fixed
+
+- **`claude --worktree` no longer fails with "Workspace trust not yet accepted".**
+  The host refuses to open a worktree it has no trust record for, and a path
+  bough just created can never have one — the host's own hint ("run `claude`
+  once in this directory") is the very thing the guard blocks. `bough create`
+  now records the worktree under `projects.<path>.hasTrustDialogAccepted` in
+  the host's state file, touching only that key when it is absent and
+  round-tripping every other key verbatim. Re-creates are byte-identical
+  no-ops, and a missing or unparseable state file is left exactly as found.
+
+### Added
+
+- **The engine plugins are now gated on actually starting, in three places.**
+  A release once shipped with every plugin unable to start while all gates
+  were green, because nothing in CI or after a release launches one
+  (`--version` and `--help` do not). The entry-point smoke now starts each
+  installed plugin and drives discovery over the handshake; the CI and
+  post-release jobs build/extract the plugins beside `bough` so that check
+  has a subject; and `bough doctor` grew an "Engine plugins" section that
+  reports how many of the installed plugins start — naming the ones the OS
+  refuses to run, which is what a broken install looks like on the machine
+  where it happens.
+
 ## v0.24.0
 
 ### Removed
