@@ -62,8 +62,11 @@ jobs:
           mkdir -p /tmp/rel
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern '*linux_amd64.tar.gz' --dir /tmp/rel
-          tar xzf /tmp/rel/*linux_amd64.tar.gz -C /tmp/rel bough
-          chmod +x /tmp/rel/bough
+          tar xzf /tmp/rel/*linux_amd64.tar.gz -C /tmp/rel \
+            bough \
+            bough-plugin-mysql bough-plugin-postgres bough-plugin-redis \
+            bough-plugin-elasticsearch bough-plugin-compose
+          chmod +x /tmp/rel/bough /tmp/rel/bough-plugin-*
 
       - name: Entry-point smoke against the released binary
         env:

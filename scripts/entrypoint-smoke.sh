@@ -30,6 +30,15 @@ MONO="$WORK/mono"
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok — $*"; }
 
+# create records the worktree as a trusted workspace in the host's state
+# file, so the smoke must be pointed at a throwaway one — otherwise a
+# local run writes into the operator's real ~/.claude.json. Seeded with a
+# key bough does not model, which the trust assertion below re-reads.
+export CLAUDE_CONFIG_DIR="$WORK/claude-home"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+printf '{"mcpServers":{"smoke":{"command":"true"}},"projects":{}}\n' \
+  > "$CLAUDE_CONFIG_DIR/.claude.json"
+
 echo "== binary =="
 echo "  path   : $BOUGH"
 echo "  version: $("$BOUGH" --version)"
@@ -87,6 +96,26 @@ TOP="$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)"
   || fail "git resolves $WT to $TOP — a host refuses this (work-tree-elsewhere)"
 ok "resolves to itself, git dir $(git -C "$WT" rev-parse --absolute-git-dir)"
 
+echo "== the host's other acceptance predicate: workspace trust =="
+# A host refuses to open a path it has no trust record for, and a path
+# bough just created can never have one. Asserted through the state file
+# the host reads, not through bough's own report of what it wrote.
+state="$CLAUDE_CONFIG_DIR/.claude.json"
+python3 - "$state" "$WT" <<'PY' || fail "workspace trust was not recorded (see $state)"
+import json, sys
+state, wt = sys.argv[1], sys.argv[2]
+doc = json.load(open(state))
+entry = doc.get("projects", {}).get(wt)
+if not entry or entry.get("hasTrustDialogAccepted") is not True:
+    print(f"no trust record for {wt}: {doc.get('projects')}", file=sys.stderr)
+    sys.exit(1)
+# The file is the operator's, not bough's: anything else in it must survive.
+if doc.get("mcpServers", {}).get("smoke", {}).get("command") != "true":
+    print(f"an unrelated key was lost: {doc.get('mcpServers')}", file=sys.stderr)
+    sys.exit(1)
+PY
+ok "trusted workspace recorded, unrelated keys intact"
+
 echo "== the environment it was supposed to provision =="
 for r in alpha beta; do
   [ -e "$WT/$r/.git" ] || fail "sub-repo worktree missing: $WT/$r"
@@ -102,5 +131,55 @@ if git -C "$MONO" worktree list --porcelain | grep -qF "$WT"; then
   fail "the monorepo still records the removed container in git worktree list"
 fi
 ok "removed, no stale worktree record"
+
+# A shipped binary that cannot LAUNCH its engine plugins is useless, and
+# nothing above notices: every check so far runs the host binary alone.
+# The plugins ship in the same archive and are reached only by exec, so an
+# archive missing one, an unrunnable one (wrong arch, stripped signature,
+# an in-place overwrite that invalidated the kernel's cached signature),
+# or one whose handshake has drifted all look identical to a green run.
+# This exercises the thing an operator's first `--worktree` does.
+echo "== engine plugins: present, and they actually run =="
+plugin_dir="$(cd "$(dirname "$BOUGH")" && pwd -P)"
+missing=""
+for kind in mysql postgres redis elasticsearch compose; do
+  bin="$plugin_dir/bough-plugin-$kind"
+  [ -x "$bin" ] || { missing="$missing $kind"; continue; }
+  # A plugin refuses to be run directly and exits non-zero saying so. That
+  # refusal IS the pass: it proves the process started. What must never
+  # happen is a signal — 137 (SIGKILL) is how macOS reports a binary whose
+  # code signature no longer matches its bytes, and it is silent otherwise.
+  # errexit off across the call: a plugin's refusal to run directly is a
+  # NON-ZERO exit, which is exactly the outcome being measured. Letting
+  # set -e act on it would abort the smoke on the healthy path.
+  set +e
+  out="$("$bin" </dev/null 2>&1)"
+  rc=$?
+  set -e
+  case "$rc" in
+    0|1) ;;
+    *)   fail "bough-plugin-$kind did not start (exit $rc): ${out:-<no output>}" ;;
+  esac
+  printf '%s' "$out" | grep -qi 'plugin' \
+    || fail "bough-plugin-$kind started but did not identify itself: ${out:-<no output>}"
+done
+[ -z "$missing" ] || fail "archive is missing engine plugin(s):$missing"
+ok "5 engine plugins present and startable"
+
+# The host discovers plugins over the go-plugin handshake, which is a
+# different code path from exec'ing them: a version-skewed protocol starts
+# fine and fails only here. This is the call `bough create` makes first.
+echo "== plugin discovery over the handshake =="
+set +e
+discovered="$(cd "$MONO" && PATH="$plugin_dir:$PATH" "$BOUGH" plugins list 2>&1)"
+drc=$?
+set -e
+[ "$drc" -eq 0 ] || fail "bough plugins list exited $drc: $discovered"
+for kind in mysql postgres redis elasticsearch compose; do
+  printf '%s' "$discovered" | grep -q "^$kind\b" \
+    || fail "handshake did not discover $kind:
+$discovered"
+done
+ok "5 engine plugins discovered over the handshake"
 
 echo "SMOKE PASS"
