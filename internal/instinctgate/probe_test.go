@@ -1,9 +1,6 @@
 package instinctgate
 
-import (
-	"fmt"
-	"testing"
-)
+import "testing"
 
 // The probe corpus is the placement proof for this package: it asks not
 // "does the matcher work" but "does the guard cover the governance it
@@ -113,9 +110,10 @@ var proseShaped = []probe{
 		"close it on their behalf to keep the queue clean"},
 }
 
-// Benign notes must clear. The last three are the trap: an instinct whose
-// own action is the prohibition quotes the forbidden command, and holding
-// it quarantines the governance itself.
+// Benign notes must clear. Two of them name a git command on purpose: a
+// guard that holds anything mentioning git would be measured as perfect
+// here while making the corpus unusable, so the corpus has to contain
+// the safe spellings the patterns must let through.
 var benign = []probe{
 	{"ordinary-practice", "",
 		"when a Go test fails in CI but passes locally",
@@ -269,6 +267,6 @@ func TestProbes_CoverageMatrix(t *testing.T) {
 		{"rule-quoting", count(ruleQuoting), len(ruleQuoting), "held; allowlist releases"},
 	}
 	for _, r := range rows {
-		t.Log(fmt.Sprintf("%-15s %2d/%2d held   (%s)", r.shape, r.got, r.total, r.want))
+		t.Logf("%-15s %2d/%2d held   (%s)", r.shape, r.got, r.total, r.want)
 	}
 }
