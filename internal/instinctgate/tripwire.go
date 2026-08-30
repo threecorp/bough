@@ -48,9 +48,14 @@ func DefaultTripwires() []Tripwire {
 		return Tripwire{Rule: rule, Re: regexp.MustCompile(`(?i)\b` + tool + `\b[^\n]*\b` + v + `(?:[^-\w]|$)`)}
 	}
 	return []Tripwire{
-		// Merge a PR / branch without being asked to.
+		// Merge a PR without being asked to. ONLY the `gh pr merge` shape:
+		// the governance gate is landing someone's change unasked, and a
+		// local `git merge` is neither a publish nor a WIP destruction. A
+		// `git merge` pattern used to sit beside this one and it held 30
+		// notes in one live corpus — conflict-resolution steps, pre-merge
+		// state checks, scratch-repo rehearsals — every one a practice
+		// that makes merges SAFER. The reference guard never had it.
 		verb("never-merge-unasked", "gh", "pr\\s+merge"),
-		verb("never-merge-unasked", "git", "merge"),
 		// Discard uncommitted / in-progress work.
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*\breset\b[^\n]*--hard\b`)},
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*\bcheckout\b[^\n]*\bHEAD\b[^\n]*--`)},

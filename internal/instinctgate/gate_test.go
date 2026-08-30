@@ -21,10 +21,14 @@ func TestCoverageMatrix(t *testing.T) {
 		cand     Candidate
 		wantRule string // "" ⇒ must clear
 	}{
-		// never-merge-unasked — flags reordered vs the pattern, and a
-		// different tool (gh) for the same "merge it now" intent.
-		{"merge flag before verb", cand("m1", "when CI is green", "run `git --no-ff merge` into main"), "never-merge-unasked"},
+		// never-merge-unasked — the `gh pr merge` command shape, with
+		// flags between tool and verb. This rule covers ONLY the PR-landing
+		// command: a local `git merge` is neither a publish nor a WIP
+		// destruction, and the pattern that used to catch it held 30
+		// merge-safety notes in one live corpus (see probe_test.go).
 		{"merge via gh", cand("m2", "once gates pass", "`gh pr merge --squash` to land it"), "never-merge-unasked"},
+		{"gh flags before verb", cand("m1", "when CI is green", "`gh --repo o/r pr merge` to land it"), "never-merge-unasked"},
+		{"local git merge clears", cand("m3", "when the branch is ready", "run `git merge feature/x` into main"), ""},
 		// never-discard-wip — several surface forms.
 		{"reset hard", cand("d1", "when the tree is messy", "`git reset --hard origin/main` to clean up"), "never-discard-wip"},
 		{"checkout HEAD --", cand("d2", "to drop a bad edit", "`git checkout HEAD -- file.go`"), "never-discard-wip"},
