@@ -71,13 +71,14 @@ type Config struct {
 	// Denylist holds terms that must never propagate (client names,
 	// internal hostnames). Loaded from an untracked sidecar; nil or empty
 	// means the layer is inert. See denylist.go.
+	//
+	// There is deliberately no Governance field: the deterministic gate
+	// holds on tripwires and the denylist ONLY. Grounding a rule citation
+	// against the governance text is the judge's check (grounding.go),
+	// applied to the judge's own citation — a candidate that merely
+	// SOUNDS like governance is not a violation, and holding on that shape
+	// quarantined five mutation-testing notes in one live corpus.
 	Denylist *Denylist
-	// Governance is the project's rule text. An instinct that CLAIMS to
-	// cite a rule must share a contiguous run of words with it, which is
-	// what catches a confidently-invented policy. nil or empty means the
-	// layer is inert — with no governance loaded every citation would
-	// look unfounded. See grounding.go.
-	Governance *Governance
 }
 
 // Gate applies the deterministic layer.
@@ -137,16 +138,13 @@ func (g *Gate) Screen(cands []Candidate) Result {
 }
 
 // screenOne runs the deterministic layers over one candidate, cheapest
-// and most-certain first: command-shaped tripwires, then the denylist,
-// then rule grounding. The first hit wins and names itself, so a
-// quarantine report cites ONE reason rather than a list the operator has
-// to rank.
+// and most-certain first: command-shaped tripwires, then the denylist.
+// The first hit wins and names itself, so a quarantine report cites ONE
+// reason rather than a list the operator has to rank.
 //
 // Only the propagating surface (trigger + action) is scanned — a note
 // may legitimately cite a forbidden command or a sensitive term in its
-// evidence without recommending it. Grounding reads the same surface for
-// the same reason: it judges what the instinct ASSERTS, not what it
-// recorded as context.
+// evidence without recommending it.
 func (g *Gate) screenOne(c Candidate) (Decision, bool) {
 	surface := c.Trigger + "\n" + c.Action
 	for _, tw := range g.tripwires {
@@ -156,11 +154,6 @@ func (g *Gate) screenOne(c Candidate) (Decision, bool) {
 	}
 	if term, hit := g.cfg.Denylist.Match(surface); hit {
 		return Decision{ID: c.ID, Rule: "denylisted-term:" + term}, true
-	}
-	// Grounding applies only to instincts asserting governance; an
-	// ordinary practice note has no rule to be grounded against.
-	if ClaimsRule(surface) && !g.cfg.Governance.Grounded(surface) {
-		return Decision{ID: c.ID, Rule: "ungrounded-rule-claim"}, true
 	}
 	return Decision{}, false
 }

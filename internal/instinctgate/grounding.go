@@ -6,19 +6,22 @@ import (
 	"strings"
 )
 
-// Rule grounding catches the failure mode where a minted instinct
-// SOUNDS like governance but is not: "the team requires two approvals
-// before merge" when no such rule exists anywhere. An LLM writing from
-// session traces will confidently produce these, and once one is in the
-// corpus it is injected as if it were policy — the learner teaches its
-// own hallucination back to itself.
+// Rule grounding is the JUDGE's check, not the deterministic gate's. It
+// answers one question: does a cited rule actually exist in the
+// governance text? The reference design applies it to the judge's own
+// citation — a rule the judge cannot ground is a hallucination, and a
+// hold resting on an invented rule is DROPPED, because quarantining on
+// one erodes trust in every real hold and consensus cannot catch it (the
+// same model hallucinates the same rule every time).
 //
-// The check is deliberately narrow. Only instincts that CLAIM to be
-// citing a rule are grounded, because a note recording an ordinary
-// practice ("re-run flaky tests with a fixed seed") is not asserting
-// governance and has nothing to be grounded against. For those that do
-// claim it, the assertion must share a contiguous run of words with the
-// project's actual governance text.
+// This package once ran the check inside the deterministic gate too,
+// with the OPPOSITE polarity: a candidate whose own text sounded like
+// governance ("must never …") but shared no run with the corpus was
+// HELD. The reference has no such layer, and in one live corpus it
+// quarantined five notes about mutation testing — each saying a gate
+// "must never silently pass" about itself, which no governance document
+// happens to phrase. Sounding like a rule is not a violation; the gate
+// holds only on tripwires and the denylist now.
 //
 // A contiguous run, not a bag of words: paraphrase is exactly what
 // hallucination looks like, and any overlap measure that tolerates
@@ -32,15 +35,6 @@ import (
 // short enough that a genuine citation survives light rewording at its
 // edges.
 const groundingRunLength = 5
-
-// ruleClaimMarkers are the phrasings a minted instinct uses when it is
-// asserting governance rather than recording a practice. Matching one
-// is what puts an instinct in scope for grounding at all.
-var ruleClaimMarkers = []string{
-	"the rule", "per the", "policy", "governance", "mandated", "mandatory",
-	"is required by", "as required", "the convention is", "must always",
-	"must never", "is forbidden", "prohibited", "is not allowed",
-}
 
 // Governance is the project's actual rule text, loaded once and reused
 // across a batch. Sources records where it came from so a report can
@@ -106,18 +100,6 @@ func LoadGovernance(paths []string) *Governance {
 // and a guard that rejects everything is indistinguishable from a
 // broken one.
 func (g *Governance) Active() bool { return g != nil && len(g.words) > 0 }
-
-// ClaimsRule reports whether the text is asserting governance (and so
-// is in scope for grounding) rather than recording a practice.
-func ClaimsRule(text string) bool {
-	lower := strings.ToLower(text)
-	for _, m := range ruleClaimMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
 
 // Grounded reports whether text shares a contiguous run of
 // groundingRunLength words with the governance corpus. Text shorter

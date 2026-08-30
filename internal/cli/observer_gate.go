@@ -223,13 +223,12 @@ type promoteOutcome struct {
 	// limiter snapshot. The judge holds a budget separate from minting;
 	// reporting only the minting one understates what the pass spent.
 	JudgeProvider *claudecli.Provider
-	// HeldTripwire / HeldDenylist / HeldClaimUngrounded / HeldJudge split
+	// HeldTripwire / HeldDenylist / HeldJudge split
 	// Quarantined by the layer that made the hold. One merged number
 	// cannot say which layer is doing the work — or which has silently
 	// stopped, which is how a guard ships disabled and reports success.
 	HeldTripwire        int
 	HeldDenylist        int
-	HeldClaimUngrounded int
 	HeldJudge           int
 	// RuleUngrounded counts consensus violations RELEASED because the
 	// judge's cited category was not on the list it was given. A
@@ -369,8 +368,8 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 
 	// Split the holds by the layer that made them. The layers exist for
 	// different threats — patterns for command shapes, the denylist for
-	// boundary terms, grounding for invented rules, the judge for prose
-	// intent — and one merged number cannot say which layer is doing the
+	// boundary terms, the judge for prose intent — and one merged number
+	// cannot say which layer is doing the
 	// work, or which has silently stopped.
 	for _, d := range res.Held {
 		switch {
@@ -378,8 +377,6 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			out.HeldJudge++
 		case strings.HasPrefix(d.Rule, "denylisted-term:"):
 			out.HeldDenylist++
-		case d.Rule == "ungrounded-rule-claim":
-			out.HeldClaimUngrounded++
 		default:
 			out.HeldTripwire++
 		}
@@ -643,20 +640,21 @@ func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []strin
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
-			Enabled:    true,
-			Denylist:   loadDenylistQuiet(root, ""),
-			Governance: instinctgate.LoadGovernance(governancePaths(root, nil)),
+			Enabled:  true,
+			Denylist: loadDenylistQuiet(root, ""),
 		}, instinctgate.DefaultForbiddenActions
 	}
 	forbidden := cfg.Instinct.Gate.ForbiddenActions
 	if len(forbidden) == 0 {
 		forbidden = instinctgate.DefaultForbiddenActions
 	}
+	// governance_paths is not read here any more: the deterministic gate
+	// holds only on tripwires + the denylist, and the governance corpus
+	// belongs to the judge's rule grounding.
 	return instinctgate.Config{
-		Enabled:    cfg.Instinct.GateEnabled(),
-		AllowIDs:   cfg.Instinct.Gate.AllowIDs,
-		Denylist:   loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
-		Governance: instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths)),
+		Enabled:  cfg.Instinct.GateEnabled(),
+		AllowIDs: cfg.Instinct.Gate.AllowIDs,
+		Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
 	}, forbidden
 }
 

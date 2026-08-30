@@ -59,34 +59,6 @@ func TestGovernanceLoadsDirectory(t *testing.T) {
 	}
 }
 
-// TestClaimsRuleScoping pins WHICH instincts are in scope. A note
-// recording an ordinary practice asserts no governance and has nothing
-// to be grounded against; grounding it would hold honest notes for
-// failing to cite a rule they never claimed.
-func TestClaimsRuleScoping(t *testing.T) {
-	claims := []string{
-		"the rule is that every change needs a second reviewer",
-		"per the project policy, migrations run through the job",
-		"you must never apply migrations by hand",
-		"direct pushes are prohibited on the release branch",
-	}
-	for _, s := range claims {
-		if !ClaimsRule(s) {
-			t.Errorf("should be in scope for grounding: %q", s)
-		}
-	}
-	practices := []string{
-		"re-run the flaky suite with a fixed seed and inspect the diff",
-		"read the enclosing function before editing a single line",
-		"prefix grep with command to bypass shell aliases",
-	}
-	for _, s := range practices {
-		if ClaimsRule(s) {
-			t.Errorf("a practice note must not be in scope: %q", s)
-		}
-	}
-}
-
 // TestGroundingAcceptsRealCitationRejectsInvention is the core claim,
 // with probes phrased differently from the source text: a genuine
 // citation survives light rewording at its edges, while a confident
@@ -141,21 +113,25 @@ func TestGroundingShortClaimIsNotPunished(t *testing.T) {
 	}
 }
 
-// TestUngroundedClaimHeldInGate pins the wiring end-to-end, including
-// the scoping: an invented rule is held, a real citation clears, and a
-// practice note clears without being grounded at all.
-func TestUngroundedClaimHeldInGate(t *testing.T) {
-	g := New(Config{Enabled: true, Governance: governanceFixture(t)})
+// TestRuleSoundingNotesClearTheGate pins the removal of the gate-side
+// grounding hold. Sounding like governance is not a violation: the
+// reference guard has no such layer, and in one live corpus it held five
+// mutation-testing notes — each saying a gate "must never silently pass"
+// about itself. Grounding is the judge's check, applied to the judge's
+// own citation, and its polarity runs the other way (an ungrounded hold
+// is dropped, never minted).
+func TestRuleSoundingNotesClearTheGate(t *testing.T) {
+	g := New(Config{Enabled: true})
 
 	res := g.Screen([]Candidate{
-		cand("invented", "before merging", "the rule is that every pull request needs three approvals from the platform team"),
-		cand("cited", "before merging", "the rule is that every change must be reviewed by a second engineer"),
+		cand("invented", "before deploying", "the rule is that every deploy needs three approvals from the platform team"),
+		cand("mutation-note", "when implementing a safety gate", "verify the check must never silently pass broken code"),
 		cand("practice", "when tests are flaky", "re-run the suite with a fixed seed"),
 	})
-	if len(res.Held) != 1 || res.Held[0].ID != "invented" || res.Held[0].Rule != "ungrounded-rule-claim" {
-		t.Fatalf("held = %+v, want only the invented rule", res.Held)
+	if len(res.Held) != 0 {
+		t.Fatalf("held = %+v, want none — sounding like a rule is not a violation", res.Held)
 	}
-	if len(res.Cleared) != 2 {
-		t.Errorf("cleared = %d, want the real citation and the practice note", len(res.Cleared))
+	if len(res.Cleared) != 3 {
+		t.Errorf("cleared = %d, want all three", len(res.Cleared))
 	}
 }

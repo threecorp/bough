@@ -295,7 +295,6 @@ func newObserverRunOnceCmd() *cobra.Command {
 						"held":                          outcome.Quarantined,
 						"held_tripwire":                 outcome.HeldTripwire,
 						"held_denylist":                 outcome.HeldDenylist,
-						"held_claim_ungrounded":         outcome.HeldClaimUngrounded,
 						"held_judge":                    outcome.HeldJudge,
 						"rule_ungrounded":               outcome.RuleUngrounded,
 						"quote_unverified":              outcome.QuoteUnverified,
