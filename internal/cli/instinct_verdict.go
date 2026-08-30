@@ -58,7 +58,7 @@ func newVerdictKeepCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().StringVar(&batch, "batch", "", "quarantine batch dir (default: search every unreviewed batch, newest first)")
+	cmd.Flags().StringVar(&batch, "batch", "", "quarantine batch dir (default: search every batch, newest first)")
 	cmd.Flags().StringVar(&why, "why", "", "why this note is correct, citing the governance it enforces (required)")
 	_ = cmd.MarkFlagRequired("why")
 	return cmd
@@ -75,7 +75,7 @@ func newVerdictRetireCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "monorepo root (default: $PWD)")
-	cmd.Flags().StringVar(&batch, "batch", "", "quarantine batch dir (default: search every unreviewed batch, newest first)")
+	cmd.Flags().StringVar(&batch, "batch", "", "quarantine batch dir (default: search every batch, newest first)")
 	cmd.Flags().StringVar(&why, "why", "", "what the note teaches, and which rule that breaks (required)")
 	_ = cmd.MarkFlagRequired("why")
 	return cmd
@@ -85,6 +85,7 @@ func newVerdictDoneCmd() *cobra.Command {
 	var root, batch string
 	cmd := &cobra.Command{
 		Use:   "done",
+		Args:  cobra.NoArgs,
 		Short: "Mark a batch REVIEWED, silencing its per-prompt notice",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runVerdictDone(cmd.OutOrStdout(), root, batch)
@@ -112,10 +113,12 @@ func verdictEnv(root string) (homunculus.ProjectIdentity, homunculus.Layout, err
 	return ident, homunculus.NewLayout(), nil
 }
 
-// quarantineBatches lists batch dirs newest first. The reference resolves
-// only the latest batch; searching every unreviewed one is this port's
-// concession to reality — its operator reviews a backlog, and "the id you
-// named is in batch 14 of 42" is not an error worth typing --batch for.
+// quarantineBatches lists batch dirs newest first, REVIEWED ones
+// included — a verdict on an already-closed batch is still a verdict.
+// The reference resolves only the latest batch; searching every one is
+// this port's concession to reality — its operator reviews a backlog,
+// and "the id you named is in batch 14 of 42" is not an error worth
+// typing --batch for.
 func quarantineBatches(qroot string) ([]string, error) {
 	entries, err := os.ReadDir(qroot)
 	if err != nil {
@@ -190,21 +193,23 @@ func runVerdictKeep(out io.Writer, cmd *cobra.Command, root, batch, id, why stri
 	if err != nil {
 		return err
 	}
-	// The allowlist entry lands FIRST: if the move then fails the worst
-	// state is an allowlisted id still in quarantine, which the next
-	// keep retries. The other order re-stages the note un-allowlisted,
-	// and the next pass re-quarantines it — undoing the verdict.
+	// The allowlist entry lands FIRST: the other order re-stages the note
+	// un-allowlisted, and the next pass re-quarantines it — undoing the
+	// verdict. The cost is that a failed restore cannot be retried with
+	// the same command (the duplicate check refuses before it gets that
+	// far), so both failures below name the one manual step that finishes
+	// the verdict.
 	cfgPath := resolveConfigPath(cmd, ident.Root)
 	if err := appendAllowID(cfgPath, id, why); err != nil {
 		return err
 	}
 	staging := layout.StagingDir(ident.ID)
-	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return fmt.Errorf("verdict keep: mkdir staging: %w", err)
-	}
 	dst := filepath.Join(staging, filepath.Base(held))
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		return fmt.Errorf("verdict keep: %s is allowlisted in %s but not restored: mkdir staging: %w (finish it with `mv %s %s`)", id, cfgPath, err, held, dst)
+	}
 	if err := os.Rename(held, dst); err != nil {
-		return fmt.Errorf("verdict keep: restore %s: %w", held, err)
+		return fmt.Errorf("verdict keep: %s is allowlisted in %s but not restored: %w (finish it with `mv %s %s`)", id, cfgPath, err, held, dst)
 	}
 	fmt.Fprintf(out, "keep %s\n  allow_ids += %s (%s)\n  restored %s → %s (the next observer pass re-adopts it)\n",
 		id, id, cfgPath, held, dst)
@@ -293,10 +298,12 @@ func appendAllowID(cfgPath, id, why string) error {
 			return fmt.Errorf("verdict keep: %s is already in allow_ids (%s)", id, cfgPath)
 		}
 	}
+	// A line comment is one line: a multi-line --why emits its tail as a
+	// separate comment detached from the entry it explains.
 	allow.Content = append(allow.Content, &yaml.Node{
 		Kind:        yaml.ScalarNode,
 		Value:       id,
-		LineComment: "# " + why,
+		LineComment: "# " + strings.Join(strings.Fields(why), " "),
 	})
 	var b strings.Builder
 	enc := yaml.NewEncoder(&b)

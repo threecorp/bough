@@ -301,9 +301,12 @@ func newObserverRunOnceCmd() *cobra.Command {
 						"held_tripwire":                 outcome.HeldTripwire,
 						"held_denylist":                 outcome.HeldDenylist,
 						"held_judge":                    outcome.HeldJudge,
-						"rule_ungrounded":               outcome.RuleUngrounded,
-						"quote_unverified":              outcome.QuoteUnverified,
-						"emitted":                       outcome.Emitted,
+						// Exemptions travel too: an allowlist entry that
+						// stops matching is how a stale exemption hides.
+						"exempt":           len(outcome.Exempt),
+						"rule_ungrounded":  outcome.RuleUngrounded,
+						"quote_unverified": outcome.QuoteUnverified,
+						"emitted":          outcome.Emitted,
 					},
 				})
 			if outcome.RuleUngrounded > 0 {

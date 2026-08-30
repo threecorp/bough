@@ -339,12 +339,13 @@ type InstinctGate struct {
 	// guard exists to contain. Empty falls back to the conventional
 	// location; a missing file leaves the layer inert.
 	DenylistPath string `yaml:"denylist_path"`
-	// GovernancePaths are the project's rule documents — the corpus the
-	// JUDGE grounds a cited rule against (a rule the judge cannot find
-	// there is a hallucination, and a hold resting on one is dropped).
-	// The deterministic gate does not read them: sounding like governance
-	// is not a violation, and holding on that shape quarantined honest
-	// notes. Empty falls back to the conventional set.
+	// GovernancePaths are the project's rule documents. Nothing enforces
+	// against them today: the deterministic gate stopped reading them
+	// (sounding like governance is not a violation, and holding on that
+	// shape quarantined honest notes), and the judge grounds a citation
+	// against ForbiddenActions, not against this text. `bough doctor`
+	// reports which documents resolve; that is the whole current effect.
+	// Empty falls back to the conventional set.
 	GovernancePaths []string `yaml:"governance_paths"`
 	// ForbiddenActions are the CATEGORIES the LLM layer judges against.
 	// They were hardcoded in the prompt, which quietly capped the judge

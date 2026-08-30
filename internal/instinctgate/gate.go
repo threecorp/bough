@@ -80,11 +80,12 @@ type Config struct {
 	// means the layer is inert. See denylist.go.
 	//
 	// There is deliberately no Governance field: the deterministic gate
-	// holds on tripwires and the denylist ONLY. Grounding a rule citation
-	// against the governance text is the judge's check (grounding.go),
-	// applied to the judge's own citation — a candidate that merely
+	// holds on tripwires and the denylist ONLY — a candidate that merely
 	// SOUNDS like governance is not a violation, and holding on that shape
-	// quarantined five mutation-testing notes in one live corpus.
+	// quarantined five mutation-testing notes in one live corpus. The
+	// judge grounds its own citation against ForbiddenActions
+	// (Reviewer.groundedCategory), not against the governance text, so
+	// grounding.go currently backs nothing but the `bough doctor` row.
 	Denylist *Denylist
 }
 
