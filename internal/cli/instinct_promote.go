@@ -69,10 +69,13 @@ type gateHold struct {
 	rule string
 }
 
-// screenPromotion runs the gate over one promotion candidate. The
-// screened surface is the same one the mint path screens — trigger plus
-// the first action line — so an instinct cannot be judged by one
-// standard on the way in and a different one on the way up.
+// screenPromotion runs the gate over one promotion candidate on the same
+// surface the mint path screens: trigger plus the WHOLE action block. It
+// screened only the first action line until it was measured, which meant
+// an instruction to merge on line 2 was held on the way in and cleared on
+// the way up — into global scope, which applies to every project. The
+// weaker of two surfaces decides what the corpus ends up holding, so they
+// have to be the same one.
 func screenPromotion(gate *instinctgate.Gate, cand promoteCandidate) (instinctgate.Decision, bool) {
 	if gate == nil {
 		return instinctgate.Decision{}, false
@@ -81,7 +84,7 @@ func screenPromotion(gate *instinctgate.Gate, cand promoteCandidate) (instinctga
 	res := gate.Screen([]instinctgate.Candidate{{
 		ID:      cand.id,
 		Trigger: best.Trigger,
-		Action:  firstActionLine(best.Body),
+		Action:  actionBlock(best.Body),
 		Body:    best.Body,
 	}})
 	if len(res.Held) == 1 {
