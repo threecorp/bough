@@ -30,6 +30,13 @@ type Decision struct {
 type Result struct {
 	Cleared []Candidate
 	Held    []Decision
+	// Exempt records allowlisted candidates that WOULD have been held,
+	// and the rule each matched. They clear — that is what the allowlist
+	// means — but never silently: an exempted note that is later
+	// rewritten into something harmful must stay visible, and a report
+	// that cannot say "this cleared because you said so" cannot be
+	// audited.
+	Exempt []Decision
 }
 
 // DefaultForbiddenActions are the categories the LLM layer judges an
@@ -124,11 +131,19 @@ func (g *Gate) Screen(cands []Candidate) Result {
 	}
 	res := Result{}
 	for _, c := range cands {
+		// The layers run even for an allowlisted id: exemption decides
+		// the OUTCOME, not whether the match is worth knowing about. An
+		// exempt note that matches is reported in Exempt rather than
+		// cleared silently.
+		d, held := g.screenOne(c)
 		if g.allow[c.ID] {
+			if held {
+				res.Exempt = append(res.Exempt, d)
+			}
 			res.Cleared = append(res.Cleared, c)
 			continue
 		}
-		if d, held := g.screenOne(c); held {
+		if held {
 			res.Held = append(res.Held, d)
 			continue
 		}

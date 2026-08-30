@@ -239,6 +239,11 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
+			for _, d := range outcome.Exempt {
+				// Mirrors the gate's contract: an allowlisted note that
+				// matched a layer clears, but never silently.
+				fmt.Fprintf(stdout, "policy gate: exempt (reviewed): %s [%s]\n", d.ID, d.Rule)
+			}
 			switch {
 			case outcome.JudgeOff:
 				// Requested but unusable. Saying so is the whole point: a

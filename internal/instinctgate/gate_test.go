@@ -29,6 +29,9 @@ func TestCoverageMatrix(t *testing.T) {
 		{"merge via gh", cand("m2", "once gates pass", "`gh pr merge --squash` to land it"), "never-merge-unasked"},
 		{"gh flags before verb", cand("m1", "when CI is green", "`gh --repo o/r pr merge` to land it"), "never-merge-unasked"},
 		{"local git merge clears", cand("m3", "when the branch is ready", "run `git merge feature/x` into main"), ""},
+		// Sounding like governance is not a violation — grounding is the
+		// judge's check on its own citation, not a gate hold.
+		{"rule-sounding note clears", cand("m4", "when adding a safety gate", "the check must never silently pass broken code"), ""},
 		// never-discard-wip — several surface forms.
 		{"reset hard", cand("d1", "when the tree is messy", "`git reset --hard origin/main` to clean up"), "never-discard-wip"},
 		{"checkout HEAD --", cand("d2", "to drop a bad edit", "`git checkout HEAD -- file.go`"), "never-discard-wip"},
@@ -96,6 +99,24 @@ func TestAllowIDExemptsRuleCitingInstinct(t *testing.T) {
 	got := New(Config{Enabled: true, AllowIDs: []string{"no-force"}}).Screen([]Candidate{rule})
 	if len(got.Held) != 0 || len(got.Cleared) != 1 {
 		t.Errorf("allowlisted id should clear: held=%d cleared=%d", len(got.Held), len(got.Cleared))
+	}
+	// …but never silently: the match is reported as exempt, with the rule
+	// it would have been held under, so an exempted note that is later
+	// rewritten into something harmful stays visible.
+	if len(got.Exempt) != 1 || got.Exempt[0].ID != "no-force" || got.Exempt[0].Rule != "never-force-push" {
+		t.Errorf("exempt = %+v, want the no-force match reported", got.Exempt)
+	}
+}
+
+// TestAllowIDThatMatchesNothingIsNotReportedExempt pins the other half:
+// exempt means "matched but excused". An allowlisted id whose note trips
+// no layer has nothing to report — listing it would teach operators that
+// the exempt line is noise.
+func TestAllowIDThatMatchesNothingIsNotReportedExempt(t *testing.T) {
+	benign := cand("plain", "when tests are flaky", "re-run with a fixed seed")
+	got := New(Config{Enabled: true, AllowIDs: []string{"plain"}}).Screen([]Candidate{benign})
+	if len(got.Exempt) != 0 {
+		t.Errorf("exempt = %+v, want empty for a note that matched nothing", got.Exempt)
 	}
 }
 
