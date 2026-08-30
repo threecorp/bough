@@ -49,9 +49,14 @@ func TestCoverageMatrix(t *testing.T) {
 		// never-override-author — both the --author and the -c forms.
 		{"author flag", cand("a1", "to fix attribution", "`git commit --author=\"x <y>\"`"), "never-override-author"},
 		{"-c user.email", cand("a2", "when committing", "`git -c user.email=z commit`"), "never-override-author"},
-		// never-force-push — -f short flag and the long form.
+		// never-force-push — -f short flag and the long form, plus the
+		// force letter inside a combined cluster (git accepts `-uf`).
 		{"push -f", cand("f1", "after a rebase", "`git push -f origin br`"), "never-force-push"},
 		{"push --force-with-lease", cand("f2", "to update the PR", "`git push --force-with-lease`"), "never-force-push"},
+		{"push -uf cluster", cand("f3", "after a rebase", "`git push -uf origin br`"), "never-force-push"},
+		// A dash INSIDE a later word is prose, not a flag: `git push -u`
+		// followed by "repo-specific" must not read `-specif` as `-f`.
+		{"push then hyphenated word clears", cand("f4", "when pushing to several repos", "git push -u origin the branch, then a draft with repo-specific body text"), ""},
 		// never-delete-remote-branch.
 		{"push --delete", cand("r1", "to clean up", "`git push origin --delete old-branch`"), "never-delete-remote-branch"},
 

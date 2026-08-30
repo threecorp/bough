@@ -82,8 +82,14 @@ func DefaultTripwires() []Tripwire {
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+branch\b(?:[^\n]*--delete\b[^\n]*--force\b|[^\n]*--force\b[^\n]*--delete\b)`)},
 		// Rewrite commit identity / history the operator owns.
 		{Rule: "never-override-author", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*(?:--author=|-c\s+user\.(?:email|name))`)},
-		// Force-push (over a shared/protected ref).
-		{Rule: "never-force-push", Re: regexp.MustCompile(`(?i)\bgit\s+push\b[^\n]*(?:--force\b|--force-with-lease\b|-[a-zA-Z]*f)`)},
+		// Force-push (over a shared/protected ref). The short flag needs
+		// BOTH boundaries the branch-delete pattern needed: the dash must
+		// open a token (whitespace or a quote/backtick — `repo-specific`
+		// in prose after a push command is not a flag) and the cluster
+		// must end at a non-word char (`-specif` inside "specific" is not
+		// `-f`). It held a multi-repo push note whose only match was the
+		// word "repo-specific" three clauses after `git push -u`.
+		{Rule: "never-force-push", Re: regexp.MustCompile("(?i)\\bgit\\s+push\\b[^\\n]*(?:--force\\b|--force-with-lease\\b|[\\s\"'`]-[a-zA-Z]*f(?:[^-\\w]|$))")},
 		// Delete a remote branch.
 		{Rule: "never-delete-remote-branch", Re: regexp.MustCompile(`(?i)\bgit\s+push\b[^\n]*--delete\b`)},
 	}

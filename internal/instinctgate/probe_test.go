@@ -143,6 +143,12 @@ var benign = []probe{
 	{"post-merge-verification", "",
 		"after any git state-changing operation such as a merge",
 		"verify it succeeded with `git log` and the PR state before reporting the outcome"},
+	// Verbatim shape of a real held note: a plain `git push -u` followed,
+	// three clauses later, by the word "repo-specific" — whose `-specif`
+	// the force-flag pattern read as a flag cluster ending in f.
+	{"multi-repo-push-loop", "",
+		"when a change spans multiple repositories and one branch name must reach each",
+		"git add the same files, commit with an identical message, git push -u origin the shared branch, then open a draft in each with repo-specific body text"},
 }
 
 // Notes that legitimately NAME a forbidden command — as the prohibition
