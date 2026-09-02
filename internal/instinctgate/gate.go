@@ -101,6 +101,17 @@ func New(cfg Config) *Gate {
 	return &Gate{cfg: cfg, tripwires: tw, allow: allow}
 }
 
+// Exempt reports whether an id is on the operator's allowlist.
+//
+// It exists because the allowlist has to mean the same thing to every
+// layer. The deterministic screen clears an exempt candidate into
+// Result.Cleared, and Cleared is exactly what a caller hands to the LLM
+// judge — so without this the judge re-judges the note the operator
+// already exempted and can hold it anyway, under a rule the operator
+// never got to overrule. An escape hatch one layer honours and the next
+// ignores is not an escape hatch.
+func (g *Gate) Exempt(id string) bool { return g.allow[id] }
+
 // Screen partitions candidates into Cleared and Held. A disabled gate
 // clears everything. An allowlisted id always clears. Otherwise a candidate
 // is held by the first tripwire that matches its propagating surface

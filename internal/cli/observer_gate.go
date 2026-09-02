@@ -295,13 +295,25 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 		})
 	}
 	res := gate.Screen(cands)
+	// Allowlisted ids are exempt from the judge too, not just from the
+	// patterns. The deterministic screen clears them INTO res.Cleared,
+	// which is the batch the judge reads — so judging them would let the
+	// model overrule an exemption the operator set by hand, and the note
+	// would land in quarantine under a `judge:` rule with no allowlist
+	// entry able to release it. Exempt means exempt at every layer.
+	judgeable := make([]instinctgate.Candidate, 0, len(res.Cleared))
+	for _, c := range res.Cleared {
+		if !gate.Exempt(c.ID) {
+			judgeable = append(judgeable, c)
+		}
+	}
 	// The LLM layer runs LAST, on what the deterministic layers already
 	// cleared, so a model outage can never un-catch a command-shaped
 	// violation. It fails open and reports, because a guard that silently
 	// held everything would stop the corpus growing while looking like a
 	// clean pass.
-	if newJudge != nil && len(res.Cleared) > 0 {
-		reviewer, judgeProv, jerr := newJudge(len(res.Cleared))
+	if newJudge != nil && len(judgeable) > 0 {
+		reviewer, judgeProv, jerr := newJudge(len(judgeable))
 		out.JudgeProvider = judgeProv
 		switch {
 		case jerr != nil:
@@ -310,8 +322,8 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			out.JudgeOff, out.JudgeOffReason = true, "reviewer unavailable"
 		}
 		if reviewer != nil {
-			out.ReviewCandidates, out.ReviewVotes = len(res.Cleared), reviewer.Votes
-			br := reviewer.ReviewBatch(ctx, res.Cleared)
+			out.ReviewCandidates, out.ReviewVotes = len(judgeable), reviewer.Votes
+			br := reviewer.ReviewBatch(ctx, judgeable)
 			out.Reviewed, out.ReviewFailed = br.Reviewed, br.Failed
 			out.ReviewCancelled = br.Cancelled
 			out.RuleUngrounded, out.QuoteUnverified = br.RuleUngrounded, br.QuoteUnverified

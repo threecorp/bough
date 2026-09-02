@@ -104,6 +104,34 @@ func TestPromoteClearsBenignInstinct(t *testing.T) {
 	}
 }
 
+// The mint path screens the WHOLE action block; promotion screened only
+// its first line, so an instinct whose first line is innocuous and whose
+// second recommends a merge was held on the way in and cleared on the way
+// up — into global scope, which reaches every project. Two surfaces means
+// the weaker one decides what the corpus keeps.
+func TestPromoteScreensTheWholeActionBlock(t *testing.T) {
+	layout := promoteFixture(t, "ship-after-review",
+		"when a reviewed change is ready to ship",
+		"Confirm the reviewer signed off.\nThen run `gh pr merge --squash` to land it.")
+
+	opt := promoteOptions{
+		minProjects:   2,
+		minConfidence: 0.8,
+		gate:          instinctgate.New(instinctgate.Config{Enabled: true}),
+	}
+	res, err := promoteInstincts(layout, opt, time.Now())
+	if err != nil {
+		t.Fatalf("promoteInstincts: %v", err)
+	}
+	if len(res.gateHeld) != 1 || res.gateHeld[0].rule != "never-merge-unasked" {
+		t.Fatalf("gateHeld = %+v, want one never-merge-unasked hold on line 2", res.gateHeld)
+	}
+	global, _ := homunculus.ScanInstincts(layout.GlobalInstinctsDir())
+	if len(global) != 0 {
+		t.Errorf("a second-line forbidden action reached global scope: %+v", global)
+	}
+}
+
 // TestPromoteGateHoldIsReported pins that a withheld promotion is named
 // with its rule. A silent refusal at the widest blast radius in the
 // system is the last place to hide a decision — the operator would see
