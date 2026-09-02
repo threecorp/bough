@@ -48,9 +48,14 @@ func DefaultTripwires() []Tripwire {
 		return Tripwire{Rule: rule, Re: regexp.MustCompile(`(?i)\b` + tool + `\b[^\n]*\b` + v + `(?:[^-\w]|$)`)}
 	}
 	return []Tripwire{
-		// Merge a PR / branch without being asked to.
+		// Merge a PR without being asked to. ONLY the `gh pr merge` shape:
+		// the governance gate is landing someone's change unasked, and a
+		// local `git merge` is neither a publish nor a WIP destruction. A
+		// `git merge` pattern used to sit beside this one and it held 30
+		// notes in one live corpus — conflict-resolution steps, pre-merge
+		// state checks, scratch-repo rehearsals — every one a practice
+		// that makes merges SAFER. The reference guard never had it.
 		verb("never-merge-unasked", "gh", "pr\\s+merge"),
-		verb("never-merge-unasked", "git", "merge"),
 		// Discard uncommitted / in-progress work.
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*\breset\b[^\n]*--hard\b`)},
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*\bcheckout\b[^\n]*\bHEAD\b[^\n]*--`)},
@@ -77,8 +82,14 @@ func DefaultTripwires() []Tripwire {
 		{Rule: "never-discard-wip", Re: regexp.MustCompile(`(?i)\bgit\s+branch\b(?:[^\n]*--delete\b[^\n]*--force\b|[^\n]*--force\b[^\n]*--delete\b)`)},
 		// Rewrite commit identity / history the operator owns.
 		{Rule: "never-override-author", Re: regexp.MustCompile(`(?i)\bgit\b[^\n]*(?:--author=|-c\s+user\.(?:email|name))`)},
-		// Force-push (over a shared/protected ref).
-		{Rule: "never-force-push", Re: regexp.MustCompile(`(?i)\bgit\s+push\b[^\n]*(?:--force\b|--force-with-lease\b|-[a-zA-Z]*f)`)},
+		// Force-push (over a shared/protected ref). The short flag needs
+		// BOTH boundaries the branch-delete pattern needed: the dash must
+		// open a token (whitespace or a quote/backtick — `repo-specific`
+		// in prose after a push command is not a flag) and the cluster
+		// must end at a non-word char (`-specif` inside "specific" is not
+		// `-f`). It held a multi-repo push note whose only match was the
+		// word "repo-specific" three clauses after `git push -u`.
+		{Rule: "never-force-push", Re: regexp.MustCompile("(?i)\\bgit\\s+push\\b[^\\n]*(?:--force\\b|--force-with-lease\\b|[\\s\"'`]-[a-zA-Z]*f(?:[^-\\w]|$))")},
 		// Delete a remote branch.
 		{Rule: "never-delete-remote-branch", Re: regexp.MustCompile(`(?i)\bgit\s+push\b[^\n]*--delete\b`)},
 	}

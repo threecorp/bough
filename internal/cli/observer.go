@@ -239,6 +239,11 @@ func newObserverRunOnceCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "policy gate: held %d instinct(s) → %s (reversible move; see REPORT.md)\n",
 					outcome.Quarantined, outcome.BatchDir)
 			}
+			for _, d := range outcome.Exempt {
+				// Mirrors the gate's contract: an allowlisted note that
+				// matched a layer clears, but never silently.
+				fmt.Fprintf(stdout, "policy gate: exempt (reviewed): %s [%s]\n", d.ID, d.Rule)
+			}
 			switch {
 			case outcome.JudgeOff:
 				// Requested but unusable. Saying so is the whole point: a
@@ -295,11 +300,13 @@ func newObserverRunOnceCmd() *cobra.Command {
 						"held":                          outcome.Quarantined,
 						"held_tripwire":                 outcome.HeldTripwire,
 						"held_denylist":                 outcome.HeldDenylist,
-						"held_claim_ungrounded":         outcome.HeldClaimUngrounded,
 						"held_judge":                    outcome.HeldJudge,
-						"rule_ungrounded":               outcome.RuleUngrounded,
-						"quote_unverified":              outcome.QuoteUnverified,
-						"emitted":                       outcome.Emitted,
+						// Exemptions travel too: an allowlist entry that
+						// stops matching is how a stale exemption hides.
+						"exempt":           len(outcome.Exempt),
+						"rule_ungrounded":  outcome.RuleUngrounded,
+						"quote_unverified": outcome.QuoteUnverified,
+						"emitted":          outcome.Emitted,
 					},
 				})
 			if outcome.RuleUngrounded > 0 {

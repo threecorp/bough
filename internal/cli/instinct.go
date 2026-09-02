@@ -52,6 +52,8 @@ show) makes no call at all.`,
 		newInstinctStatusCmd(), newInstinctListCmd(), newInstinctShowCmd(), newInstinctPromoteCmd(),
 		// Filling it, spending it, seeding it from elsewhere.
 		newObserverCmd(), newEvolveCmd(), newEccImportCmd(),
+		// Judging what the gate held.
+		newInstinctVerdictCmd(),
 	)
 	return cmd
 }

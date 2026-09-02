@@ -30,6 +30,13 @@ type Decision struct {
 type Result struct {
 	Cleared []Candidate
 	Held    []Decision
+	// Exempt records allowlisted candidates that WOULD have been held,
+	// and the rule each matched. They clear — that is what the allowlist
+	// means — but never silently: an exempted note that is later
+	// rewritten into something harmful must stay visible, and a report
+	// that cannot say "this cleared because you said so" cannot be
+	// audited.
+	Exempt []Decision
 }
 
 // DefaultForbiddenActions are the categories the LLM layer judges an
@@ -71,13 +78,15 @@ type Config struct {
 	// Denylist holds terms that must never propagate (client names,
 	// internal hostnames). Loaded from an untracked sidecar; nil or empty
 	// means the layer is inert. See denylist.go.
+	//
+	// There is deliberately no Governance field: the deterministic gate
+	// holds on tripwires and the denylist ONLY — a candidate that merely
+	// SOUNDS like governance is not a violation, and holding on that shape
+	// quarantined five mutation-testing notes in one live corpus. The
+	// judge grounds its own citation against ForbiddenActions
+	// (Reviewer.groundedCategory), not against the governance text, so
+	// grounding.go currently backs nothing but the `bough doctor` row.
 	Denylist *Denylist
-	// Governance is the project's rule text. An instinct that CLAIMS to
-	// cite a rule must share a contiguous run of words with it, which is
-	// what catches a confidently-invented policy. nil or empty means the
-	// layer is inert — with no governance loaded every citation would
-	// look unfounded. See grounding.go.
-	Governance *Governance
 }
 
 // Gate applies the deterministic layer.
@@ -123,11 +132,19 @@ func (g *Gate) Screen(cands []Candidate) Result {
 	}
 	res := Result{}
 	for _, c := range cands {
+		// The layers run even for an allowlisted id: exemption decides
+		// the OUTCOME, not whether the match is worth knowing about. An
+		// exempt note that matches is reported in Exempt rather than
+		// cleared silently.
+		d, held := g.screenOne(c)
 		if g.allow[c.ID] {
+			if held {
+				res.Exempt = append(res.Exempt, d)
+			}
 			res.Cleared = append(res.Cleared, c)
 			continue
 		}
-		if d, held := g.screenOne(c); held {
+		if held {
 			res.Held = append(res.Held, d)
 			continue
 		}
@@ -137,16 +154,13 @@ func (g *Gate) Screen(cands []Candidate) Result {
 }
 
 // screenOne runs the deterministic layers over one candidate, cheapest
-// and most-certain first: command-shaped tripwires, then the denylist,
-// then rule grounding. The first hit wins and names itself, so a
-// quarantine report cites ONE reason rather than a list the operator has
-// to rank.
+// and most-certain first: command-shaped tripwires, then the denylist.
+// The first hit wins and names itself, so a quarantine report cites ONE
+// reason rather than a list the operator has to rank.
 //
 // Only the propagating surface (trigger + action) is scanned — a note
 // may legitimately cite a forbidden command or a sensitive term in its
-// evidence without recommending it. Grounding reads the same surface for
-// the same reason: it judges what the instinct ASSERTS, not what it
-// recorded as context.
+// evidence without recommending it.
 func (g *Gate) screenOne(c Candidate) (Decision, bool) {
 	surface := c.Trigger + "\n" + c.Action
 	for _, tw := range g.tripwires {
@@ -156,11 +170,6 @@ func (g *Gate) screenOne(c Candidate) (Decision, bool) {
 	}
 	if term, hit := g.cfg.Denylist.Match(surface); hit {
 		return Decision{ID: c.ID, Rule: "denylisted-term:" + term}, true
-	}
-	// Grounding applies only to instincts asserting governance; an
-	// ordinary practice note has no rule to be grounded against.
-	if ClaimsRule(surface) && !g.cfg.Governance.Grounded(surface) {
-		return Decision{ID: c.ID, Rule: "ungrounded-rule-claim"}, true
 	}
 	return Decision{}, false
 }

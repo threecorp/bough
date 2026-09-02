@@ -192,6 +192,10 @@ type promoteOutcome struct {
 	Emitted     int
 	Quarantined int
 	BatchDir    string
+	// Exempt are allowlisted candidates that matched a layer and cleared
+	// because the operator said so. Reported, never silent: an exempted
+	// note later rewritten into something harmful must stay visible.
+	Exempt []instinctgate.Decision
 	// Superseded counts promoted instincts that replaced an existing file
 	// whose text differed; the prior versions were archived under
 	// ArchiveDir rather than overwritten away.
@@ -223,14 +227,13 @@ type promoteOutcome struct {
 	// limiter snapshot. The judge holds a budget separate from minting;
 	// reporting only the minting one understates what the pass spent.
 	JudgeProvider *claudecli.Provider
-	// HeldTripwire / HeldDenylist / HeldClaimUngrounded / HeldJudge split
+	// HeldTripwire / HeldDenylist / HeldJudge split
 	// Quarantined by the layer that made the hold. One merged number
 	// cannot say which layer is doing the work — or which has silently
 	// stopped, which is how a guard ships disabled and reports success.
-	HeldTripwire        int
-	HeldDenylist        int
-	HeldClaimUngrounded int
-	HeldJudge           int
+	HeldTripwire int
+	HeldDenylist int
+	HeldJudge    int
 	// RuleUngrounded counts consensus violations RELEASED because the
 	// judge's cited category was not on the list it was given. A
 	// permanently-zero value is itself suspect — an inert grounding check
@@ -264,6 +267,12 @@ type movedRecord struct {
 	id     string
 	reason string
 	path   string
+	// restoreDir is where THIS file goes back to, recorded per record
+	// rather than once per batch. A batch-wide "from" breaks the moment a
+	// sweep spans two scopes: a report that names one restore dir for the
+	// batch tells the reader to restore a global-scope hold into the
+	// project, changing its scope silently.
+	restoreDir string
 }
 
 // screenAndPromote runs the policy gate over a staged batch and applies
@@ -295,6 +304,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 		})
 	}
 	res := gate.Screen(cands)
+	out.Exempt = res.Exempt
 	// Allowlisted ids are exempt from the judge too, not just from the
 	// patterns. The deterministic screen clears them INTO res.Cleared,
 	// which is the batch the judge reads — so judging them would let the
@@ -369,8 +379,8 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 
 	// Split the holds by the layer that made them. The layers exist for
 	// different threats — patterns for command shapes, the denylist for
-	// boundary terms, grounding for invented rules, the judge for prose
-	// intent — and one merged number cannot say which layer is doing the
+	// boundary terms, the judge for prose intent — and one merged number
+	// cannot say which layer is doing the
 	// work, or which has silently stopped.
 	for _, d := range res.Held {
 		switch {
@@ -378,8 +388,6 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			out.HeldJudge++
 		case strings.HasPrefix(d.Rule, "denylisted-term:"):
 			out.HeldDenylist++
-		case d.Rule == "ungrounded-rule-claim":
-			out.HeldClaimUngrounded++
 		default:
 			out.HeldTripwire++
 		}
@@ -442,7 +450,7 @@ func screenAndPromote(ctx context.Context, layout homunculus.Layout, projectID s
 			out.Errs = append(out.Errs, fmt.Errorf("gate: quarantine %s: %w", d.ID, err))
 			continue
 		}
-		held = append(held, movedRecord{id: d.ID, reason: d.Rule, path: dst})
+		held = append(held, movedRecord{id: d.ID, reason: d.Rule, path: dst, restoreDir: layout.StagingDir(projectID)})
 		out.Quarantined++
 	}
 	if err := writeMoveReport(batchDir, quarantineReportSpec(layout.StagingDir(projectID)), held, now); err != nil {
@@ -494,7 +502,7 @@ func archiveIfSuperseded(layout homunculus.Layout, projectID, id, dst, srcPath s
 	if err := os.Rename(dst, archived); err != nil {
 		return nil, fmt.Errorf("archive: move superseded %s: %w", id, err)
 	}
-	return &movedRecord{id: id, reason: "superseded by a newer mint", path: archived}, nil
+	return &movedRecord{id: id, reason: "superseded by a newer mint", path: archived, restoreDir: filepath.Dir(dst)}, nil
 }
 
 // sameKnowledge reports whether two versions of an instinct say the same
@@ -557,6 +565,12 @@ func quarantineReportSpec(stagingDir string) reportSpec {
 			"propagating surface (trigger + action) matched a command-shaped\n" +
 			"forbidden action. Nothing was deleted — each file was MOVED here\n" +
 			"whole and stays out of injection until you restore it.\n\n" +
+			"Record each verdict with `bough instinct verdict` so the reason\n" +
+			"lands next to the decision instead of in a hand edit:\n" +
+			"  keep <id> --why \"…\"    the note IS the rule / is correct —\n" +
+			"                         allowlists it and restores it to .staging\n" +
+			"  retire <id> --why \"…\"  a true violation — recorded here, file stays\n" +
+			"  done --batch <dir>     marks this batch REVIEWED\n\n" +
 			"The restore commands point at .staging, NOT the live corpus: the\n" +
 			"next observer pass adopts whatever lands there and RE-JUDGES it.\n" +
 			"Feed every rewrite back through the same gate that held it rather\n" +
@@ -608,7 +622,13 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "| id | %s | restore |\n|---|---|---|\n", spec.reasonLabel)
 	for _, r := range records {
-		dst := filepath.Join(spec.restoreDir, r.id+".md")
+		// Per-record restore dir, with the batch prose's dir as the
+		// fallback for records minted before the field existed.
+		dir := r.restoreDir
+		if dir == "" {
+			dir = spec.restoreDir
+		}
+		dst := filepath.Join(dir, r.id+".md")
 		fmt.Fprintf(&b, "| %s | %s | `mv %s %s` |\n", r.id, r.reason, r.path, dst)
 	}
 	if spec.reviewedFooter {
@@ -643,20 +663,21 @@ func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []strin
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
-			Enabled:    true,
-			Denylist:   loadDenylistQuiet(root, ""),
-			Governance: instinctgate.LoadGovernance(governancePaths(root, nil)),
+			Enabled:  true,
+			Denylist: loadDenylistQuiet(root, ""),
 		}, instinctgate.DefaultForbiddenActions
 	}
 	forbidden := cfg.Instinct.Gate.ForbiddenActions
 	if len(forbidden) == 0 {
 		forbidden = instinctgate.DefaultForbiddenActions
 	}
+	// governance_paths is not read here any more: the deterministic gate
+	// holds only on tripwires + the denylist, and the governance corpus
+	// belongs to the judge's rule grounding.
 	return instinctgate.Config{
-		Enabled:    cfg.Instinct.GateEnabled(),
-		AllowIDs:   cfg.Instinct.Gate.AllowIDs,
-		Denylist:   loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
-		Governance: instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths)),
+		Enabled:  cfg.Instinct.GateEnabled(),
+		AllowIDs: cfg.Instinct.Gate.AllowIDs,
+		Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
 	}, forbidden
 }
 

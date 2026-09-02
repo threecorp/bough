@@ -318,9 +318,12 @@ func denylistLine(active bool) (termio.Status, string) {
 	return termio.StatusOK, "ON — terms loaded from the untracked sidecar"
 }
 
-// groundingLine reports whether rule grounding has governance to work
-// with, and names the documents it read: "we found no rule" is only
-// actionable if the operator knows which files were consulted.
+// groundingLine reports whether the governance corpus resolves, and
+// names the documents: "we found no rule" is only actionable if the
+// operator knows which files were consulted. It is posture only — no
+// layer enforces against this text (the gate holds on tripwires and the
+// denylist, the judge grounds against ForbiddenActions) — so the row
+// must not read as an enforcement that is switched on.
 func groundingLine(env gateEnv) (termio.Status, string) {
 	if !env.hasRoot() {
 		return termio.StatusNeutral, "OFF — cannot resolve the project root"
@@ -342,7 +345,7 @@ func groundingLine(env gateEnv) (termio.Status, string) {
 		}
 		names = append(names, s)
 	}
-	return termio.StatusOK, "ON — grounded against " + strings.Join(names, ", ")
+	return termio.StatusNeutral, "resolved " + strings.Join(names, ", ") + " — reported only; no layer enforces against them today"
 }
 
 // policyGateState resolves the deterministic policy-gate posture for the

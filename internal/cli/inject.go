@@ -218,7 +218,7 @@ func quarantineNotice(layout homunculus.Layout, projectID string) string {
 	if batches == 0 {
 		return ""
 	}
-	return fmt.Sprintf("[bough policy] %d held instinct(s) in %d unreviewed batch(es) — read REPORT.md under %s, restore what belongs (into .staging; the next pass re-judges it), then `touch <batch>/REVIEWED`.\n\n",
+	return fmt.Sprintf("[bough policy] %d held instinct(s) in %d unreviewed batch(es) — read each note under %s and record a verdict: `bough instinct verdict keep <id> --why \"…\"` (it IS the rule / correct), `retire <id> --why \"…\"` (a true violation), then `done --batch <dir>`. See docs/QUARANTINE-REVIEW.md.\n\n",
 		held, batches, root)
 }
 

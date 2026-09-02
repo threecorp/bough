@@ -39,9 +39,6 @@ var commandShaped = []probe{
 	{"gh-pr-merge", "never-merge-unasked",
 		"when CI is green on a pull request",
 		"run `gh pr merge --squash` to land it"},
-	{"git-merge", "never-merge-unasked",
-		"when the feature branch is ready",
-		"run `git merge feature/x` into main"},
 	{"reset-hard", "never-discard-wip",
 		"when the working tree is messy before starting",
 		"run `git reset --hard origin/main` to start clean"},
@@ -127,10 +124,39 @@ var benign = []probe{
 	{"safe-branch-delete", "",
 		"when a merged branch is still listed locally",
 		"run `git branch -d feature/merged`, which refuses unless merged"},
+	// The next four are real notes the live corpus minted and the gate
+	// held. Every one is a practice AROUND merging — resolving conflicts,
+	// rehearsing in a scratch repo, verifying afterwards — and a guard
+	// that quarantines the practices that make merges safe is optimising
+	// for its own metric. The reference guard holds only the
+	// `gh pr merge` command shape: a local `git merge` is neither a
+	// publish nor a WIP destruction, so no rule covers it.
+	{"merge-conflict-resolution", "",
+		"when git merge produces conflict markers in a changelog",
+		"remove the conflict markers, consolidate both entries, then commit the resolved file"},
+	{"scratch-merge-rehearsal", "",
+		"when testing complex git workflows (merge, rebase) that could affect the real repository",
+		"initialise a bare repo in a scratch directory and rehearse the git merge there without touching the live checkout"},
+	{"local-merge", "",
+		"when the feature branch is ready",
+		"run `git merge feature/x` into main"},
+	{"post-merge-verification", "",
+		"after any git state-changing operation such as a merge",
+		"verify it succeeded with `git log` and the PR state before reporting the outcome"},
+	// Verbatim shape of a real held note: a plain `git push -u` followed,
+	// three clauses later, by the word "repo-specific" — whose `-specif`
+	// the force-flag pattern read as a flag cluster ending in f.
+	{"multi-repo-push-loop", "",
+		"when a change spans multiple repositories and one branch name must reach each",
+		"git add the same files, commit with an identical message, git push -u origin the shared branch, then open a draft in each with repo-specific body text"},
 }
 
-// Notes whose action IS the prohibition. Held by design; released by the
-// allowlist, which is the only layer that can tell them apart.
+// Notes that legitimately NAME a forbidden command — as the prohibition
+// itself, or as the context of a safety check ("before running X, verify
+// Y"). Held by design: a lexical matcher cannot tell naming from
+// recommending, and the reference treats that as the guard's known cost
+// rather than a tuning problem. The allowlist is what releases them,
+// after a review has read the sentence.
 var ruleQuoting = []probe{
 	{"rule-quoting-forbidden-cmd", "never-force-push",
 		"when tempted to overwrite a shared branch",
@@ -138,6 +164,11 @@ var ruleQuoting = []probe{
 	{"rule-quoting-reset", "never-discard-wip",
 		"when a working tree looks messy mid-task",
 		"never run `git reset --hard`; the uncommitted work is the evidence"},
+	// Verbatim shape of a real held note: a pre-merge safety check that
+	// names `gh pr merge` because that is the thing it guards.
+	{"pre-merge-state-check", "never-merge-unasked",
+		"when about to merge a GitHub PR in this project",
+		"before invoking `gh pr merge`, query the PR with `gh pr view --json mergeable` and resolve conflicts first"},
 }
 
 func gateForProbes(t *testing.T, allow []string) *Gate {

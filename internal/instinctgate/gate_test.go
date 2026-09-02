@@ -21,10 +21,17 @@ func TestCoverageMatrix(t *testing.T) {
 		cand     Candidate
 		wantRule string // "" ⇒ must clear
 	}{
-		// never-merge-unasked — flags reordered vs the pattern, and a
-		// different tool (gh) for the same "merge it now" intent.
-		{"merge flag before verb", cand("m1", "when CI is green", "run `git --no-ff merge` into main"), "never-merge-unasked"},
+		// never-merge-unasked — the `gh pr merge` command shape, with
+		// flags between tool and verb. This rule covers ONLY the PR-landing
+		// command: a local `git merge` is neither a publish nor a WIP
+		// destruction, and the pattern that used to catch it held 30
+		// merge-safety notes in one live corpus (see probe_test.go).
 		{"merge via gh", cand("m2", "once gates pass", "`gh pr merge --squash` to land it"), "never-merge-unasked"},
+		{"gh flags before verb", cand("m1", "when CI is green", "`gh --repo o/r pr merge` to land it"), "never-merge-unasked"},
+		{"local git merge clears", cand("m3", "when the branch is ready", "run `git merge feature/x` into main"), ""},
+		// Sounding like governance is not a violation — grounding is the
+		// judge's check on its own citation, not a gate hold.
+		{"rule-sounding note clears", cand("m4", "when adding a safety gate", "the check must never silently pass broken code"), ""},
 		// never-discard-wip — several surface forms.
 		{"reset hard", cand("d1", "when the tree is messy", "`git reset --hard origin/main` to clean up"), "never-discard-wip"},
 		{"checkout HEAD --", cand("d2", "to drop a bad edit", "`git checkout HEAD -- file.go`"), "never-discard-wip"},
@@ -42,9 +49,14 @@ func TestCoverageMatrix(t *testing.T) {
 		// never-override-author — both the --author and the -c forms.
 		{"author flag", cand("a1", "to fix attribution", "`git commit --author=\"x <y>\"`"), "never-override-author"},
 		{"-c user.email", cand("a2", "when committing", "`git -c user.email=z commit`"), "never-override-author"},
-		// never-force-push — -f short flag and the long form.
+		// never-force-push — -f short flag and the long form, plus the
+		// force letter inside a combined cluster (git accepts `-uf`).
 		{"push -f", cand("f1", "after a rebase", "`git push -f origin br`"), "never-force-push"},
 		{"push --force-with-lease", cand("f2", "to update the PR", "`git push --force-with-lease`"), "never-force-push"},
+		{"push -uf cluster", cand("f3", "after a rebase", "`git push -uf origin br`"), "never-force-push"},
+		// A dash INSIDE a later word is prose, not a flag: `git push -u`
+		// followed by "repo-specific" must not read `-specif` as `-f`.
+		{"push then hyphenated word clears", cand("f4", "when pushing to several repos", "git push -u origin the branch, then a draft with repo-specific body text"), ""},
 		// never-delete-remote-branch.
 		{"push --delete", cand("r1", "to clean up", "`git push origin --delete old-branch`"), "never-delete-remote-branch"},
 
@@ -92,6 +104,24 @@ func TestAllowIDExemptsRuleCitingInstinct(t *testing.T) {
 	got := New(Config{Enabled: true, AllowIDs: []string{"no-force"}}).Screen([]Candidate{rule})
 	if len(got.Held) != 0 || len(got.Cleared) != 1 {
 		t.Errorf("allowlisted id should clear: held=%d cleared=%d", len(got.Held), len(got.Cleared))
+	}
+	// …but never silently: the match is reported as exempt, with the rule
+	// it would have been held under, so an exempted note that is later
+	// rewritten into something harmful stays visible.
+	if len(got.Exempt) != 1 || got.Exempt[0].ID != "no-force" || got.Exempt[0].Rule != "never-force-push" {
+		t.Errorf("exempt = %+v, want the no-force match reported", got.Exempt)
+	}
+}
+
+// TestAllowIDThatMatchesNothingIsNotReportedExempt pins the other half:
+// exempt means "matched but excused". An allowlisted id whose note trips
+// no layer has nothing to report — listing it would teach operators that
+// the exempt line is noise.
+func TestAllowIDThatMatchesNothingIsNotReportedExempt(t *testing.T) {
+	benign := cand("plain", "when tests are flaky", "re-run with a fixed seed")
+	got := New(Config{Enabled: true, AllowIDs: []string{"plain"}}).Screen([]Candidate{benign})
+	if len(got.Exempt) != 0 {
+		t.Errorf("exempt = %+v, want empty for a note that matched nothing", got.Exempt)
 	}
 }
 
