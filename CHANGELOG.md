@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.26.0
+
+### Fixed
+
+- **The policy gate stopped quarantining the practices that make merges safe.**
+  Three patterns were holding notes that recommend nothing: a `git merge`
+  tripwire (the rule is about landing someone's change, and a local merge is
+  neither a publish nor a WIP destruction), a gate-side rule-grounding hold
+  (a note that merely SOUNDS like governance is not a violation), and a
+  force-push flag matcher that read the `-specif` inside "repo-specific" as a
+  flag cluster. On one live corpus these three held 34 notes between them —
+  conflict-resolution steps, pre-merge state checks, scratch-repo rehearsals,
+  mutation-testing notes. Every removal carries the real false positive as a
+  probe in `internal/instinctgate/probe_test.go`.
+- **Promotion screened a weaker surface than minting.** `instinct promote`
+  read only the first line of an action where the mint path reads the whole
+  block, so an instinct whose second line recommended a merge was held on the
+  way in and cleared on the way up — into global scope, which reaches every
+  project. The comment claimed the two surfaces were already the same.
+- **`allow_ids` is now honoured by the judge too.** An exempt candidate
+  cleared the patterns and went straight into the batch handed to the LLM
+  layer, which could hold it under a `judge:` rule no allowlist entry can
+  release. Exempt means exempt at every layer, and an exempt note no longer
+  counts as reviewed.
+- **`governance_paths` no longer claims an enforcement it does not have.**
+  Nothing reads that corpus today: the gate stopped, and the judge grounds its
+  citation against `forbidden_actions`, not against the governance text.
+  `bough doctor` reports which documents resolve and says so plainly.
+
+### Added
+
+- **`bough instinct verdict` — the review loop for the quarantine.** The gate
+  is a high-recall net by design: a regex cannot tell "do X" from "never do X",
+  so every rule-shaped note trips it. Deciding meaning is a review, and this
+  records its conclusion as data rather than a hand edit.
+  - `keep <id> --why "…"` appends the id to `instinct.gate.allow_ids` with the
+    reason as a comment (editing the YAML node tree, so every comment already
+    in the file survives) and restores the file to `.staging` for the next
+    pass to re-adopt.
+  - `retire <id> --why "…"` records the judgement in the batch `REPORT.md`.
+    The file stays; nothing here deletes.
+  - `done --batch <dir>` marks the batch REVIEWED, which is what silences the
+    per-prompt notice.
+  - `docs/QUARANTINE-REVIEW.md` carries the procedure: the one deciding
+    question, the two traps, and the no-hand-edit rule.
+- **An allowlisted note that matches a layer is reported, not cleared in
+  silence** — `exempt (reviewed): <id> [rule]` on the run, and an `exempt`
+  count in the judge telemetry record, so a stale exemption is visible.
+- Quarantine and archive reports record a restore directory **per file**
+  rather than one for the batch.
+
 ## v0.25.0
 
 ### Fixed
