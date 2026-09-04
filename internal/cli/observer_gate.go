@@ -642,19 +642,14 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 	return nil
 }
 
-// gateConfigFor builds the policy-gate config for the monorepo at root.
-// A missing or unreadable .bough.yaml is not an error here: the gate is
-// reversible, so the safe fallback is to run it (Enabled: true) rather
-// than skip it. When the config loads, the operator's `instinct.gate`
-// block decides — defaulting on when the block is absent (GateEnabled).
-func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
-	c, _ := gateSettings(cmd, root)
-	return c
-}
-
 // gateSettings reads .bough.yaml ONCE and derives both halves of the
 // gate from it: the deterministic layer's config and the categories the
-// judge weighs. They were resolved by two functions that each opened the
+// judge weighs.
+//
+// A missing or unreadable .bough.yaml is not an error: the gate is
+// reversible, so the safe fallback is to RUN it (Enabled: true) rather
+// than skip it. When the config loads, the operator's `instinct.gate`
+// block decides — defaulting on when the block is absent (GateEnabled). They were resolved by two functions that each opened the
 // file, so a run parsed it twice and — if it changed in between — could
 // screen against one version and judge against another. A tripwire and a
 // judge configured from different versions of the same file is the split
@@ -682,7 +677,7 @@ func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []strin
 }
 
 // gateForbiddenActions resolves the categories the LLM layer judges
-// against. It sits beside gateConfigFor and reads the same file, so the
+// against. It shares gateSettings with the deterministic layer, so the
 // deterministic layer and the judge cannot end up configured from
 // different places. An unreadable config falls back to the defaults
 // rather than to nothing: a judge with an empty category list clears
