@@ -49,6 +49,19 @@ type Governance struct {
 	// it per call re-tokenized the whole corpus once per instinct.
 	index   map[string][]int
 	Sources []string
+	// raw is the corpus verbatim, for the prompt. The judge is asked to
+	// quote the forbidding sentence FROM these documents, so it has to be
+	// shown them: a citation cannot be verified against a text the judge
+	// never saw, it can only be invented.
+	raw string
+}
+
+// Text returns the governance corpus verbatim, or "" when none loaded.
+func (g *Governance) Text() string {
+	if g == nil {
+		return ""
+	}
+	return g.raw
 }
 
 // LoadGovernance reads the governance documents at the given paths.
@@ -87,7 +100,8 @@ func LoadGovernance(paths []string) *Governance {
 			g.Sources = append(g.Sources, p)
 		}
 	}
-	g.words = normalizeWords(b.String())
+	g.raw = b.String()
+	g.words = normalizeWords(g.raw)
 	g.index = make(map[string][]int, len(g.words))
 	for i, w := range g.words {
 		g.index[w] = append(g.index[w], i)

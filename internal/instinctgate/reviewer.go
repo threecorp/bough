@@ -68,6 +68,14 @@ type reviewVerdict struct {
 	// release the hold — the consensus still stands — but it is flagged,
 	// because a hold whose evidence cannot be found needs a closer look.
 	Quote string `json:"quote"`
+	// RuleQuote is the forbidding sentence, copied verbatim FROM THE
+	// GOVERNANCE DOCUMENTS. It is the half consensus cannot check:
+	// voting kills random per-call variance, but the same model on the
+	// same fixed text invents the same non-existent rule every time, so
+	// 3/3 agreement on a hallucinated rule means nothing. The governance
+	// text is fixed, so this is verifiable without another model call —
+	// and a fabricated rule cannot produce a real governance sentence.
+	RuleQuote string `json:"rule_quote"`
 }
 
 // Reviewer runs the consensus vote. Votes and Agree are struct fields
@@ -87,6 +95,13 @@ type Reviewer struct {
 	// which is what grounding is for — the two are not substitutes.
 	// Empty disables the check (nothing to ground against).
 	Categories []string
+	// Governance is the project's rule text. It grounds the OTHER half
+	// of the citation: Categories checks that the judge named a category
+	// it was given, this checks that the sentence it quoted really
+	// appears in the documents. An ungrounded rule quote RELEASES the
+	// hold — quarantining on an invented rule erodes trust in every real
+	// hold, and consensus cannot catch it. nil leaves the check off.
+	Governance *Governance
 }
 
 // DefaultVotes is how many independent samples NewReviewer takes per
@@ -232,7 +247,12 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		// is held on nothing.
 		chosen := -1
 		for i, v := range violating {
-			if v.Category == "" || r.groundedCategory(v.Category) {
+			// Governance.Grounded owns the whole rule-quote side, nil
+			// receiver included: no corpus and too-short-to-judge both
+			// ground, so a missing citation leaves the hold standing.
+			// This check only ever RELEASES, so its silence must not
+			// invent a hold.
+			if (v.Category == "" || r.groundedCategory(v.Category)) && r.Governance.Grounded(v.RuleQuote) {
 				chosen = i
 				break
 			}

@@ -370,7 +370,7 @@ project instincts are left untouched and ids already global are skipped
 			// inside promoteInstincts) keeps that function a pure function of
 			// its options, which is what the threshold tests rely on.
 			cwd, _ := os.Getwd()
-			gateCfg, forbidden := gateSettings(cmd, resolveMonorepoRoot(cwd))
+			gateCfg, forbidden, governance := gateSettings(cmd, resolveMonorepoRoot(cwd))
 			opt.gate = instinctgate.New(gateCfg)
 			opt.ctx = cmd.Context()
 			// The judge runs here for the same reason the gate does:
@@ -383,7 +383,7 @@ project instincts are left untouched and ids already global are skipped
 					if budget <= 0 {
 						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
 					}
-					return newGateReviewer(model, budget, forbidden)
+					return newGateReviewer(model, budget, forbidden, governance)
 				}
 			}
 			res, err := promoteInstincts(homunculus.NewLayout(), opt, time.Now())

@@ -654,26 +654,29 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 // screen against one version and judge against another. A tripwire and a
 // judge configured from different versions of the same file is the split
 // the configurable categories were added to close.
-func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string) {
+func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string, *instinctgate.Governance) {
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
-			Enabled:  true,
-			Denylist: loadDenylistQuiet(root, ""),
-		}, instinctgate.DefaultForbiddenActions
+				Enabled:  true,
+				Denylist: loadDenylistQuiet(root, ""),
+			}, instinctgate.DefaultForbiddenActions,
+			instinctgate.LoadGovernance(governancePaths(root, nil))
 	}
 	forbidden := cfg.Instinct.Gate.ForbiddenActions
 	if len(forbidden) == 0 {
 		forbidden = instinctgate.DefaultForbiddenActions
 	}
-	// governance_paths is not read here any more: the deterministic gate
-	// holds only on tripwires + the denylist, and the governance corpus
-	// belongs to the judge's rule grounding.
+	// The governance corpus is returned for the JUDGE, not for the gate
+	// config: the deterministic layer holds only on tripwires + the
+	// denylist, while the judge quotes a forbidding sentence from these
+	// documents and has that quote verified against them.
 	return instinctgate.Config{
-		Enabled:  cfg.Instinct.GateEnabled(),
-		AllowIDs: cfg.Instinct.Gate.AllowIDs,
-		Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
-	}, forbidden
+			Enabled:  cfg.Instinct.GateEnabled(),
+			AllowIDs: cfg.Instinct.Gate.AllowIDs,
+			Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
+		}, forbidden,
+		instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths))
 }
 
 // gateForbiddenActions resolves the categories the LLM layer judges
@@ -683,7 +686,7 @@ func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []strin
 // rather than to nothing: a judge with an empty category list clears
 // everything while reporting a full review.
 func gateForbiddenActions(cmd *cobra.Command, root string) []string {
-	_, forbidden := gateSettings(cmd, root)
+	_, forbidden, _ := gateSettings(cmd, root)
 	return forbidden
 }
 
