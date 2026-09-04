@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/instinctgate"
+	"github.com/ikeikeikeike/bough/internal/provider/claudecli"
 )
 
 // Promotion thresholds — faithful port of ECC continuous-learning-v2
@@ -32,6 +35,16 @@ type promoteOptions struct {
 	// no screening — used only by tests that are exercising the
 	// thresholds rather than the guard.
 	gate *instinctgate.Gate
+	// newJudge builds the LLM layer for the candidates that cleared the
+	// patterns. nil disables it (--judge=false, and the threshold tests).
+	//
+	// Unlike the mint path this one fails CLOSED. There, a judge that
+	// cannot answer must promote and log: it runs on every session, and
+	// blocking it stops the corpus growing. Promotion runs rarely, by
+	// hand, and what it writes is injected into EVERY project forever —
+	// so "the judge could not run" must not read as "clean".
+	newJudge judgeFactory
+	ctx      context.Context
 }
 
 // promoteEntry is one project's copy of a shared instinct id.
@@ -60,7 +73,10 @@ type promoteResult struct {
 	// blast radius in the system is the last place to hide a decision.
 	gateHeld  []gateHold
 	writeErrs []error
-	dryRun    bool
+	// judgeErr stops the whole promotion: on this path a judge that
+	// cannot answer refuses rather than waves through.
+	judgeErr error
+	dryRun   bool
 }
 
 // gateHold names one candidate the gate kept out of global scope.
@@ -102,6 +118,7 @@ func screenPromotion(gate *instinctgate.Gate, cand promoteCandidate) (instinctga
 // promoted_date provenance so tests are deterministic.
 func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Time) (promoteResult, error) {
 	res := promoteResult{dryRun: opt.dryRun}
+	var cleared []promoteCandidate
 
 	reg, err := homunculus.NewRegistryRW(layout).Read()
 	if err != nil {
@@ -147,6 +164,23 @@ func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Tim
 			res.gateHeld = append(res.gateHeld, gateHold{id: cand.id, rule: d.Rule})
 			continue
 		}
+		cleared = append(cleared, cand)
+	}
+
+	// The LLM layer runs on what the patterns cleared, in ONE batch:
+	// the deterministic hold is already decided, and judging per
+	// candidate would re-enter the limiter once per id.
+	cleared, judgeHeld, judgeErr := judgePromotions(opt, cleared)
+	res.gateHeld = append(res.gateHeld, judgeHeld...)
+	if judgeErr != nil {
+		// Fail-closed: nothing is promoted on a judge that could not
+		// answer. The candidates stay where they are — this path writes,
+		// it never removes — so the next run re-offers them.
+		res.judgeErr = judgeErr
+		return res, nil
+	}
+
+	for _, cand := range cleared {
 		if !opt.dryRun {
 			if err := writePromoted(layout, cand, now); err != nil {
 				res.writeErrs = append(res.writeErrs, err)
@@ -156,6 +190,59 @@ func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Tim
 		res.promoted = append(res.promoted, cand)
 	}
 	return res, nil
+}
+
+// judgePromotions runs the consensus judge over the candidates the
+// patterns cleared. Returns the survivors, the holds, and — on a judge
+// that could not be built or could not reach a verdict — an error that
+// stops the promotion entirely.
+func judgePromotions(opt promoteOptions, cleared []promoteCandidate) ([]promoteCandidate, []gateHold, error) {
+	if opt.newJudge == nil || len(cleared) == 0 {
+		return cleared, nil, nil
+	}
+	reviewer, _, err := opt.newJudge(len(cleared))
+	if err != nil {
+		return nil, nil, fmt.Errorf("the judge could not be built, and promotion writes to global scope: %w", err)
+	}
+	if reviewer == nil {
+		return nil, nil, errors.New("the judge is unavailable, and promotion writes to global scope")
+	}
+	byID := make(map[string]promoteCandidate, len(cleared))
+	cands := make([]instinctgate.Candidate, 0, len(cleared))
+	for _, c := range cleared {
+		byID[c.id] = c
+		best := bestEntry(c.entries).instinct
+		cands = append(cands, instinctgate.Candidate{
+			ID:      c.id,
+			Trigger: best.Trigger,
+			Action:  actionBlock(best.Body),
+			Body:    best.Body,
+		})
+	}
+	ctx := opt.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	br := reviewer.ReviewBatch(ctx, cands)
+	// A candidate the judge could not reach a verdict on is NOT promoted:
+	// on this path an unanswered question is a refusal, not a pass.
+	if br.Failed > 0 || br.Cancelled {
+		return nil, nil, fmt.Errorf("the judge left %d of %d candidate(s) unanswered (cancelled=%v), and promotion writes to global scope",
+			br.Failed, len(cands), br.Cancelled)
+	}
+	held := make(map[string]string, len(br.Held))
+	var holds []gateHold
+	for _, d := range br.Held {
+		held[d.ID] = d.Rule
+		holds = append(holds, gateHold{id: d.ID, rule: d.Rule})
+	}
+	survivors := make([]promoteCandidate, 0, len(cleared))
+	for _, c := range cleared {
+		if _, isHeld := held[c.id]; !isHeld {
+			survivors = append(survivors, c)
+		}
+	}
+	return survivors, holds, nil
 }
 
 // groupCrossProject maps instinct id -> the per-project copies of it,
@@ -259,6 +346,11 @@ func newInstinctPromoteCmd() *cobra.Command {
 		minProjects:   promoteMinProjects,
 		minConfidence: promoteMinConfidence,
 	}
+	var (
+		judge         = true
+		model         string
+		judgeMaxCalls int
+	)
 	cmd := &cobra.Command{
 		Use:   "promote",
 		Short: "Promote cross-project instincts into the global corpus",
@@ -278,18 +370,41 @@ project instincts are left untouched and ids already global are skipped
 			// inside promoteInstincts) keeps that function a pure function of
 			// its options, which is what the threshold tests rely on.
 			cwd, _ := os.Getwd()
-			opt.gate = instinctgate.New(gateConfigFor(cmd, resolveMonorepoRoot(cwd)))
+			gateCfg, forbidden := gateSettings(cmd, resolveMonorepoRoot(cwd))
+			opt.gate = instinctgate.New(gateCfg)
+			opt.ctx = cmd.Context()
+			// The judge runs here for the same reason the gate does:
+			// global scope reaches every project. A dry run judges too —
+			// a preview that skipped the expensive layer would advertise a
+			// promotion the real run then refuses.
+			if judge {
+				opt.newJudge = func(candidates int) (*instinctgate.Reviewer, *claudecli.Provider, error) {
+					budget := judgeMaxCalls
+					if budget <= 0 {
+						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
+					}
+					return newGateReviewer(model, budget, forbidden)
+				}
+			}
 			res, err := promoteInstincts(homunculus.NewLayout(), opt, time.Now())
 			if err != nil {
 				return err
 			}
 			renderPromote(cmd.OutOrStdout(), res)
+			if res.judgeErr != nil {
+				// Fail-closed, and said out loud: nothing was promoted, and
+				// the reason is not "nothing qualified".
+				return fmt.Errorf("instinct promote: nothing was promoted — %w", res.judgeErr)
+			}
 			if len(res.writeErrs) > 0 {
 				return fmt.Errorf("instinct promote: %d write error(s); see output", len(res.writeErrs))
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&judge, "judge", true, "run the LLM layer over what the patterns cleared (--judge=false screens with the patterns only and spends no LLM calls)")
+	cmd.Flags().StringVar(&model, "model", "", "override the claude model for the judge")
+	cmd.Flags().IntVar(&judgeMaxCalls, "judge-max-calls", 0, "cap the judge's LLM calls for this run (default: candidates x votes, capped)")
 	cmd.Flags().IntVar(&opt.minProjects, "min-projects", promoteMinProjects, "minimum projects an instinct must appear in")
 	cmd.Flags().Float64Var(&opt.minConfidence, "min-confidence", promoteMinConfidence, "minimum mean confidence to promote")
 	// Preview by default — promote mutates the shared global corpus, so a
