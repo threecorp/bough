@@ -153,7 +153,7 @@ func TestCopyProject_FollowsDedupInstinctsSymlink(t *testing.T) {
 
 	// Act
 	dst := filepath.Join(t.TempDir(), "new")
-	if err := copyProject(newDir, dst); err != nil {
+	if err := copyProject(newDir, dst, nil); err != nil {
 		t.Fatalf("copyProject: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestCopyProject_CopiesRegularFilesAndToleratesDangling(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "out")
-	if err := copyProject(src, dst); err != nil {
+	if err := copyProject(src, dst, nil); err != nil {
 		t.Fatalf("copyProject must tolerate a dangling symlink: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "instincts", "personal", "real.md")); err != nil {
@@ -206,7 +206,7 @@ func TestCopyProject_NormalizesCorruptInstinct(t *testing.T) {
 	writeFile(t, filepath.Join(src, "instincts", "personal", "heal-me.md"), corrupt)
 
 	dst := filepath.Join(t.TempDir(), "out")
-	if err := copyProject(src, dst); err != nil {
+	if err := copyProject(src, dst, nil); err != nil {
 		t.Fatalf("copyProject: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestCopyProject_FollowsFileSymlink(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "out")
-	if err := copyProject(src, dst); err != nil {
+	if err := copyProject(src, dst, nil); err != nil {
 		t.Fatalf("copyProject: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "MEMORY.md"))
