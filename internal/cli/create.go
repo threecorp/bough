@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/template"
 
 	"github.com/ikeikeikeike/bough/internal/allocator"
 	"github.com/ikeikeikeike/bough/internal/backend"
@@ -315,6 +317,12 @@ func startEngines(
 		extras := buildEngineExtras(eng, detected)
 		ports := []engineapi.PortSpec{{Role: "main", Port: port}}
 		resources := toResourceSpecs(eng.InitialResources)
+		// Resolved before Up so a bad template fails here rather than
+		// after the engine has been started.
+		plugins, err := toPluginSpecs(eng.Plugins, eng.Version)
+		if err != nil {
+			return engines, fmt.Errorf("%s: %w", eng.Kind, err)
+		}
 		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind))
 
 		// Up + ReadyCheck can block for seconds (image pull, the mysql
@@ -332,7 +340,7 @@ func startEngines(
 				SocketDir:        eng.SocketDir,
 				InitialResources: resources,
 				Extras:           extras,
-				Plugins:          toPluginSpecs(eng.Plugins),
+				Plugins:          plugins,
 			}); err != nil {
 				return nil, fmt.Errorf("%s Up: %w", eng.Kind, err)
 			}
@@ -996,12 +1004,40 @@ func toResourceSpecs(in []config.InitialResource) []engineapi.ResourceSpec {
 	return out
 }
 
-func toPluginSpecs(in []config.EnginePlugin) []engineapi.PluginSpec {
+// toPluginSpecs converts declared engine plugins to their wire form,
+// expanding `{{ .Version }}` in each Location against the engine's own
+// version. A third-party plugin archive is built for one exact engine
+// version and its URL says so, so without the template that version is
+// written twice and a drift is only discovered by the engine refusing to
+// boot — long after Up returns.
+func toPluginSpecs(in []config.EnginePlugin, version string) ([]engineapi.PluginSpec, error) {
 	out := make([]engineapi.PluginSpec, len(in))
 	for i, p := range in {
-		out[i] = engineapi.PluginSpec{ID: p.ID, Location: p.Location}
+		loc, err := expandPluginLocation(p.Location, version)
+		if err != nil {
+			return nil, fmt.Errorf("plugins[%d] (%s): %w", i, p.ID, err)
+		}
+		out[i] = engineapi.PluginSpec{ID: p.ID, Location: loc}
 	}
-	return out
+	return out, nil
+}
+
+// expandPluginLocation renders one Location. Locations without an action
+// skip the template engine entirely — the common case is a plain URL or
+// an empty string for an official plugin.
+func expandPluginLocation(location, version string) (string, error) {
+	if !strings.Contains(location, "{{") {
+		return location, nil
+	}
+	tpl, err := template.New("location").Option("missingkey=error").Parse(location)
+	if err != nil {
+		return "", fmt.Errorf("parse location %q: %w", location, err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, struct{ Version string }{Version: version}); err != nil {
+		return "", fmt.Errorf("execute location %q: %w", location, err)
+	}
+	return buf.String(), nil
 }
 
 // resolveRegistryPath picks the v0.11 canonical `.bough/ports.json`

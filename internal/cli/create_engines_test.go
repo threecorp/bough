@@ -66,9 +66,21 @@ func TestToPluginSpecs(t *testing.T) {
 				{ID: "analysis-sudachi", Location: "https://example.com/sudachi.zip"},
 			},
 		},
+		{
+			"{{ .Version }} expands to the engine's version",
+			[]config.EnginePlugin{
+				{ID: "analysis-sudachi", Location: "https://example.com/es-{{ .Version }}-sudachi.zip"},
+			},
+			[]engineapi.PluginSpec{
+				{ID: "analysis-sudachi", Location: "https://example.com/es-9.4.1-sudachi.zip"},
+			},
+		},
 	}
 	for _, c := range cases {
-		got := toPluginSpecs(c.in)
+		got, err := toPluginSpecs(c.in, "9.4.1")
+		if err != nil {
+			t.Fatalf("%s: toPluginSpecs(%v) returned %v", c.name, c.in, err)
+		}
 		if len(got) != len(c.want) {
 			t.Fatalf("%s: toPluginSpecs(%v) = %v, want %v", c.name, c.in, got, c.want)
 		}
@@ -77,6 +89,22 @@ func TestToPluginSpecs(t *testing.T) {
 				t.Errorf("%s: toPluginSpecs(%v)[%d] = %+v, want %+v", c.name, c.in, i, got[i], c.want[i])
 			}
 		}
+	}
+}
+
+// TestToPluginSpecs_RejectsBrokenTemplate keeps a malformed location
+// from reaching Up: the engine would install a plugin archive whose URL
+// still carries template syntax, and the failure would surface as an
+// engine that refuses to boot rather than as a config error.
+func TestToPluginSpecs_RejectsBrokenTemplate(t *testing.T) {
+	_, err := toPluginSpecs([]config.EnginePlugin{
+		{ID: "analysis-sudachi", Location: "https://example.com/es-{{ .Version -sudachi.zip"},
+	}, "9.4.1")
+	if err == nil {
+		t.Fatal("toPluginSpecs accepted an unparseable location")
+	}
+	if !strings.Contains(err.Error(), "analysis-sudachi") {
+		t.Errorf("error %q does not name the offending plugin", err)
 	}
 }
 
@@ -145,6 +173,20 @@ func TestBuildEngineExtras_NonComposeEngineUnaffected(t *testing.T) {
 		if strings.HasPrefix(k, "compose.") {
 			t.Errorf("non-compose engine got a compose.* extras key: %q", k)
 		}
+	}
+}
+
+// TestBuildEngineExtras_CarriesVersion pins the one place the typed
+// engines[].version field is consumed: it reaches the plugin as
+// extras["version"] and nowhere else, so a dropped copy would leave
+// every plugin resolving its own default in silence.
+func TestBuildEngineExtras_CarriesVersion(t *testing.T) {
+	got := buildEngineExtras(config.Engine{Kind: "elasticsearch", Version: "9.4.1"}, "docker")
+	if got["version"] != "9.4.1" {
+		t.Errorf(`extras["version"] = %q, want "9.4.1"`, got["version"])
+	}
+	if _, ok := buildEngineExtras(config.Engine{Kind: "elasticsearch"}, "docker")["version"]; ok {
+		t.Error(`extras carries a "version" key for an engine that declares none`)
 	}
 }
 
