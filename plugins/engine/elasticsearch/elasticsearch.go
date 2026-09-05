@@ -72,6 +72,12 @@ const (
 	// shutdown budget matches the docker backend's dockerStopTimeoutSec
 	// (docker.go) rather than the shorter 10s mysql / redis use.
 	defaultGracefulSecs = 60
+	// nixPackageAttr / nixPinnedVersion describe what nix/flake.nix runs.
+	// nixpkgs carries no Elasticsearch 8 or 9, so the nix backend is the
+	// 7 line and nothing else; TestDeployFlake_extractsEmbeddedAssets
+	// greps the deployed flake for the attribute so the two cannot drift.
+	nixPackageAttr   = "pkgs.elasticsearch7"
+	nixPinnedVersion = "7"
 )
 
 // heapSizePattern matches a JVM heap size like "512m", "1g", "2048k"
@@ -122,6 +128,11 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("elasticsearch: Up: invalid port %d (Ports=%v)", port, req.Ports)
+	}
+	// Checked before anything is written: a version this backend cannot
+	// run must not leave a flake dir or a startup log behind.
+	if err := procutil.CheckNixVersion("elasticsearch", req.Extras["version"], nixPinnedVersion, nixPackageAttr); err != nil {
+		return err
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
 	if err := procutil.DeployFlake(nixAssets, "nix", flakeDir); err != nil {

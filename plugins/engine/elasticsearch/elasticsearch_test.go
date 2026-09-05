@@ -121,6 +121,33 @@ func TestProvider_Up_InvalidHeapRejectedBeforeLogFileOpen(t *testing.T) {
 	}
 }
 
+// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the other
+// half of engines[].version: nixpkgs carries no Elasticsearch 8 or 9, so
+// a 9.x version used to be accepted here and silently start the flake's
+// 7 line. Like the heap check above, it must refuse before anything is
+// written — no flake dir, no startup log.
+func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	err := p.Up(context.Background(), &api.UpReq{
+		WorktreeRoot: tmp,
+		Ports:        []api.PortSpec{{Role: "main", Port: 59200}},
+		Extras:       map[string]string{"version": "9.4.1"},
+	})
+	if err == nil {
+		t.Fatal("Up with version 9.4.1 on the nix backend = nil error, want an error")
+	}
+	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Up error = %q, want it to mention %q", err, want)
+		}
+	}
+	flakeDir := filepath.Join(tmp, flakeDirRelative)
+	if _, statErr := os.Stat(flakeDir); statErr == nil {
+		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
+	}
+}
+
 func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "extracted")
@@ -142,7 +169,7 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 		`BOUGH_ELASTICSEARCH_PORT`,
 		`BOUGH_ELASTICSEARCH_DATADIR`,
 		`BOUGH_ELASTICSEARCH_HEAP`,
-		`pkgs.elasticsearch7`,
+		nixPackageAttr,
 		`discovery.type=single-node`,
 		`xpack.security.enabled=false`,
 		`_cluster/health`,

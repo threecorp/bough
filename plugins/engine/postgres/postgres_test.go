@@ -76,6 +76,32 @@ func TestProvider_EnvVars_socketDirDefault(t *testing.T) {
 	}
 }
 
+// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the nix half
+// of engines[].version: the flake pins pkgs.postgresql_16, so
+// `version: "17"` used to be accepted and silently start 16. It must
+// refuse before anything is written — no flake dir, no startup log.
+func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	err := p.Up(context.Background(), &api.UpReq{
+		WorktreeRoot: tmp,
+		Ports:        []api.PortSpec{{Role: "main", Port: 50432}},
+		Extras:       map[string]string{"version": "17"},
+	})
+	if err == nil {
+		t.Fatal("Up with version 17 on the nix backend = nil error, want an error")
+	}
+	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Up error = %q, want it to mention %q", err, want)
+		}
+	}
+	flakeDir := filepath.Join(tmp, flakeDirRelative)
+	if _, statErr := os.Stat(flakeDir); statErr == nil {
+		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
+	}
+}
+
 func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "extracted")
@@ -97,7 +123,7 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 		`BOUGH_POSTGRES_PORT`,
 		`BOUGH_POSTGRES_SOCKET_DIR`,
 		`BOUGH_POSTGRES_DATADIR`,
-		`pkgs.postgresql_16`,
+		nixPackageAttr,
 		`listen_addresses`,
 		`socketDir`,
 	}

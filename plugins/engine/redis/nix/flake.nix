@@ -52,9 +52,10 @@
             ];
             services.redis."bough" = {
               enable = true;
-              # Redis 7 — current stable line; pin the major so a
-              # `nix flake update` upstream doesn't silently bump under
-              # a long-lived worktree.
+              # pkgs.redis is nixpkgs' only redis attribute; at the rev
+              # flake.lock pins it is the 8 line. redis.go's
+              # nixPinnedVersion records that, since the attribute name
+              # does not.
               package = pkgs.redis;
               dataDir = dataDir;
               bind = "127.0.0.1";

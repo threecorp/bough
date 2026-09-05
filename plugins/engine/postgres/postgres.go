@@ -67,6 +67,12 @@ const (
 	startupLogRelative  = ".local/bough-postgres-startup.log"
 	defaultGracefulSecs = 10
 	socketPrefix        = "bough-postgres"
+	// nixPackageAttr / nixPinnedVersion describe what nix/flake.nix runs.
+	// The attribute is the only version fact the flake carries (the patch
+	// level lives in nix/flake.lock), and TestDeployFlake_extractsEmbeddedAssets
+	// greps the deployed flake for it so the two cannot drift.
+	nixPackageAttr   = "pkgs.postgresql_16"
+	nixPinnedVersion = "16"
 )
 
 // Up extracts the embedded services-flake wrapper into the worktree
@@ -85,6 +91,11 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("postgres: Up: invalid port %d (Ports=%v)", port, req.Ports)
+	}
+	// Checked before anything is written: a version this backend cannot
+	// run must not leave a flake dir or a startup log behind.
+	if err := procutil.CheckNixVersion("postgres", req.Extras["version"], nixPinnedVersion, nixPackageAttr); err != nil {
+		return err
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
 	if err := procutil.DeployFlake(nixAssets, "nix", flakeDir); err != nil {

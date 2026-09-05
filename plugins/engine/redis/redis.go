@@ -62,6 +62,13 @@ const (
 	flakeDirRelative    = ".local/bough-redis-flake"
 	startupLogRelative  = ".local/bough-redis-startup.log"
 	defaultGracefulSecs = 10
+	// nixPackageAttr / nixPinnedVersion describe what nix/flake.nix runs.
+	// pkgs.redis is unversioned, so this const is the only place the line
+	// it resolves to at the pinned nixpkgs rev is written down;
+	// TestDeployFlake_extractsEmbeddedAssets greps the deployed flake for
+	// the attribute so the two cannot drift.
+	nixPackageAttr   = "pkgs.redis"
+	nixPinnedVersion = "8"
 )
 
 // Up extracts the embedded services-flake wrapper into the worktree
@@ -80,6 +87,11 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("redis: Up: invalid port %d (Ports=%v)", port, req.Ports)
+	}
+	// Checked before anything is written: a version this backend cannot
+	// run must not leave a flake dir or a startup log behind.
+	if err := procutil.CheckNixVersion("redis", req.Extras["version"], nixPinnedVersion, nixPackageAttr); err != nil {
+		return err
 	}
 	flakeDir := filepath.Join(req.WorktreeRoot, flakeDirRelative)
 	if err := procutil.DeployFlake(nixAssets, "nix", flakeDir); err != nil {

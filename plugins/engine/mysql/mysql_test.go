@@ -76,6 +76,32 @@ func TestProvider_EnvVars_socketDirDefault(t *testing.T) {
 	}
 }
 
+// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the nix half
+// of engines[].version: the flake pins pkgs.mysql84, so a version off
+// that line used to be accepted and silently start 8.4 anyway. It must
+// refuse before anything is written — no flake dir, no startup log.
+func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	err := p.Up(context.Background(), &api.UpReq{
+		WorktreeRoot: tmp,
+		Ports:        []api.PortSpec{{Role: "main", Port: 43306}},
+		Extras:       map[string]string{"version": "9"},
+	})
+	if err == nil {
+		t.Fatal("Up with version 9 on the nix backend = nil error, want an error")
+	}
+	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Up error = %q, want it to mention %q", err, want)
+		}
+	}
+	flakeDir := filepath.Join(tmp, flakeDirRelative)
+	if _, statErr := os.Stat(flakeDir); statErr == nil {
+		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
+	}
+}
+
 func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "extracted")
@@ -97,7 +123,7 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 		`BOUGH_MYSQL_PORT`,
 		`BOUGH_MYSQL_SOCKET_DIR`,
 		`BOUGH_MYSQL_DATADIR`,
-		`pkgs.mysql84`,
+		nixPackageAttr,
 		`mysqlx = "OFF"`,
 		`lib.mkForce`, // readiness probe override
 	}

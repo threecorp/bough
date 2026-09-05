@@ -61,6 +61,33 @@ func TestProvider_EnvVars(t *testing.T) {
 	}
 }
 
+// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the nix half
+// of engines[].version: pkgs.redis is the 8 line at the pinned nixpkgs
+// rev, so `version: "7"` — the docker default, and what a project
+// switching backends would carry over — used to be accepted and silently
+// start 8. It must refuse before anything is written.
+func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	err := p.Up(context.Background(), &api.UpReq{
+		WorktreeRoot: tmp,
+		Ports:        []api.PortSpec{{Role: "main", Port: 53379}},
+		Extras:       map[string]string{"version": "7"},
+	})
+	if err == nil {
+		t.Fatal("Up with version 7 on the nix backend = nil error, want an error")
+	}
+	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Up error = %q, want it to mention %q", err, want)
+		}
+	}
+	flakeDir := filepath.Join(tmp, flakeDirRelative)
+	if _, statErr := os.Stat(flakeDir); statErr == nil {
+		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
+	}
+}
+
 func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "extracted")
@@ -81,7 +108,7 @@ func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
 		`process-compose-flake.url`,
 		`BOUGH_REDIS_PORT`,
 		`BOUGH_REDIS_DATADIR`,
-		`pkgs.redis`,
+		nixPackageAttr,
 		`bind = "127.0.0.1"`,
 	}
 	for _, c := range checks {
