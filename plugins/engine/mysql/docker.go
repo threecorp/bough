@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,7 +54,6 @@ import (
 
 const (
 	dockerEngine         = "mysql"
-	dockerDefaultImage   = "mysql:8.4"
 	dockerInternalPort   = "3306/tcp"
 	dockerInternalMysqlx = "33060/tcp"
 	dockerDataDir        = "/var/lib/mysql"
@@ -61,16 +61,15 @@ const (
 	dockerReadyPollMS    = 500
 )
 
-// pickDockerImage honours `extras["docker.image"]` and falls back to the
-// version-derived tag (`mysql:<version>`), then to dockerDefaultImage.
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return "mysql:" + v
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. Docker Hub publishes short and
+// full tags alike (8.4, 9, 8.4.5); a variant such as 8.4-oracle needs
+// the docker.image escape hatch.
+var dockerImage = api.DockerImage{
+	Image:      "mysql:%s",
+	Default:    "8.4",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+){0,2}$`),
+	TagHint:    "a version tag such as 8.4 or 9",
 }
 
 func dockerContainerName(port int) string {
@@ -130,13 +129,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("mysql docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	// Idempotency: claude --resume re-fires WorktreeCreate, so an

@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -49,23 +50,20 @@ import (
 
 const (
 	dockerEngine         = "postgres"
-	dockerDefaultImage   = "postgres:16-alpine"
 	dockerInternalPort   = "5432/tcp"
 	dockerDataDir        = "/var/lib/postgresql/data"
 	dockerStopTimeoutSec = 15
 	dockerReadyPollMS    = 500
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		// Default to the alpine variant for v0.2; users who need glibc
-		// can override via extras["docker.image"]="postgres:16".
-		return fmt.Sprintf("postgres:%s-alpine", v)
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. The alpine variant is the
+// default; a glibc build needs extras["docker.image"]="postgres:16".
+var dockerImage = api.DockerImage{
+	Image:      "postgres:%s-alpine",
+	Default:    "16",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+)?$`),
+	TagHint:    "a major or major.minor tag such as 16 or 17",
 }
 
 func dockerContainerName(port int) string {
@@ -104,13 +102,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("postgres docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("postgres docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)

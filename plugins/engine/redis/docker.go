@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -49,21 +50,20 @@ import (
 
 const (
 	dockerEngine         = "redis"
-	dockerDefaultImage   = "redis:7-alpine"
 	dockerInternalPort   = "6379/tcp"
 	dockerDataDir        = "/data"
 	dockerStopTimeoutSec = 5
 	dockerReadyPollMS    = 300
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return fmt.Sprintf("redis:%s-alpine", v)
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. The alpine variant is the
+// default (~5 MB); a glibc build needs extras["docker.image"]="redis:7".
+var dockerImage = api.DockerImage{
+	Image:      "redis:%s-alpine",
+	Default:    "7",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+){0,2}$`),
+	TagHint:    "a version tag such as 7 or 8",
 }
 
 func dockerContainerName(port int) string {
@@ -95,13 +95,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("redis docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("redis docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)

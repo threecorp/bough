@@ -67,6 +67,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -82,7 +83,6 @@ import (
 
 const (
 	dockerEngine         = "elasticsearch"
-	dockerDefaultImage   = "docker.elastic.co/elasticsearch/elasticsearch:7.17.29"
 	dockerInternalHTTP   = "9200/tcp"
 	dockerInternalTrans  = "9300/tcp"
 	dockerDataDir        = "/usr/share/elasticsearch/data"
@@ -91,14 +91,16 @@ const (
 	dockerReadyPollMS    = 1000
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return "docker.elastic.co/elasticsearch/elasticsearch:" + v
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. docker.elastic.co publishes
+// only full patch tags — 7, 9 and 9.4 have never existed there — so a
+// major-only version is refused rather than turned into a ref no pull
+// can resolve.
+var dockerImage = api.DockerImage{
+	Image:      "docker.elastic.co/elasticsearch/elasticsearch:%s",
+	Default:    "9.5.3",
+	TagPattern: regexp.MustCompile(`^\d+\.\d+\.\d+$`),
+	TagHint:    "a full x.y.z tag, e.g. 9.5.3",
 }
 
 func pickHeap(req *api.UpReq) string {
@@ -326,13 +328,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("elasticsearch docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
