@@ -23,10 +23,14 @@ and the suite will treat the clause as not-applicable rather than failed.
    where `<port>` is the value of the `Role: "main"` entry in
    `UpReq.Ports` (or the first entry for engines that emit a single
    port). Multi-port engines bind every entry in `Ports`.
-2. **`Up` pulls the image** declared by `Extras["docker.image"]` (or the
-   plugin default if absent) when it is not already cached. Pull failures
-   surface as a non-nil error from `Up`; the suite asserts this via
-   `Fault_ImagePullFailure`.
+2. **`Up` pulls the image** declared by `Extras["docker.image"]`, else the
+   one the plugin derives from `Extras["version"]`, else the plugin
+   default, when it is not already cached. Pull failures surface as a
+   non-nil error from `Up`; the suite asserts this via
+   `Fault_ImagePullFailure`. A version the active backend cannot honour
+   MUST come back as an `Up` error naming a version that works — never as
+   a silent substitution. The host expands `{{ .Version }}` in each
+   `PluginSpec.Location` before `Up`, so a plugin sees a finished URL.
 3. **`Up` is up-or-reuse**: if a container with the canonical name is
    already running, `Up` returns nil without recreating it. The suite
    asserts this in the `UpReuse` phase — it calls `Up` a second time

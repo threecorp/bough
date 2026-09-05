@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`engines[].version` is honoured or refused, never silently ignored.**
+  The field was required of every engine and then read by half of one
+  backend. On Nix it was not read at all: `version: "17"` on postgres
+  started the flake's pinned 16, `version: "7"` on redis started 8, and
+  an Elasticsearch 9 version started 7.17 — the YAML claiming one thing
+  and the running engine being another, with nothing to notice it. Each
+  plugin now records the line its bundled flake actually runs and refuses
+  anything off it before deploying the flake, naming both ways forward
+  (a version on that line, or `backend: docker`). On Docker the version
+  is a tag fragment, and a shape the registry does not publish is now
+  refused at `Up` rather than at the pull: `version: "7"` on
+  Elasticsearch — the value the README itself suggested — became a ref
+  Elastic has never published, and surfaced as "manifest unknown" naming
+  neither the YAML key nor the escape hatch. **This is a behaviour change
+  for Nix users whose version never matched the flake**; the fix is one
+  line of YAML either way.
+
+### Changed
+
+- **Elasticsearch runs the 9.x line by default.** The Docker default was
+  the last 7.17 patch, a line Elastic ended support for in January 2026.
+  Nothing in the container's configuration was tied to it — single-node
+  discovery, the disabled security realm and the
+  `elasticsearch-plugins.yml` install path all hold on 9.x — so any
+  published `x.y.z` runs. The Nix backend stays on 7: nixpkgs carries no
+  Elasticsearch 8 or 9. `BOUGH_CONFORMANCE_ES_IMAGE` runs the conformance
+  suite against another line.
+
+### Added
+
+- **`{{ .Version }}` in `plugins[].location`.** A third-party engine
+  plugin's archive is built for one exact engine version and its URL says
+  so, which meant writing that version twice and discovering a drift as a
+  ready-check timeout — the engine refuses to boot on a plugin built for
+  another version. The location is now a template over the engine's own
+  version, rendered before `Up`.
+
 ## v0.26.0
 
 ### Fixed

@@ -236,7 +236,7 @@ repositories:
 
 engines:
   - kind: mysql           # plugin discovery key (matches bough-plugin-mysql)
-    version: "8.4"
+    version: "8.4"        # see "Engine versions" below — the two backends read it differently
     port_ranges:
       main: [42000, 44999]
     socket_dir: "/tmp"
@@ -271,7 +271,7 @@ engines:
   # files a plugin needs at runtime (e.g. an analyzer dictionary) mount
   # from a host dir via extras.es.config_mount.
   # - kind: elasticsearch
-  #   version: "7"
+  #   version: "9.5.3"            # Elastic publishes only full x.y.z tags
   #   port_ranges:
   #     main: [56000, 58999]
   #   extras:
@@ -280,7 +280,7 @@ engines:
   #   plugins:
   #     - id: analysis-icu          # official plugin: id only
   #     - id: analysis-example      # third-party plugin: id + a direct download URL
-  #       location: "https://example.com/analysis-example-7.17.0.zip"
+  #       location: "https://example.com/analysis-example-{{ .Version }}.zip"
 
 ports:
   api:    { range: [45000, 47999] }
@@ -294,6 +294,31 @@ teardown:
   remove_datadir: true
   graceful_timeout_sec: 10
 ```
+
+### Engine versions
+
+`engines[].version` is a tag fragment on the Docker backend and a line
+check on the Nix backend. The Nix flakes each bundle one nixpkgs
+package, so a version off that line is refused at startup rather than
+quietly replaced by the pinned one.
+
+| kind | docker image | docker default | nix line (package) |
+|---|---|---|---|
+| `mysql` | `mysql:<version>` | `8.4` | `8.4` (`pkgs.mysql84`) |
+| `postgres` | `postgres:<version>-alpine` | `16` | `16` (`pkgs.postgresql_16`) |
+| `redis` | `redis:<version>-alpine` | `7` | `8` (`pkgs.redis`) |
+| `elasticsearch` | `docker.elastic.co/elasticsearch/elasticsearch:<version>` | `9.5.3` | `7` (`pkgs.elasticsearch7`) |
+| `compose` | — the wrapped compose file owns the image | — | — |
+
+Two escape hatches: `extras.docker.image` sets the image ref verbatim
+(the only way to a variant tag such as `mysql:8.4-oracle`), and
+`backend:` picks the backend that can run the version you want.
+Elasticsearch needs it — nixpkgs carries no 8 or 9, and Elastic
+publishes no floating major tag, so no single spelling works on both.
+
+Changing the version of a running engine wants a fresh worktree: an
+Elasticsearch 7 data directory does not open under 9, and the same holds
+across PostgreSQL majors. Otherwise remove `.local/<kind>-data` first.
 
 Then wire it into Claude Code's `WorktreeCreate` / `WorktreeRemove`
 hooks in `.claude/settings.json`. `bough claude hook install` writes
@@ -520,8 +545,8 @@ bough/
 │       ├── api/                            gRPC EngineProvider contract + Go interface
 │       ├── mysql/                          MySQL 8.4 provider + embedded services-flake
 │       ├── postgres/                       PostgreSQL 16 provider + embedded services-flake
-│       ├── redis/                          Redis 7 provider + embedded services-flake
-│       ├── elasticsearch/                  Elasticsearch 7 provider + process-compose-flake
+│       ├── redis/                          Redis provider + embedded services-flake
+│       ├── elasticsearch/                  Elasticsearch provider + process-compose-flake
 │       └── compose/                        Wraps an existing docker-compose.yml/service
 ├── tests/
 │   └── integration/                        real-services E2E (build tag: integration)
@@ -655,7 +680,7 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 v0.22.0 (current). Three of the four bundled
 engine plugins (`bough-plugin-{mysql,redis,elasticsearch}`) are
 battle-tested in a real Go + Rails + Remix multi-sub-repo monorepo
-(MySQL 8.4 LTS + Redis 7 + Elasticsearch 7) on the Docker backend; the
+(MySQL 8.4 LTS + Redis 7 + Elasticsearch) on the Docker backend; the
 Nix backend remains supported via auto-detect and is the default when
 nix-with-flakes is on `PATH`. The Postgres plugin
 (`bough-plugin-postgres`) is integration-test-only — it has not run in

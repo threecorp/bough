@@ -74,7 +74,11 @@ the prose contract every invariant traces back to.
 
 `conformance.Config` knobs you'll touch most often:
 
-- **`Image`** — container image ref; ends up in `extras["docker.image"]`.
+- **`Image`** — container image ref; ends up in `extras["docker.image"]`,
+  which bypasses whatever mapping your plugin applies to
+  `extras["version"]`. `api.DockerImage` is that mapping for the bundled
+  plugins: an image template, a default tag and the tag shapes the
+  registry publishes, so a version it cannot express is refused at `Up`.
 - **`Extras`** — anything else the plugin reads from `UpReq.Extras`.
   `backend=docker` is injected by the suite if you don't override it.
 - **`ReadyTimeout`** — how long `ReadyCheck` may poll. Defaults to 60 s;
