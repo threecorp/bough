@@ -313,12 +313,16 @@ quietly replaced by the pinned one.
 Two escape hatches: `extras.docker.image` sets the image ref verbatim
 (the only way to a variant tag such as `mysql:8.4-oracle`), and
 `backend:` picks the backend that can run the version you want.
-Elasticsearch needs it — nixpkgs carries no 8 or 9, and Elastic
-publishes no floating major tag, so no single spelling works on both.
+Elasticsearch needs it for anything past 7 — nixpkgs carries no 8 or 9,
+so only a `7.x.y` spelling (`7.17.29`, say) satisfies both backends.
+Likewise `redis`, whose two backends sit on different lines.
 
 Changing the version of a running engine wants a fresh worktree: an
 Elasticsearch 7 data directory does not open under 9, and the same holds
-across PostgreSQL majors. Otherwise remove `.local/<kind>-data` first.
+across PostgreSQL majors. Otherwise `bough remove` the worktree first —
+on the Docker backend a still-running container is reused by name, so a
+new `version:` is not picked up until that container is gone, and its
+`.local/<kind>-data` is removed with it.
 
 Then wire it into Claude Code's `WorktreeCreate` / `WorktreeRemove`
 hooks in `.claude/settings.json`. `bough claude hook install` writes

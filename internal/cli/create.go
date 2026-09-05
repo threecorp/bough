@@ -304,8 +304,21 @@ func startEngines(
 		return nil, err
 	}
 
+	// Resolved for every engine before the first Up, so a bad location
+	// template fails while nothing has been started. Resolving it inside
+	// the loop below would let engine 1 come up before engine 2's typo
+	// is ever looked at.
+	enginePlugins := make([][]engineapi.PluginSpec, len(cfg.Engines))
+	for i, eng := range cfg.Engines {
+		specs, err := toPluginSpecs(eng.Plugins, eng.Version)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", eng.Kind, err)
+		}
+		enginePlugins[i] = specs
+	}
+
 	engines := make([]engineInstance, 0, len(cfg.Engines))
-	for _, eng := range cfg.Engines {
+	for i, eng := range cfg.Engines {
 		port := enginePorts[eng.Kind]
 		prov, kill, err := discover(eng.Kind)
 		if err != nil {
@@ -317,12 +330,6 @@ func startEngines(
 		extras := buildEngineExtras(eng, detected)
 		ports := []engineapi.PortSpec{{Role: "main", Port: port}}
 		resources := toResourceSpecs(eng.InitialResources)
-		// Resolved before Up so a bad template fails here rather than
-		// after the engine has been started.
-		plugins, err := toPluginSpecs(eng.Plugins, eng.Version)
-		if err != nil {
-			return engines, fmt.Errorf("%s: %w", eng.Kind, err)
-		}
 		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind))
 
 		// Up + ReadyCheck can block for seconds (image pull, the mysql
@@ -340,7 +347,7 @@ func startEngines(
 				SocketDir:        eng.SocketDir,
 				InitialResources: resources,
 				Extras:           extras,
-				Plugins:          plugins,
+				Plugins:          enginePlugins[i],
 			}); err != nil {
 				return nil, fmt.Errorf("%s Up: %w", eng.Kind, err)
 			}

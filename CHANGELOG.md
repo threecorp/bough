@@ -4,9 +4,11 @@
 
 ### Fixed
 
-- **`engines[].version` is honoured or refused, never silently ignored.**
-  The field was required of every engine and then read by half of one
-  backend. On Nix it was not read at all: `version: "17"` on postgres
+- **`engines[].version` is honoured or refused by every engine that
+  provisions one, never silently ignored.** (`kind: compose` is the
+  exception by design: the compose file it wraps owns the image, and
+  its `version:` stays descriptive.) The field was required of every
+  engine and then read by half of one backend. On Nix it was not read at all: `version: "17"` on postgres
   started the flake's pinned 16, `version: "7"` on redis started 8, and
   an Elasticsearch 9 version started 7.17 — the YAML claiming one thing
   and the running engine being another, with nothing to notice it. Each

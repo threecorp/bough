@@ -1,7 +1,9 @@
 //go:build darwin || linux
 
-// Package redis implements the bough EngineProvider for Redis 7 via
-// services-flake. The plugin binary spawned from
+// Package redis implements the bough EngineProvider for Redis via
+// services-flake. The docker backend defaults to the 7 line; this nix
+// path runs whatever pkgs.redis resolves to (the 8 line at the pinned
+// nixpkgs rev — see nixPinnedVersion). The plugin binary spawned from
 // cmd/bough-plugin-redis/main.go wraps this Provider as a Hashicorp
 // go-plugin gRPC server.
 //
@@ -46,7 +48,8 @@ import (
 //go:embed nix
 var nixAssets embed.FS
 
-// Provider implements api.EngineProvider for Redis 7 via services-flake.
+// Provider implements api.EngineProvider for Redis: the docker backend
+// in docker.go, the nix backend here via services-flake.
 type Provider struct {
 	FlakeRefOverride string
 	PortLow          int
@@ -64,9 +67,10 @@ const (
 	defaultGracefulSecs = 10
 	// nixPackageAttr / nixPinnedVersion describe what nix/flake.nix runs.
 	// pkgs.redis is unversioned, so this const is the only place the line
-	// it resolves to at the pinned nixpkgs rev is written down;
-	// TestDeployFlake_extractsEmbeddedAssets greps the deployed flake for
-	// the attribute so the two cannot drift.
+	// it resolves to at the pinned nixpkgs rev is written down. Unlike
+	// the versioned attributes the sibling plugins use (pkgs.mysql84,
+	// pkgs.postgresql_16), no test can catch a drift here: re-check it by
+	// hand whenever nix/flake.lock is updated.
 	nixPackageAttr   = "pkgs.redis"
 	nixPinnedVersion = "8"
 )
