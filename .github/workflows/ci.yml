@@ -122,7 +122,7 @@ jobs:
             mysql)         docker pull mysql:8.4 ;;
             postgres)      docker pull postgres:17 ;;
             redis)         docker pull redis:7 ;;
-            elasticsearch) docker pull docker.elastic.co/elasticsearch/elasticsearch:7.17.29 ;;
+            elasticsearch) docker pull docker.elastic.co/elasticsearch/elasticsearch:9.5.3 ;;
             # compose wraps whatever image its own testdata/compose.yml
             # declares (redis:7-alpine) rather than extras["docker.image"].
             compose)       docker pull redis:7-alpine ;;

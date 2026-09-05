@@ -24,9 +24,12 @@ import (
 )
 
 const (
-	elasticsearchConformanceImage     = "docker.elastic.co/elasticsearch/elasticsearch:7.17.29"
+	elasticsearchConformanceImage     = "docker.elastic.co/elasticsearch/elasticsearch:9.5.3"
 	elasticsearchConformanceReadyMax  = 300 * time.Second // JVM warmup on cold machines
 	elasticsearchConformancePluginEnv = "BOUGH_CONFORMANCE_PLUGIN_BIN"
+	// Set to run the suite against another line (7.17.29 is the one this
+	// plugin shipped against before 9.x became the default).
+	elasticsearchConformanceImageEnv = "BOUGH_CONFORMANCE_ES_IMAGE"
 )
 
 // TestElasticsearchConformance drives the bough contract against
@@ -36,9 +39,13 @@ func TestElasticsearchConformance(t *testing.T) {
 	if bin == "" {
 		t.Skipf("set %s to the bough-plugin-elasticsearch binary path", elasticsearchConformancePluginEnv)
 	}
+	image := elasticsearchConformanceImage
+	if v := os.Getenv(elasticsearchConformanceImageEnv); v != "" {
+		image = v
+	}
 	conformance.Run(t, conformance.Config{
 		PluginBinary:    bin,
-		Image:           elasticsearchConformanceImage,
+		Image:           image,
 		ReadyTimeout:    elasticsearchConformanceReadyMax,
 		IdempotentCount: 2,
 		NativeProbe:     conformance.ElasticsearchGetRoot,

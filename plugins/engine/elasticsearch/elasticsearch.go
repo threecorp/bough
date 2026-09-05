@@ -1,8 +1,10 @@
 //go:build darwin || linux
 
 // Package elasticsearch implements the bough EngineProvider for
-// Elasticsearch 7.x via a custom process-compose entry (services-flake
-// does not ship a built-in elasticsearch module). The plugin binary
+// Elasticsearch. The docker backend runs any published x.y.z line
+// (default 9.x); this nix path runs the 7 line via a custom
+// process-compose entry, because nixpkgs carries no Elasticsearch 8 or 9
+// and services-flake ships no elasticsearch module. The plugin binary
 // spawned from cmd/bough-plugin-elasticsearch/main.go wraps this
 // Provider as a Hashicorp go-plugin gRPC server.
 //
@@ -52,8 +54,9 @@ import (
 //go:embed nix
 var nixAssets embed.FS
 
-// Provider implements api.EngineProvider for Elasticsearch 7.x via the
-// embedded process-compose-flake wrapper.
+// Provider implements api.EngineProvider for Elasticsearch: the docker
+// backend in docker.go, the nix backend here via the embedded
+// process-compose-flake wrapper.
 type Provider struct {
 	FlakeRefOverride string
 	PortLow          int

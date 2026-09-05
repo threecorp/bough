@@ -18,9 +18,10 @@
 //
 // Engine-specific choices:
 //
-//   - Default image is `docker.elastic.co/elasticsearch/elasticsearch:
-//     7.17.29` — the last 7-line LTS patch with first-class linux/arm64
-//     support. Override via `extras["docker.image"]`.
+//   - Any published `x.y.z` line runs here; the default is the current
+//     9.x patch. Elastic publishes no floating major tag, so
+//     `engines[].version` must name a full patch — see dockerImage.
+//     `extras["docker.image"]` overrides both.
 //   - `ES_JAVA_OPTS=-Xms1g -Xmx1g` deliberately undersized for laptops
 //     running 5-15 parallel worktrees. Override via
 //     `extras["es.heap"]="2g"` if a single-worktree workflow can afford
@@ -175,7 +176,7 @@ func pickMemoryLimitBytes(req *api.UpReq, heap string) (int64, error) {
 
 // pluginsYAMLFilename is the name Elastic's own Docker entrypoint looks
 // for inside the config directory. See
-// https://www.elastic.co/guide/en/elasticsearch/plugins/7.17/manage-plugins-using-configuration-file.html
+// https://www.elastic.co/docs/reference/elasticsearch/plugins/manage-plugins-using-configuration-file
 const pluginsYAMLFilename = "elasticsearch-plugins.yml"
 
 // pluginsYAMLDoc mirrors elasticsearch-plugins.yml's own shape 1:1 so
@@ -421,7 +422,7 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 			Ulimits: []*units.Ulimit{
 				// memlock unlimited so bootstrap.memory_lock can succeed.
 				{Name: "memlock", Hard: -1, Soft: -1},
-				// nofile per Elastic 7.17 docs.
+				// nofile per Elastic's docs.
 				{Name: "nofile", Hard: 65535, Soft: 65535},
 			},
 		},
