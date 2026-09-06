@@ -74,13 +74,14 @@ func RemoveIfExists(ctx context.Context, cli *client.Client, name string) error 
 // stopped container from a prior run would otherwise make the caller
 // take the docker teardown path (stop+remove the irrelevant
 // container, report success) while the real engine for this
-// worktree/port — possibly nix-backed — keeps running untouched, and
+// worktree/port keeps running untouched, and
 // a subsequent Cleanup() would then rm -rf its datadir out from under
 // it.
 //
-// Returns false on any Docker error so the caller cleanly falls
-// through to the nix path — that keeps `bough remove` working on
-// machines where Docker was uninstalled between create and remove.
+// Returns false on any Docker error, so a caller with another backend
+// registered falls through to it rather than reporting this one — that
+// keeps `bough remove` working on a machine where Docker was
+// uninstalled between create and remove.
 func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil || id == "" {

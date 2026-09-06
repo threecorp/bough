@@ -168,7 +168,7 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 // the name, including a long-stopped leftover — LookupByName lists
 // with All:true. That false positive let a stale container make
 // Down()/ReadyCheck() take the docker path against the wrong
-// container while the real (possibly nix-backed) engine kept running
+// container while the real engine for that port kept running
 // untouched, risking Cleanup() deleting its datadir out from under it.
 func TestIsBackendRunning_StoppedContainerIsNotRunning(t *testing.T) {
 	cli := newTestClient(t)

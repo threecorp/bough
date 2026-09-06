@@ -11,7 +11,7 @@
 // schema — lives here so v0.2.x bug-fixes land in one place.
 //
 // The package is darwin / linux only because the plugins themselves are
-// Unix-only (services-flake + Setsid). Keeping the build tag aligned
+// Unix-only. Keeping the build tag aligned
 // with the plugins prevents accidental Windows linking when GoReleaser
 // cross-compiles bough.
 package dockerutil

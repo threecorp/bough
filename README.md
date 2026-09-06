@@ -11,10 +11,10 @@ at the monorepo root.
 bough itself is a small Go CLI plus five engine plugins
 (`bough-plugin-{mysql,postgres,redis,elasticsearch,compose}`), wired
 together via Hashicorp go-plugin (gRPC over Unix socket). Each of the
-first four defers the actual lifecycle (`up` / `ready check` / `down`)
-to a backend you choose: today that's [services-flake][services-flake]
-on top of Nix or a direct Docker SDK backend; the host's auto-detect
-picks one based on what's on the runner. `compose` is different by
+first four provisions a bough-managed container through the Docker SDK.
+The lifecycle (`up` / `ready check` / `down`) sits behind a per-plugin
+backend seam, so a second runtime is an implementation a plugin
+registers rather than a change to the host. `compose` is different by
 design — instead of provisioning its own engine, it wraps an EXISTING
 `docker-compose.yml`/service an operator already has, giving it only
 worktree-scoped port isolation (see [Compose-wrapped
@@ -26,8 +26,6 @@ via a single YAML at the monorepo root. Engines are loaded as gRPC
 plugins, so adding a new engine (rabbitmq, kafka, nats, minio, …) never
 requires editing the host binary.
 
-[services-flake]: https://github.com/juspay/services-flake
-
 ## Cost & billing
 
 **As of 2026-06-27, with Claude Code's current subscription model, bough
@@ -37,7 +35,7 @@ that holds up:
 
 - **The worktree-isolation core** (`bough create`, the engine plugins,
   `.env.local` rendering) makes **zero** LLM calls — it is pure local
-  infrastructure (git, ports, Nix/Docker).
+  infrastructure (git, ports, Docker).
 - **The continuous-learning feature** (observe → evolve → inject) reaches
   an LLM **only** by spawning `claude --print` as a subprocess, which
   reuses your operator subscription auth (`~/.claude.json` oauth token).
@@ -72,38 +70,18 @@ subscription auth).
 ## Prerequisites
 
 bough binaries themselves are static Go executables (darwin / linux,
-arm64 / amd64) — `bough` never installs Nix or Docker for you. The
-host auto-detects which backend each plugin uses with a v0.1.x-compat
-preference for `nix` (so monorepos that adopted bough when nix was
-the only option do not silently flip to docker on upgrade):
+arm64 / amd64) — `bough` never installs Docker for you. What it needs
+is one thing:
 
-  1. nix-with-flakes on `PATH` → `nix`
-  2. else docker daemon reachable → `docker`
-  3. else: actionable error pointing at the `engines[].backend` YAML knob
+| Backend  | User must provide |
+|----------|-------------------|
+| `docker` | A Docker-compatible daemon reachable via `DOCKER_HOST` or the platform socket (Docker Desktop / OrbStack / Colima / podman with the docker socket) |
 
-In practice that means **nix users with flakes enabled** (= those who
-already installed Nix and turned on the `nix-command`/`flakes`
-experimental features before adopting bough) get `nix`; **everyone
-else (the typical install, including a bare Nix install without
-flakes)** gets `docker`. An explicit `backend: nix | docker` per
-engine in `.bough.yaml` always overrides auto-detect.
-
-| Backend  | When auto-detect picks it                            | User must provide |
-|----------|------------------------------------------------------|-------------------|
-| `docker` | nix-with-flakes not on PATH, docker daemon reachable (= typical install) | A Docker-compatible daemon (Docker Desktop / OrbStack / Colima / podman with the docker socket) |
-| `nix`    | nix-with-flakes on PATH                              | Nix with flakes enabled + network access to flakehub.com / github.com on first invocation |
-
-Cold-start cost (first `bough create` invocation on a fresh machine):
-
-| Backend                                                | Cold start          | Warm start  |
-|--------------------------------------------------------|---------------------|-------------|
-| `nix` (v0.1.0, no bundled `flake.lock`; historical)    | 5-10 min ⚠         | 10-60 s     |
-| `nix` (v0.1.1+, bundled `flake.lock`)                  | 30-60 s             | 5-10 s      |
-| `docker` (v0.2+, after image pull)                     | image pull dominant | 1-5 s       |
-
-v0.1.1 added the bundled `flake.lock` per plugin (no more flakehub.com
-round-trip on every fresh worktree); v0.2 added the Docker backend so
-users who prefer Docker over Nix can avoid Nix entirely.
+`docker` is the only backend the bundled plugins register, and the one
+an engine gets when `.bough.yaml` leaves `engines[].backend` out — the
+host does not probe for one. Cold start is the image pull; warm start
+is 1-5 s. (v0.1-v0.26 also shipped a Nix / services-flake backend; it
+was removed in v0.27.0 — see the CHANGELOG.)
 
 ## Install
 
@@ -236,14 +214,13 @@ repositories:
 
 engines:
   - kind: mysql           # plugin discovery key (matches bough-plugin-mysql)
-    version: "8.4"        # see "Engine versions" below — the two backends read it differently
+    version: "8.4"        # image tag fragment — see "Engine versions" below
     port_ranges:
       main: [42000, 44999]
-    socket_dir: "/tmp"
     initial_resources:
       - { type: database, name: demo }
-    # backend: nix        # optional; auto-detects nix-with-flakes / docker when omitted
-    # ready_timeout_sec: 600  # v0.1.1+; default 600s for nix cold paths
+    # backend: docker     # optional; docker is the only bundled backend and the default
+    # ready_timeout_sec: 600  # default 600s; covers the first image pull
 
   # Multi-port engine example — plugin lands in v0.5+; schema is ready in v0.4.
   # - kind: rabbitmq
@@ -297,32 +274,28 @@ teardown:
 
 ### Engine versions
 
-`engines[].version` is a tag fragment on the Docker backend and a line
-check on the Nix backend. The Nix flakes each bundle one nixpkgs
-package, so a version off that line is refused at startup rather than
-quietly replaced by the pinned one.
+`engines[].version` is the tag fragment of the engine's image. Each
+plugin maps it onto the image its registry publishes and refuses a
+shape that registry does not carry at `Up` — naming the YAML key and
+the escape hatch — rather than failing later at the pull.
 
-| kind | docker image | docker default | nix line (package) |
-|---|---|---|---|
-| `mysql` | `mysql:<version>` | `8.4` | `8.4` (`pkgs.mysql84`) |
-| `postgres` | `postgres:<version>-alpine` | `16` | `16` (`pkgs.postgresql_16`) |
-| `redis` | `redis:<version>-alpine` | `7` | `8` (`pkgs.redis`) |
-| `elasticsearch` | `docker.elastic.co/elasticsearch/elasticsearch:<version>` | `9.5.3` | `7` (`pkgs.elasticsearch7`) |
-| `compose` | — the wrapped compose file owns the image | — | — |
+| kind | docker image | default |
+|---|---|---|
+| `mysql` | `mysql:<version>` | `8.4` |
+| `postgres` | `postgres:<version>-alpine` | `16` |
+| `redis` | `redis:<version>-alpine` | `7` |
+| `elasticsearch` | `docker.elastic.co/elasticsearch/elasticsearch:<version>` | `9.5.3` |
+| `compose` | — the wrapped compose file owns the image | — |
 
-Two escape hatches: `extras.docker.image` sets the image ref verbatim
-(the only way to a variant tag such as `mysql:8.4-oracle`), and
-`backend:` picks the backend that can run the version you want.
-Elasticsearch needs it for anything past 7 — nixpkgs carries no 8 or 9,
-so only a `7.x.y` spelling (`7.17.29`, say) satisfies both backends.
-Likewise `redis`, whose two backends sit on different lines.
+`extras.docker.image` sets the image ref verbatim and is the only way
+to a variant tag such as `mysql:8.4-oracle`.
 
 Changing the version of a running engine wants a fresh worktree: an
 Elasticsearch 7 data directory does not open under 9, and the same holds
-across PostgreSQL majors. Otherwise `bough remove` the worktree first —
-on the Docker backend a still-running container is reused by name, so a
-new `version:` is not picked up until that container is gone, and its
-`.local/<kind>-data` is removed with it.
+across PostgreSQL majors. So `bough remove` the worktree first — a
+still-running container is reused by name, so a new `version:` is not
+picked up until that container is gone, and its `.local/<kind>-data` is
+removed with it.
 
 Then wire it into Claude Code's `WorktreeCreate` / `WorktreeRemove`
 hooks in `.claude/settings.json`. `bough claude hook install` writes
@@ -431,10 +404,10 @@ it, or start the session with `cd worktrees/<name> && claude`.
 ## Compose-wrapped services
 
 The four bundled engines above are ones bough fully provisions itself
-(nix flake or a bough-managed Docker container). `kind: compose` is
-different: it wraps a `docker-compose.yml` you already have — no
-duplicate nix flake, no second source of truth for the image/version —
-and gives it only the one thing bough is actually good at:
+(a bough-managed Docker container). `kind: compose` is different: it
+wraps a `docker-compose.yml` you already have — no second source of
+truth for the image/version — and gives it only the one thing bough is
+actually good at:
 deterministic, worktree-scoped port isolation.
 
 ```yaml
@@ -532,7 +505,6 @@ bough/
 │   ├── gitwt/                              `git worktree` wrapper
 │   ├── envwriter/                          text/template + Sprig .env.local generator
 │   ├── hooks/                              post_create / pre_remove hook runner
-│   ├── backend/                            nix / docker backend auto-detect
 │   ├── pluginhost/                         go-plugin discovery + lifecycle
 │   ├── pluginsign/                         plugin binary signature verification
 │   │                                       # continuous learning (v0.9)
@@ -547,10 +519,10 @@ bough/
 ├── plugins/
 │   └── engine/
 │       ├── api/                            gRPC EngineProvider contract + Go interface
-│       ├── mysql/                          MySQL 8.4 provider + embedded services-flake
-│       ├── postgres/                       PostgreSQL 16 provider + embedded services-flake
-│       ├── redis/                          Redis provider + embedded services-flake
-│       ├── elasticsearch/                  Elasticsearch provider + process-compose-flake
+│       ├── mysql/                          MySQL provider (Docker SDK)
+│       ├── postgres/                       PostgreSQL provider (Docker SDK)
+│       ├── redis/                          Redis provider (Docker SDK)
+│       ├── elasticsearch/                  Elasticsearch provider (Docker SDK)
 │       └── compose/                        Wraps an existing docker-compose.yml/service
 ├── tests/
 │   └── integration/                        real-services E2E (build tag: integration)
@@ -666,7 +638,7 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 |-----------|---------------------------------------------------------------------------------------------|
 | v0.1.0-α  | Nix `services-flake` backend, 4 DB plugins (mysql / postgres / redis / elasticsearch)        |
 | v0.1.1    | Bundled `flake.lock` per plugin (cold start 5-10 min → 30-60 s), `packages.default` for `nix run` / `nix profile install`, per-engine `ready_timeout_sec` config, honest README |
-| v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted |
+| v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted (the Nix half was removed in v0.27.0) |
 | v0.3.0    | Plugin conformance suite + CI matrix on real Docker — plugin authors verify their contract end-to-end with one test func, four bough-internal plugins are gated on `ubuntu-24.04` + `ubuntu-24.04-arm` × `mysql` / `postgres` / `redis` / `elasticsearch` |
 | v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning — only the plugin gRPC handshake (`DBProvider`/`BOUGH_DB_PLUGIN`) was removed in v0.5.0, the YAML-level fallback (old file name / section / field names) is still read today, see [docs/MIGRATION-v0.3-to-v0.4.md](docs/MIGRATION-v0.3-to-v0.4.md) |
 | v0.5.0-v0.8.0 | (superseded) An earlier continuous-learning design, replaced wholesale in v0.9.0; pin v0.8.1 if you depend on it |
@@ -675,18 +647,18 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 | v0.10.0-v0.20.3 | Iteration on that loop — see [CHANGELOG](CHANGELOG.md) for the per-release detail |
 | v0.21.0   | The loop stops trusting configuration and starts trusting measurement: a completion gate that decides on pull telemetry (and withdraws its own PASS when its reader cannot parse a row), `bough ops`, lifetime selector-health checks, and ECC-conformant selection — per-channel depth, a relevance floor scaled to the prompt, a restatement skip, a per-family cap whose stamped POPULATION is printed by `bough claude doctor` so an inert cap cannot hide, and the published byte budgets |
 | v0.22.0   | `claude --worktree` works against a git monorepo again: the worktree container is a work tree of its own (checked out at an empty tree, so it still starts empty), `bough doctor` names any container a host would refuse, and the release pipeline runs the published archive through the real WorktreeCreate/Remove hook contract before the release is called good |
+| v0.27.0   | Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
 
 ## Status
 
-v0.22.0 (current). Three of the four bundled
-engine plugins (`bough-plugin-{mysql,redis,elasticsearch}`) are
-battle-tested in a real Go + Rails + Remix multi-sub-repo monorepo
-(MySQL 8.4 LTS + Redis 7 + Elasticsearch) on the Docker backend; the
-Nix backend remains supported via auto-detect and is the default when
-nix-with-flakes is on `PATH`. The Postgres plugin
+Three of the four bundled engine plugins
+(`bough-plugin-{mysql,redis,elasticsearch}`) are battle-tested in a
+real Go + Rails + Remix multi-sub-repo monorepo (MySQL 8.4 LTS +
+Redis 7 + Elasticsearch) on the Docker backend — the only backend
+since v0.27.0. The Postgres plugin
 (`bough-plugin-postgres`) is integration-test-only — it has not run in
 that production monorepo. Multi-port engines (rabbitmq / kafka / NATS) are
 first-class in the contract — reference plugins are not yet bundled.
