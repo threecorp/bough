@@ -57,12 +57,14 @@ type RepoCtx struct {
 }
 
 // DBCtx is the per-worktree engine instance descriptor produced by an
-// engine plugin (mysql/postgres/redis/elasticsearch). `Socket` is the
-// absolute /tmp socket path bough has configured the server to bind,
-// mostly relevant when a consumer wants to skip TCP entirely. When a
-// given engine kind isn't configured for this worktree, its Context
-// field is left at the zero value — templates that reference it
-// produce a literal `0` / empty string rather than a template error.
+// engine plugin (mysql/postgres/redis/elasticsearch). When a given
+// engine kind isn't configured for this worktree, its Context field is
+// left at the zero value — templates that reference it produce a
+// literal `0` / empty string rather than a template error.
+//
+// Socket is always empty since the bundled engines moved to containers,
+// which publish TCP only. The field stays so a template that still
+// says `{{ .Mysql.Socket }}` renders "" instead of failing.
 type DBCtx struct {
 	Port   int
 	Host   string

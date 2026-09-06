@@ -16,7 +16,6 @@ import (
 	"text/template"
 
 	"github.com/ikeikeikeike/bough/internal/allocator"
-	"github.com/ikeikeikeike/bough/internal/backend"
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/envwriter"
 	"github.com/ikeikeikeike/bough/internal/gitwt"
@@ -127,12 +126,9 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// continue on per-repo failure because partial worktree
 	// materialisation is more useful than aborting on the first
 	// error — the operator can `bough remove` and retry. This must run
-	// BEFORE starting engines: an engine-provider repo's worktree
-	// destination and its engine's deployed flake dir are the same
-	// path (<worktreeRoot>/<repo.Name>), and `git worktree add` fails
-	// outright against a non-empty destination — populating it via
-	// deployFlake first would break worktree materialisation for that
-	// repo on every single `bough create`.
+	// BEFORE starting engines: an engine's Up may write under the
+	// engine-provider repo's worktree path, and `git worktree add`
+	// fails outright against a non-empty destination.
 	failedRepos := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
 
 	// 3. Engine plugins: discover binaries, Up + ReadyCheck each, and
@@ -150,12 +146,8 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		// The plugin subprocess's own logs are suppressed at the default
 		// Warn level, so an engine-start failure is otherwise opaque —
 		// signpost the escape hatch unless the operator already enabled
-		// it. Skip the hint when backend detection itself failed
-		// (backend.ErrNoBackend): that happens before any plugin
-		// subprocess is spawned, so there is no plugin log to re-run
-		// for, and the error already names the real remediation
-		// (engines[].backend in .bough.yaml).
-		if os.Getenv(pluginhost.EnvPluginLog) == "" && !errors.Is(err, backend.ErrNoBackend) {
+		// it.
+		if os.Getenv(pluginhost.EnvPluginLog) == "" {
 			err = fmt.Errorf("%w (re-run with %s=debug for the plugin's own logs)", err, pluginhost.EnvPluginLog)
 		}
 		return err
@@ -272,9 +264,8 @@ func allocateAllPorts(cfg *config.Config, monorepoRoot, name string) (map[string
 // so the caller's defer can kill every started subprocess without
 // further bookkeeping.
 //
-// The backend auto-detect runs at most once per `bough create`: the
-// result is reused across every engine whose YAML left Backend
-// empty; explicit YAML values bypass it entirely.
+// Every engine's `extras["backend"]` is set before Up — the YAML value
+// when there is one, engineapi.DefaultBackend otherwise.
 //
 // discover is the plugin lookup (production: pluginhost.Discover),
 // injected so tests can substitute a fake EngineProvider and pin the
@@ -290,18 +281,6 @@ func startEngines(
 	engineProviderWorktree := worktreeRoot
 	if provider := engineProviderRepo(cfg); provider != nil {
 		engineProviderWorktree = filepath.Join(worktreeRoot, provider.Name)
-	}
-
-	// A cold/NFS-mounted nix store or an unresponsive docker daemon can
-	// each take up to detectTimeout; animate a spinner across the call
-	// like every other multi-second step in create so an interactive
-	// operator sees liveness instead of a frozen prompt. No-op (and
-	// near-instant) when every engine already pins Backend explicitly.
-	sp := startSpinner(stderr, "backend: detecting nix/docker")
-	detected, err := detectBackendIfNeeded(ctx, stderr, cfg)
-	sp.Stop()
-	if err != nil {
-		return nil, err
 	}
 
 	// Resolved for every engine before the first Up, so a bad location
@@ -327,7 +306,7 @@ func startEngines(
 		engines = append(engines, engineInstance{cfg: eng, port: port, kill: kill})
 		logf(stderr, "[bough] %s: plugin discovered, starting on port %d", eng.Kind, port)
 
-		extras := buildEngineExtras(eng, detected)
+		extras := buildEngineExtras(eng)
 		ports := []engineapi.PortSpec{{Role: "main", Port: port}}
 		resources := toResourceSpecs(eng.InitialResources)
 		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind))
@@ -379,34 +358,13 @@ func startEngines(
 	return engines, nil
 }
 
-// detectBackendIfNeeded runs backend.Detect once per create call, but
-// only when at least one engine left Backend empty in the YAML.
-// Returns the detected backend ("" if not needed); fails hard on a
-// genuine detection error since every YAML-empty engine downstream
-// would inherit the empty string and pick the wrong path.
-func detectBackendIfNeeded(ctx context.Context, stderr io.Writer, cfg *config.Config) (string, error) {
-	for _, eng := range cfg.Engines {
-		if eng.Backend == "" {
-			d, err := backend.Detect(ctx)
-			if err != nil {
-				return "", err
-			}
-			logf(stderr, "[bough] backend: auto-detected %s", d)
-			return d, nil
-		}
-	}
-	return "", nil
-}
-
 // buildEngineExtras assembles the extras map the plugin Up call sees:
-// every engine-declared extra verbatim, plus `backend` (explicit YAML
-// value beats the auto-detect result, both beat the plugin default)
-// and `version` when set. Explicit beats auto-detect whether the
-// operator named the backend via the dedicated `eng.Backend` field or
-// directly through `extras.backend` — extras are documented as copied
-// verbatim, so auto-detect must only fill a genuine gap, never
-// silently discard a value already present in the map.
-func buildEngineExtras(eng config.Engine, detected string) map[string]string {
+// every engine-declared extra verbatim, plus `backend` and `version`
+// when set. The dedicated `backend:` field wins over `extras.backend`,
+// and an engine that names neither gets engineapi.DefaultBackend — the
+// host never probes for one, so a `.bough.yaml` without `backend:`
+// runs on docker.
+func buildEngineExtras(eng config.Engine) map[string]string {
 	extras := make(map[string]string, len(eng.Extras)+2)
 	for k, v := range eng.Extras {
 		extras[k] = v
@@ -416,8 +374,8 @@ func buildEngineExtras(eng config.Engine, detected string) map[string]string {
 		extras["backend"] = eng.Backend
 	case extras["backend"] != "":
 		// operator already set it via extras: — leave it alone.
-	case detected != "":
-		extras["backend"] = detected
+	default:
+		extras["backend"] = engineapi.DefaultBackend
 	}
 	if eng.Version != "" {
 		extras["version"] = eng.Version
@@ -990,15 +948,7 @@ func engineContextFor(kind string, engines []engineInstance) envwriter.DBCtx {
 		if e.cfg.Kind != kind {
 			continue
 		}
-		dir := e.cfg.SocketDir
-		if dir == "" {
-			dir = "/tmp"
-		}
-		return envwriter.DBCtx{
-			Port:   e.port,
-			Host:   "127.0.0.1",
-			Socket: filepath.Join(dir, fmt.Sprintf("bough-%s-%d.sock", kind, e.port)),
-		}
+		return envwriter.DBCtx{Port: e.port, Host: "127.0.0.1"}
 	}
 	return envwriter.DBCtx{Host: "127.0.0.1"}
 }

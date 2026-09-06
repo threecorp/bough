@@ -124,7 +124,7 @@ func TestBuildEngineExtras_FlattensCompose(t *testing.T) {
 			TargetPort: 6379,
 		},
 	}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	want := map[string]string{
 		"compose.file":        "auba-api/compose.yml",
 		"compose.service":     "redis",
@@ -154,7 +154,7 @@ func TestBuildEngineExtras_ComposeOptionalFields(t *testing.T) {
 			Project: "my-project", EnvPrefix: "CACHE",
 		},
 	}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	if got := extras["compose.project"]; got != "my-project" {
 		t.Errorf("compose.project = %q, want %q", got, "my-project")
 	}
@@ -168,7 +168,7 @@ func TestBuildEngineExtras_ComposeOptionalFields(t *testing.T) {
 // engine kinds, which never set Engine.Compose.
 func TestBuildEngineExtras_NonComposeEngineUnaffected(t *testing.T) {
 	eng := config.Engine{Kind: "mysql", Backend: "docker"}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	for k := range extras {
 		if strings.HasPrefix(k, "compose.") {
 			t.Errorf("non-compose engine got a compose.* extras key: %q", k)
@@ -181,18 +181,39 @@ func TestBuildEngineExtras_NonComposeEngineUnaffected(t *testing.T) {
 // extras["version"] and nowhere else, so a dropped copy would leave
 // every plugin resolving its own default in silence.
 func TestBuildEngineExtras_CarriesVersion(t *testing.T) {
-	got := buildEngineExtras(config.Engine{Kind: "elasticsearch", Version: "9.4.1"}, "docker")
+	got := buildEngineExtras(config.Engine{Kind: "elasticsearch", Version: "9.4.1"})
 	if got["version"] != "9.4.1" {
 		t.Errorf(`extras["version"] = %q, want "9.4.1"`, got["version"])
 	}
-	if _, ok := buildEngineExtras(config.Engine{Kind: "elasticsearch"}, "docker")["version"]; ok {
+	if _, ok := buildEngineExtras(config.Engine{Kind: "elasticsearch"})["version"]; ok {
 		t.Error(`extras carries a "version" key for an engine that declares none`)
 	}
 }
 
+// TestBuildEngineExtras_BackendPrecedence pins what an engine runs on:
+// the dedicated field beats extras.backend, extras.backend is never
+// clobbered, and an engine that names neither still gets a backend —
+// a .bough.yaml without `backend:` must run on the default rather than
+// reach the plugin with an empty token.
+func TestBuildEngineExtras_BackendPrecedence(t *testing.T) {
+	cases := []struct {
+		name string
+		eng  config.Engine
+		want string
+	}{
+		{"omitted → default", config.Engine{Kind: "mysql"}, engineapi.DefaultBackend},
+		{"explicit field wins", config.Engine{Kind: "mysql", Backend: "podman", Extras: map[string]string{"backend": "docker"}}, "podman"},
+		{"extras value survives", config.Engine{Kind: "mysql", Extras: map[string]string{"backend": "podman"}}, "podman"},
+	}
+	for _, c := range cases {
+		if got := buildEngineExtras(c.eng)["backend"]; got != c.want {
+			t.Errorf(`%s: extras["backend"] = %q, want %q`, c.name, got, c.want)
+		}
+	}
+}
+
 // engineTestConfig declares one mysql engine with an explicit backend
-// (so detectBackendIfNeeded never probes the real host) and a fixed
-// ready timeout the timeout-message assertion can pin.
+// and a fixed ready timeout the timeout-message assertion can pin.
 func engineTestConfig() *config.Config {
 	return &config.Config{
 		Engines: []config.Engine{{

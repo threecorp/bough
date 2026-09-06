@@ -86,10 +86,10 @@ type QualityGateCfg struct {
 //     receives no `.env.local` injection beyond `EnvLocal` (used for
 //     proto / build-tool repos that have no port dependency).
 //   - "engine-provider" (v0.4) / "db-provider" (v0.3 alias): the
-//     worktree owns the per-worktree engine datadir and is the cwd
-//     from which the bough host issues `nix run --impure '.#mysql'
-//     -- up`. Exactly one repository per Config carries this role
-//     when at least one `engines:` entry is present.
+//     worktree owns the per-worktree engine datadir and is the
+//     WorktreeRoot handed to each engine's Up. Exactly one repository
+//     per Config carries this role when at least one `engines:` entry
+//     is present.
 type Repository struct {
 	// Name is the sub-directory under the monorepo root (and under each
 	// worktree) this repo lives in. Optional when Source is set — it is
@@ -129,12 +129,11 @@ type Engine struct {
 	SocketDir        string            `yaml:"socket_dir"`
 	InitialResources []InitialResource `yaml:"initial_resources" validate:"dive"`
 	// Backend selects the lifecycle implementation inside the plugin.
-	// Allowed values: "nix" (default for v0.1.x), "docker" (v0.2+,
-	// bind-mounts datadir into the engine's official Docker image),
-	// or empty for "auto-detect" (= the host's hybrid selector picks
-	// based on runtime detection: nix-with-flakes on PATH → nix,
-	// else docker daemon → docker).
-	Backend string `yaml:"backend" validate:"omitempty,oneof=nix docker"`
+	// "docker" is the only one the bundled plugins register, and the
+	// one an omitted field resolves to. Validated here (the literal
+	// mirrors engineapi.DefaultBackend, which a struct tag cannot
+	// reference) so a stale value fails at load rather than at Up.
+	Backend string `yaml:"backend" validate:"omitempty,oneof=docker"`
 	// ReadyTimeoutSec caps how long the host waits for the plugin's
 	// ReadyCheck loop to report ready. Zero means use the plugin's
 	// own default (typically 300-600 s). Capped well under int32 max:
@@ -660,6 +659,7 @@ func LoadFromBytes(raw []byte, pathHint string) (*Config, error) {
 	}
 
 	c, warnings := migrateLegacy(&lc)
+	warnings = append(warnings, c.deprecationWarnings()...)
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "bough: WARNING %s\n", w)
 	}
