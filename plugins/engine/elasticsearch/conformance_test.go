@@ -49,10 +49,5 @@ func TestElasticsearchConformance(t *testing.T) {
 		ReadyTimeout:    elasticsearchConformanceReadyMax,
 		IdempotentCount: 2,
 		NativeProbe:     conformance.ElasticsearchGetRoot,
-		// SkipDatadirPermission is intentionally NOT set: the
-		// Fault_DatadirPermission case forces the host-process
-		// (process-compose) backend, whose Up mkdirs Datadir
-		// synchronously and so surfaces a 0o000 parent as a real Up
-		// error. See conformance.Config.DatadirFaultBackend.
 	})
 }

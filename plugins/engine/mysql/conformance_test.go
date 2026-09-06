@@ -44,15 +44,10 @@ func TestMySQLConformance(t *testing.T) {
 		Image:           mysqlConformanceImage,
 		ReadyTimeout:    mysqlConformanceReadyMax,
 		IdempotentCount: 2,
-		// The mysql plugin emits BOUGH_MYSQL_HOST / _PORT / _SOCKET —
-		// no DSN — so the AssertShellSafe stays strict.
+		// The mysql plugin emits BOUGH_MYSQL_HOST / _PORT — no DSN — so
+		// the AssertShellSafe stays strict.
 		AllowShellMetachars: false,
 		NativeProbe:         mysqlHandshakeProbe,
-		// SkipDatadirPermission is intentionally NOT set: the
-		// Fault_DatadirPermission case forces the host-process
-		// (services-flake) backend, whose Up mkdirs Datadir
-		// synchronously and so surfaces a 0o000 parent as a real Up
-		// error. See conformance.Config.DatadirFaultBackend.
 	})
 }
 

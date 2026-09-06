@@ -50,14 +50,6 @@ func TestMyPluginConformance(t *testing.T) {
 		// or roll your own stdlib-only handshake check.
 		// NativeProbe: nil,
 
-		// Set true only if your plugin has NO host-process backend
-		// that prepares Datadir synchronously in Up (i.e. it is
-		// docker / in-cluster only and merely bind-mounts). The
-		// bough-internal engines leave this unset: their
-		// services-flake / process-compose backend mkdirs Datadir in
-		// Up, so Fault_DatadirPermission (which forces that backend
-		// via DatadirFaultBackend) exercises a real error path.
-		SkipDatadirPermission: true,
 		// TODO (multi-port engines only): the role the fault tests
 		// should target. Single-port engines (one role from
 		// PortRangeDefault) leave this empty and the suite defaults

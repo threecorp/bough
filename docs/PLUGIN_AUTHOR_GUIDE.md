@@ -80,7 +80,8 @@ the prose contract every invariant traces back to.
   plugins: an image template, a default tag and the tag shapes the
   registry publishes, so a version it cannot express is refused at `Up`.
 - **`Extras`** — anything else the plugin reads from `UpReq.Extras`.
-  `backend=docker` is injected by the suite if you don't override it.
+  `backend=api.DefaultBackend` is injected by the suite if you don't
+  override it.
 - **`ReadyTimeout`** — how long `ReadyCheck` may poll. Defaults to 60 s;
   raise for engines with long warm-up (elasticsearch JVM ≈ 30-60 s
   cold).
@@ -101,11 +102,10 @@ the prose contract every invariant traces back to.
   fault tests at a single role and to label diagnostic output;
   lifecycle still iterates over every role `PortRangeDefault`
   declares.
-- **`SkipPortConflict` / `SkipDatadirPermission` / `SkipImagePullFailure`**
-  — opt-out individual fault cases. The bough docker plugins all set
-  `SkipDatadirPermission` because they only bind-mount the datadir; the
-  engine inside the container writes there. Document the reason next to
-  the flag.
+- **`SkipPortConflict` / `SkipImagePullFailure`** — opt-out individual
+  fault cases, for a plugin that genuinely cannot simulate one (the
+  `compose` plugin sets `SkipImagePullFailure` because the wrapped
+  compose file owns the image). Document the reason next to the flag.
 
 ## Running locally
 
@@ -154,10 +154,10 @@ jobs:
 - That `bough create` correctly composes your `EnvVars` output into a
   larger `.env.local`. That's the host's job and lives in the host's
   integration tests.
-- That your plugin's services-flake nix backend works. The suite
-  forces `extras["backend"]="docker"`. Set `Extras["backend"]="nix"`
-  on your `Config` if you want to verify the nix path separately
-  (note: the bough-internal plugins do not yet — this is a follow-up).
+- That a backend other than the default one works. The suite stamps
+  `api.DefaultBackend` into `extras["backend"]` when your `Config`
+  carries none; pass a token there to exercise another backend your
+  plugin registers.
 - That your plugin builds. The suite skips with a clear message if
   `BOUGH_CONFORMANCE_PLUGIN_BIN` is unset or points at a missing
   file. Run `go build` in CI before invoking the suite.

@@ -38,10 +38,5 @@ func TestRedisConformance(t *testing.T) {
 		ReadyTimeout:    redisConformanceReadyMax,
 		IdempotentCount: 2,
 		NativeProbe:     conformance.RedisPing,
-		// SkipDatadirPermission is intentionally NOT set: the
-		// Fault_DatadirPermission case forces the host-process
-		// (services-flake) backend, whose Up mkdirs Datadir
-		// synchronously and so surfaces a 0o000 parent as a real Up
-		// error. See conformance.Config.DatadirFaultBackend.
 	})
 }

@@ -308,13 +308,10 @@ func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string,
 	t.Fatalf("%s: %v", label, err)
 }
 
-// mergeExtras lifts cfg.Extras and stamps in `backend=docker` plus
-// `docker.image=<cfg.Image>` so plugins that branch on `extras["backend"]`
-// (bough's hybrid selector convention since Λ-5b) take the docker
-// path even when `nix` is on PATH. The conformance suite is the
-// docker-backend contract guard; verifying the nix-services-flake
-// path is a separate follow-up. Callers may pass `backend: nix`
-// explicitly in cfg.Extras to override.
+// mergeExtras lifts cfg.Extras and stamps in the backend token plus
+// `docker.image=<cfg.Image>`, so the suite exercises the same backend
+// the host would send for a `.bough.yaml` that names none. Pass
+// `backend` in cfg.Extras to target another one your plugin registers.
 //
 // The mutation is on a copy — Run must not mutate the caller's Config.
 func mergeExtras(cfg Config) map[string]string {
@@ -323,7 +320,7 @@ func mergeExtras(cfg Config) map[string]string {
 		out[k] = v
 	}
 	if _, ok := out["backend"]; !ok {
-		out["backend"] = "docker"
+		out["backend"] = engineapi.DefaultBackend
 	}
 	if cfg.Image != "" {
 		out["docker.image"] = cfg.Image
