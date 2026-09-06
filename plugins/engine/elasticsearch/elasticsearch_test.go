@@ -4,14 +4,13 @@ package elasticsearch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
-
-	"github.com/ikeikeikeike/bough/pkg/procutil"
 )
 
 func TestProvider_PortRangeDefault(t *testing.T) {
@@ -93,21 +92,19 @@ func TestValidateHeap(t *testing.T) {
 	}
 }
 
-// TestProvider_Up_InvalidHeapRejectedBeforeLogFileOpen is the
-// regression guard for the fd-leak found by reviewing this PR: the
-// heap-format check used to run AFTER opening the startup log file, so
-// the early-return on an invalid heap leaked that file handle (the
-// sibling cmd.Start() failure path a few lines later does close it).
-// Validating the heap before any file is opened both fixes the leak
-// and is directly observable: the startup log must not exist at all
-// after Up() rejects a bad heap.
-func TestProvider_Up_InvalidHeapRejectedBeforeLogFileOpen(t *testing.T) {
-	tmp := t.TempDir()
-	p := New()
-	err := p.Up(context.Background(), &api.UpReq{
-		WorktreeRoot: tmp,
-		Ports:        []api.PortSpec{{Role: "main", Port: 59200}},
-		Extras:       map[string]string{"heap": "1g; rm -rf /"},
+// TestDockerBackend_Up_InvalidHeapRejectedBeforeAnySideEffect keeps the
+// property the earlier host-process backend was tested for: a bad heap
+// is refused while nothing has been created. It is observable because
+// the datadir Up would otherwise mkdir must not exist afterwards, and
+// it runs without a Docker daemon because every pure check precedes the
+// first client call.
+func TestDockerBackend_Up_InvalidHeapRejectedBeforeAnySideEffect(t *testing.T) {
+	datadir := filepath.Join(t.TempDir(), "elasticsearch-data")
+
+	err := dockerBackend{}.Up(context.Background(), &api.UpReq{
+		Ports:   []api.PortSpec{{Role: "main", Port: 59200}},
+		Datadir: datadir,
+		Extras:  map[string]string{"version": "9.5.3", "es.heap": "1g; rm -rf /"},
 	})
 	if err == nil {
 		t.Fatal("Up with an invalid heap = nil error, want an error")
@@ -115,81 +112,8 @@ func TestProvider_Up_InvalidHeapRejectedBeforeLogFileOpen(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid heap") {
 		t.Errorf("Up error = %q, want it to mention invalid heap", err)
 	}
-	logPath := filepath.Join(tmp, startupLogRelative)
-	if _, statErr := os.Stat(logPath); statErr == nil {
-		t.Errorf("Up with an invalid heap created the startup log at %s — heap validation must run before opening it", logPath)
-	}
-}
-
-// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the other
-// half of engines[].version: nixpkgs carries no Elasticsearch 8 or 9, so
-// a 9.x version used to be accepted here and silently start the flake's
-// 7 line. Like the heap check above, it must refuse before anything is
-// written — no flake dir, no startup log.
-func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
-	tmp := t.TempDir()
-	p := New()
-	err := p.Up(context.Background(), &api.UpReq{
-		WorktreeRoot: tmp,
-		Ports:        []api.PortSpec{{Role: "main", Port: 59200}},
-		Extras:       map[string]string{"version": "9.4.1"},
-	})
-	if err == nil {
-		t.Fatal("Up with version 9.4.1 on the nix backend = nil error, want an error")
-	}
-	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("Up error = %q, want it to mention %q", err, want)
-		}
-	}
-	flakeDir := filepath.Join(tmp, flakeDirRelative)
-	if _, statErr := os.Stat(flakeDir); statErr == nil {
-		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
-	}
-}
-
-func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
-	tmp := t.TempDir()
-	dst := filepath.Join(tmp, "extracted")
-	if err := procutil.DeployFlake(nixAssets, "nix", dst); err != nil {
-		t.Fatalf("DeployFlake: %v", err)
-	}
-	flakePath := filepath.Join(dst, "flake.nix")
-	if _, err := os.Stat(flakePath); err != nil {
-		t.Fatalf("flake.nix not extracted: %v", err)
-	}
-	raw, err := os.ReadFile(flakePath)
-	if err != nil {
-		t.Fatalf("read flake.nix: %v", err)
-	}
-	contents := string(raw)
-	checks := []string{
-		`services-flake.url`,
-		`process-compose-flake.url`,
-		`BOUGH_ELASTICSEARCH_PORT`,
-		`BOUGH_ELASTICSEARCH_DATADIR`,
-		`BOUGH_ELASTICSEARCH_HEAP`,
-		nixPackageAttr,
-		`discovery.type=single-node`,
-		`xpack.security.enabled=false`,
-		`_cluster/health`,
-	}
-	for _, c := range checks {
-		if !strings.Contains(contents, c) {
-			t.Errorf("flake.nix missing expected fragment: %q", c)
-		}
-	}
-
-	lockPath := filepath.Join(dst, "flake.lock")
-	if _, err := os.Stat(lockPath); err != nil {
-		t.Fatalf("flake.lock not extracted: %v", err)
-	}
-	lockRaw, err := os.ReadFile(lockPath)
-	if err != nil {
-		t.Fatalf("read flake.lock: %v", err)
-	}
-	if !strings.Contains(string(lockRaw), `"nixpkgs"`) {
-		t.Errorf("flake.lock missing nixpkgs input node")
+	if _, statErr := os.Stat(datadir); !os.IsNotExist(statErr) {
+		t.Errorf("Up created %s despite rejecting the heap; validation must precede any side effect", datadir)
 	}
 }
 
@@ -213,5 +137,41 @@ func TestProvider_Cleanup(t *testing.T) {
 func TestProvider_Cleanup_emptyDatadir(t *testing.T) {
 	if err := New().Cleanup(context.Background(), "", nil); err == nil {
 		t.Fatalf("expected error on empty datadir, got nil")
+	}
+}
+
+// TestNew_RegistersDocker pins what a bare `bough create` runs: the
+// constructor seeds exactly one backend, under the token the host sends
+// when .bough.yaml omits `backend:`.
+func TestNew_RegistersDocker(t *testing.T) {
+	backends := New().Backends
+	if len(backends) != 1 {
+		t.Fatalf("New() registered %d backends %v, want exactly one", len(backends), backends)
+	}
+	if _, ok := backends[api.DefaultBackend].(dockerBackend); !ok {
+		t.Errorf("New() registered %T under %q, want dockerBackend", backends[api.DefaultBackend], api.DefaultBackend)
+	}
+}
+
+// TestProvider_Up_UnknownBackendIsRefused is the guard for a .bough.yaml
+// left over from the nix era: the token must be refused by name before
+// any daemon call, not silently run on whatever is registered.
+func TestProvider_Up_UnknownBackendIsRefused(t *testing.T) {
+	err := New().Up(context.Background(), &api.UpReq{
+		Ports:   []api.PortSpec{{Role: "main", Port: 59200}},
+		Datadir: t.TempDir(),
+		Extras:  map[string]string{"backend": "nix"},
+	})
+	if err == nil {
+		t.Fatal("Up accepted backend: nix")
+	}
+	var unknown *api.UnknownBackendError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Up error = %T (%v), want *api.UnknownBackendError", err, err)
+	}
+	for _, want := range []string{"elasticsearch", `"nix"`, api.DefaultBackend} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

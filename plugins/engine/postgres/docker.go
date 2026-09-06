@@ -70,11 +70,16 @@ func dockerContainerName(port int) string {
 	return fmt.Sprintf("bough-postgres-%d", port)
 }
 
-// usingDockerBackend is the cheap self-detection used by Down /
-// ReadyCheck when neither RPC carries an explicit backend hint. See
-// dockerutil.IsBackendRunning for the shared stale-container-
-// detection logic all four engine plugins share.
-func usingDockerBackend(ctx context.Context, port int) bool {
+// dockerBackend runs postgres in a container. Stateless: the tunables
+// are the consts above and the image comes from dockerImage.
+type dockerBackend struct{}
+
+var _ api.Backend = dockerBackend{}
+
+// Running answers ForPort's disambiguation question. See
+// dockerutil.IsBackendRunning for the stale-container rule all four
+// engine plugins share.
+func (dockerBackend) Running(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
@@ -93,7 +98,7 @@ func pickInitDB(req *api.UpReq) string {
 	return "bough"
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("postgres docker: invalid port %d (Ports=%v)", port, req.Ports)
@@ -186,7 +191,7 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 // succeeds, then runs `pg_isready` inside the container against the
 // internal socket to confirm postgres has finished initdb + the
 // automatic restart and is accepting query connections.
-func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 600
 	}
@@ -259,7 +264,7 @@ func pgIsReady(ctx context.Context, cli *client.Client, name string) error {
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {

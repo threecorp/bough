@@ -4,14 +4,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
-
-	"github.com/ikeikeikeike/bough/pkg/procutil"
 )
 
 func TestProvider_PortRangeDefault(t *testing.T) {
@@ -45,104 +44,24 @@ func TestProvider_EnvVars(t *testing.T) {
 	p := New()
 	out, err := p.EnvVars(context.Background(), &api.EnvVarsReq{
 		Ports:            []api.PortSpec{{Role: "main", Port: 50345}},
-		SocketDir:        "/tmp",
 		InitialResources: []api.ResourceSpec{{Type: "database", Name: "bough"}},
 	})
 	if err != nil {
 		t.Fatalf("EnvVars: %v", err)
 	}
 	cases := map[string]string{
-		"BOUGH_POSTGRES_HOST":       "127.0.0.1",
-		"BOUGH_POSTGRES_PORT":       "50345",
-		"BOUGH_POSTGRES_SOCKET_DIR": "/tmp",
+		"BOUGH_POSTGRES_HOST": "127.0.0.1",
+		"BOUGH_POSTGRES_PORT": "50345",
 	}
 	for k, want := range cases {
 		if got := out[k]; got != want {
 			t.Errorf("%s: got %q want %q", k, got, want)
 		}
 	}
-}
-
-func TestProvider_EnvVars_socketDirDefault(t *testing.T) {
-	p := New()
-	out, err := p.EnvVars(context.Background(), &api.EnvVarsReq{
-		Ports: []api.PortSpec{{Role: "main", Port: 12345}},
-	})
-	if err != nil {
-		t.Fatalf("EnvVars: %v", err)
-	}
-	if out["BOUGH_POSTGRES_SOCKET_DIR"] != "/tmp" {
-		t.Errorf("SocketDir default: got %q, want /tmp", out["BOUGH_POSTGRES_SOCKET_DIR"])
-	}
-}
-
-// TestProvider_Up_NixRejectsVersionOutsidePinnedLine guards the nix half
-// of engines[].version: the flake pins pkgs.postgresql_16, so
-// `version: "17"` used to be accepted and silently start 16. It must
-// refuse before anything is written — no flake dir, no startup log.
-func TestProvider_Up_NixRejectsVersionOutsidePinnedLine(t *testing.T) {
-	tmp := t.TempDir()
-	p := New()
-	err := p.Up(context.Background(), &api.UpReq{
-		WorktreeRoot: tmp,
-		Ports:        []api.PortSpec{{Role: "main", Port: 50432}},
-		Extras:       map[string]string{"version": "17"},
-	})
-	if err == nil {
-		t.Fatal("Up with version 17 on the nix backend = nil error, want an error")
-	}
-	for _, want := range []string{nixPinnedVersion, "backend: docker"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("Up error = %q, want it to mention %q", err, want)
-		}
-	}
-	flakeDir := filepath.Join(tmp, flakeDirRelative)
-	if _, statErr := os.Stat(flakeDir); statErr == nil {
-		t.Errorf("Up deployed the flake to %s despite rejecting the version", flakeDir)
-	}
-}
-
-func TestDeployFlake_extractsEmbeddedAssets(t *testing.T) {
-	tmp := t.TempDir()
-	dst := filepath.Join(tmp, "extracted")
-	if err := procutil.DeployFlake(nixAssets, "nix", dst); err != nil {
-		t.Fatalf("DeployFlake: %v", err)
-	}
-	flakePath := filepath.Join(dst, "flake.nix")
-	if _, err := os.Stat(flakePath); err != nil {
-		t.Fatalf("flake.nix not extracted: %v", err)
-	}
-	raw, err := os.ReadFile(flakePath)
-	if err != nil {
-		t.Fatalf("read flake.nix: %v", err)
-	}
-	contents := string(raw)
-	checks := []string{
-		`services-flake.url`,
-		`process-compose-flake.url`,
-		`BOUGH_POSTGRES_PORT`,
-		`BOUGH_POSTGRES_SOCKET_DIR`,
-		`BOUGH_POSTGRES_DATADIR`,
-		nixPackageAttr,
-		`listen_addresses`,
-		`socketDir`,
-	}
-	for _, c := range checks {
-		if !strings.Contains(contents, c) {
-			t.Errorf("flake.nix missing expected fragment: %q", c)
-		}
-	}
-
-	lockPath := filepath.Join(dst, "flake.lock")
-	if _, err := os.Stat(lockPath); err != nil {
-		t.Fatalf("flake.lock not extracted: %v", err)
-	}
-	lockRaw, err := os.ReadFile(lockPath)
-	if err != nil {
-		t.Fatalf("read flake.lock: %v", err)
-	}
-	if !strings.Contains(string(lockRaw), `"nixpkgs"`) {
-		t.Errorf("flake.lock missing nixpkgs input node")
+	// The container publishes TCP only; a socket-dir key here would name
+	// a directory nothing binds into.
+	if len(out) != len(cases) {
+		t.Errorf("EnvVars returned %d keys %v, want exactly %v", len(out), out, cases)
 	}
 }
 
@@ -166,5 +85,41 @@ func TestProvider_Cleanup(t *testing.T) {
 func TestProvider_Cleanup_emptyDatadir(t *testing.T) {
 	if err := New().Cleanup(context.Background(), "", nil); err == nil {
 		t.Fatalf("expected error on empty datadir, got nil")
+	}
+}
+
+// TestNew_RegistersDocker pins what a bare `bough create` runs: the
+// constructor seeds exactly one backend, under the token the host sends
+// when .bough.yaml omits `backend:`.
+func TestNew_RegistersDocker(t *testing.T) {
+	backends := New().Backends
+	if len(backends) != 1 {
+		t.Fatalf("New() registered %d backends %v, want exactly one", len(backends), backends)
+	}
+	if _, ok := backends[api.DefaultBackend].(dockerBackend); !ok {
+		t.Errorf("New() registered %T under %q, want dockerBackend", backends[api.DefaultBackend], api.DefaultBackend)
+	}
+}
+
+// TestProvider_Up_UnknownBackendIsRefused is the guard for a .bough.yaml
+// left over from the nix era: the token must be refused by name before
+// any daemon call, not silently run on whatever is registered.
+func TestProvider_Up_UnknownBackendIsRefused(t *testing.T) {
+	err := New().Up(context.Background(), &api.UpReq{
+		Ports:   []api.PortSpec{{Role: "main", Port: 50432}},
+		Datadir: t.TempDir(),
+		Extras:  map[string]string{"backend": "nix"},
+	})
+	if err == nil {
+		t.Fatal("Up accepted backend: nix")
+	}
+	var unknown *api.UnknownBackendError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Up error = %T (%v), want *api.UnknownBackendError", err, err)
+	}
+	for _, want := range []string{"postgres", `"nix"`, api.DefaultBackend} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

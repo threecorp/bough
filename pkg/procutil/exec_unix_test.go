@@ -41,13 +41,3 @@ func TestLsofListener_ZeroWhenNothingListening(t *testing.T) {
 		t.Errorf("LsofListener(%d) = %d, want 0 (nothing listening)", port, got)
 	}
 }
-
-// TestKillStrayProcessCompose_NoMatchIsSafe is a smoke test: with a
-// bogus cwd prefix nothing can match, so the call must be a harmless
-// no-op (exercising the pgrep + lsof parsing path without signalling any
-// real process). A fully hermetic test would need a live process-compose
-// under a known cwd, which is left to the conformance / integration
-// suite.
-func TestKillStrayProcessCompose_NoMatchIsSafe(t *testing.T) {
-	KillStrayProcessCompose("/nonexistent-bough-procutil-test-prefix-xyz")
-}
