@@ -105,11 +105,9 @@ var dockerImage = api.DockerImage{
 }
 
 func pickHeap(req *api.UpReq) string {
-	// "es.heap" is this file's own documented key; "heap" is what the
-	// nix backend (elasticsearch.go's Up()) has always read for the
-	// identical setting. Accept both so a value that works on one
-	// backend doesn't silently stop mattering after switching to the
-	// other.
+	// "es.heap" is this file's documented key; "heap" is the spelling
+	// the pre-docker backend read for the identical setting, kept so an
+	// existing .bough.yaml does not silently stop being honoured.
 	if v := req.Extras["es.heap"]; v != "" {
 		return v
 	}

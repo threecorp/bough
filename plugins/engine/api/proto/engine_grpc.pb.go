@@ -54,8 +54,8 @@ const (
 type EngineProviderClient interface {
 	// Up starts the engine listening on the host-allocated `ports`, with
 	// its data directory anchored at `datadir`. The host passes
-	// `worktree_root` so the plugin can resolve a `nix run` invocation
-	// against the embedded flake without needing global state, and
+	// `worktree_root` so a plugin that writes alongside the engine can
+	// anchor those files without needing global state, and
 	// `initial_resources` so the engine can self-provision (DB schemas,
 	// kafka topics, minio buckets — engine-specific by `type`).
 	Up(ctx context.Context, in *UpRequest, opts ...grpc.CallOption) (*UpResponse, error)
@@ -161,8 +161,8 @@ func (c *engineProviderClient) EnvVars(ctx context.Context, in *EnvVarsRequest, 
 type EngineProviderServer interface {
 	// Up starts the engine listening on the host-allocated `ports`, with
 	// its data directory anchored at `datadir`. The host passes
-	// `worktree_root` so the plugin can resolve a `nix run` invocation
-	// against the embedded flake without needing global state, and
+	// `worktree_root` so a plugin that writes alongside the engine can
+	// anchor those files without needing global state, and
 	// `initial_resources` so the engine can self-provision (DB schemas,
 	// kafka topics, minio buckets — engine-specific by `type`).
 	Up(context.Context, *UpRequest) (*UpResponse, error)
