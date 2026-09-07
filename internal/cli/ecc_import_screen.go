@@ -35,6 +35,11 @@ type importScreen struct {
 	gate   *instinctgate.Gate
 	layout homunculus.Layout
 	now    time.Time
+	// enabled mirrors the resolved gate config so the report can say
+	// "off" instead of "held 0". A gate the operator switched off reads
+	// exactly like a clean corpus otherwise, which is the confusion the
+	// printed-even-when-zero line exists to prevent.
+	enabled bool
 
 	// projectID is the destination project the current copyProject call
 	// is filling. Set per project so one import of many projects writes
@@ -96,7 +101,11 @@ func (s *importScreen) screen(src, dst string) (held bool, err error) {
 	if err := os.MkdirAll(batch, 0o755); err != nil {
 		return false, fmt.Errorf("ecc import: quarantine dir %s: %w", batch, err)
 	}
-	qdst := filepath.Join(batch, filepath.Base(dst))
+	// The batch dir is flat while the corpus is not: instincts/personal
+	// and instincts/inherited legitimately hold the same id, so a name
+	// already taken gets a suffix rather than overwriting the earlier
+	// hold and leaving two REPORT rows pointing at one file.
+	qdst := uniquePath(filepath.Join(batch, filepath.Base(dst)))
 	if err := copyInstinctFile(src, qdst); err != nil {
 		return false, fmt.Errorf("ecc import: quarantine %s: %w", in.ID, err)
 	}
@@ -107,6 +116,32 @@ func (s *importScreen) screen(src, dst string) (held bool, err error) {
 		restoreDir: s.layout.StagingDir(s.projectID),
 	})
 	return true, nil
+}
+
+// uniquePath returns path, or the first free "<base>-N.md" beside it.
+func uniquePath(path string) string {
+	if _, err := os.Stat(path); err != nil {
+		return path
+	}
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s-%d%s", stem, n, ext)
+		if _, err := os.Stat(cand); err != nil {
+			return cand
+		}
+	}
+}
+
+// reset drops the accumulator without writing a REPORT. The caller uses
+// it when a project's copy FAILED: its counts and held records must not
+// leak into the next project's report, which would name files under one
+// project's quarantine with another project's restore dir.
+func (s *importScreen) reset() {
+	if s == nil {
+		return
+	}
+	s.scanned, s.held = 0, nil
 }
 
 func (s *importScreen) batchDir() string {

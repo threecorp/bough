@@ -68,10 +68,12 @@ the copy.`,
 			if cwderr != nil {
 				return fmt.Errorf("ecc import: getwd: %w", cwderr)
 			}
+			gateCfg := gateConfigFor(cmd, resolveMonorepoRoot(cwd))
 			screen := &importScreen{
-				gate:   instinctgate.New(gateConfigFor(cmd, resolveMonorepoRoot(cwd))),
-				layout: dst,
-				now:    time.Now(),
+				gate:    instinctgate.New(gateCfg),
+				layout:  dst,
+				now:     time.Now(),
+				enabled: gateCfg.Enabled,
 			}
 
 			projects, err := readECCProjects(eccRoot)
@@ -115,14 +117,27 @@ the copy.`,
 				if err := copyProject(srcDir, dst.ProjectDir(id), screen); err != nil {
 					fmt.Fprintf(stdout, "    FAILED to copy: %v\n", err)
 					failed = append(failed, id)
+					// Drop this project's counts and held records: carried
+					// forward they would be reported under the NEXT project,
+					// naming files in this project's quarantine with the next
+					// project's restore dir.
+					screen.reset()
 					continue
 				}
 				// Printed even when zero: an unmeasured 0 and an unswept
 				// directory read identically in a report.
 				scanned, heldN, batch, ferr := screen.flush()
-				fmt.Fprintf(stdout, "    screened %d instinct(s), held %d\n", scanned, heldN)
+				if screen.enabled {
+					fmt.Fprintf(stdout, "    screened %d instinct(s), held %d\n", scanned, heldN)
+				} else {
+					fmt.Fprintf(stdout, "    policy gate OFF (instinct.gate.enabled: false): %d instinct(s) copied unscreened\n", scanned)
+				}
 				if heldN > 0 {
-					fmt.Fprintf(stdout, "      → %s (reversible; `bough instinct verdict keep|retire`)\n", batch)
+					// --root names the IMPORTED project: `verdict` resolves the
+					// project from the cwd, so run from anywhere else it would
+					// allowlist and restore into whatever project the operator
+					// happens to be standing in.
+					fmt.Fprintf(stdout, "      → %s (reversible; `bough instinct verdict keep|retire <id> --root %s`)\n", batch, meta.Root)
 				}
 				if ferr != nil {
 					fmt.Fprintf(stdout, "      WARNING: quarantine report: %v\n", ferr)
