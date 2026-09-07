@@ -60,15 +60,17 @@ the copy.`,
 			stdout := cmd.OutOrStdout()
 
 			// The gate is built ONCE for the whole import, from the config
-			// at the cwd's monorepo root. gateConfigFor falls back to
+			// at the cwd's monorepo root. gateSettings falls back to
 			// Enabled:true when it cannot read a config, which is the
 			// fail-closed half of this path: an unreadable config must not
-			// let a foreign corpus in unscreened.
+			// let a foreign corpus in unscreened. Only the deterministic
+			// config is taken — import screens with the patterns and the
+			// denylist, and spawns no judge.
 			cwd, cwderr := os.Getwd()
 			if cwderr != nil {
 				return fmt.Errorf("ecc import: getwd: %w", cwderr)
 			}
-			gateCfg := gateConfigFor(cmd, resolveMonorepoRoot(cwd))
+			gateCfg, _, _ := gateSettings(cmd, resolveMonorepoRoot(cwd))
 			screen := &importScreen{
 				gate:    instinctgate.New(gateCfg),
 				layout:  dst,
