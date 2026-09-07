@@ -248,10 +248,10 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		chosen := -1
 		for i, v := range violating {
 			// Governance.Grounded owns the whole rule-quote side, nil
-			// receiver included: no corpus and too-short-to-judge both
-			// ground, so a missing citation leaves the hold standing.
-			// This check only ever RELEASES, so its silence must not
-			// invent a hold.
+			// receiver included: with no corpus loaded every citation
+			// grounds, so a project with no rule documents keeps its
+			// holds. With one loaded, a citation that is not in it —
+			// invented, paraphrased, or absent — releases instead.
 			if (v.Category == "" || r.groundedCategory(v.Category)) && r.Governance.Grounded(v.RuleQuote) {
 				chosen = i
 				break
@@ -321,10 +321,12 @@ type BatchResult struct {
 	Failed     int
 	Unreviewed []string
 	Cancelled  bool
-	// RuleUngrounded counts consensus violations RELEASED because the
-	// judge's citation was not on the category list. A permanently-zero
-	// count is itself suspect — it is how an inert check reads — so it
-	// travels to telemetry rather than living only in stdout.
+	// RuleUngrounded counts consensus violations RELEASED because a
+	// citation did not ground: the category was not on the list it was
+	// given, or the rule_quote is not in the governance text. A
+	// permanently-zero count is itself suspect — it is how an inert
+	// check reads — so it travels to telemetry rather than living only
+	// in stdout.
 	RuleUngrounded int
 	// QuoteUnverified counts holds whose quoted evidence could not be
 	// located. The holds stand; the count tells the reviewer where to

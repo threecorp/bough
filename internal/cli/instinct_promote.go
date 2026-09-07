@@ -76,6 +76,7 @@ type promoteResult struct {
 	// judgeErr stops the whole promotion: on this path a judge that
 	// cannot answer refuses rather than waves through.
 	judgeErr error
+	judge    judgeCoverage
 	dryRun   bool
 }
 
@@ -170,8 +171,9 @@ func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Tim
 	// The LLM layer runs on what the patterns cleared, in ONE batch:
 	// the deterministic hold is already decided, and judging per
 	// candidate would re-enter the limiter once per id.
-	cleared, judgeHeld, judgeErr := judgePromotions(opt, cleared)
+	cleared, judgeHeld, cov, judgeErr := judgePromotions(opt, cleared)
 	res.gateHeld = append(res.gateHeld, judgeHeld...)
+	res.judge = cov
 	if judgeErr != nil {
 		// Fail-closed: nothing is promoted on a judge that could not
 		// answer. The candidates stay where they are — this path writes,
@@ -196,16 +198,36 @@ func promoteInstincts(layout homunculus.Layout, opt promoteOptions, now time.Tim
 // patterns cleared. Returns the survivors, the holds, and — on a judge
 // that could not be built or could not reach a verdict — an error that
 // stops the promotion entirely.
-func judgePromotions(opt promoteOptions, cleared []promoteCandidate) ([]promoteCandidate, []gateHold, error) {
+func judgePromotions(opt promoteOptions, cleared []promoteCandidate) ([]promoteCandidate, []gateHold, judgeCoverage, error) {
+	var cov judgeCoverage
 	if opt.newJudge == nil || len(cleared) == 0 {
-		return cleared, nil, nil
+		return cleared, nil, cov, nil
 	}
+	// Allowlisted ids are exempt from the judge as well as from the
+	// patterns. The deterministic screen clears an exempt id INTO the
+	// cleared batch, so judging it here would let the model overrule an
+	// exemption the operator set by hand — and a `judge:` hold at global
+	// scope has no allowlist entry able to release it. An escape hatch
+	// one layer honours and the next ignores is not an escape hatch.
+	judgeable := make([]promoteCandidate, 0, len(cleared))
+	var exempt []promoteCandidate
+	for _, c := range cleared {
+		if opt.gate != nil && opt.gate.Exempt(c.id) {
+			exempt = append(exempt, c)
+			continue
+		}
+		judgeable = append(judgeable, c)
+	}
+	if len(judgeable) == 0 {
+		return cleared, nil, cov, nil
+	}
+	cleared = judgeable
 	reviewer, _, err := opt.newJudge(len(cleared))
 	if err != nil {
-		return nil, nil, fmt.Errorf("the judge could not be built, and promotion writes to global scope: %w", err)
+		return nil, nil, cov, fmt.Errorf("the judge could not be built, and promotion writes to global scope: %w", err)
 	}
 	if reviewer == nil {
-		return nil, nil, errors.New("the judge is unavailable, and promotion writes to global scope")
+		return nil, nil, cov, errors.New("the judge is unavailable, and promotion writes to global scope")
 	}
 	byID := make(map[string]promoteCandidate, len(cleared))
 	cands := make([]instinctgate.Candidate, 0, len(cleared))
@@ -224,11 +246,17 @@ func judgePromotions(opt promoteOptions, cleared []promoteCandidate) ([]promoteC
 		ctx = context.Background()
 	}
 	br := reviewer.ReviewBatch(ctx, cands)
+	cov = judgeCoverage{reviewed: br.Reviewed, ruleUngrounded: br.RuleUngrounded, quoteUnverified: br.QuoteUnverified}
 	// A candidate the judge could not reach a verdict on is NOT promoted:
 	// on this path an unanswered question is a refusal, not a pass.
 	if br.Failed > 0 || br.Cancelled {
-		return nil, nil, fmt.Errorf("the judge left %d of %d candidate(s) unanswered (cancelled=%v), and promotion writes to global scope",
-			br.Failed, len(cands), br.Cancelled)
+		// Name the budget that would cover the batch. The default is
+		// capped at judgeCallCeiling, so a batch of more than
+		// judgeCallCeiling/DefaultVotes candidates runs out of calls and
+		// then refuses EVERYTHING — deterministically, on every re-run —
+		// unless the operator is told the number that unblocks it.
+		return nil, nil, cov, fmt.Errorf("the judge left %d of %d candidate(s) unanswered (cancelled=%v), and promotion writes to global scope (retry with --judge-max-calls %d, or --judge=false to screen with the patterns only)",
+			br.Failed, len(cands), br.Cancelled, len(cands)*instinctgate.DefaultVotes)
 	}
 	held := make(map[string]string, len(br.Held))
 	var holds []gateHold
@@ -236,13 +264,23 @@ func judgePromotions(opt promoteOptions, cleared []promoteCandidate) ([]promoteC
 		held[d.ID] = d.Rule
 		holds = append(holds, gateHold{id: d.ID, rule: d.Rule})
 	}
-	survivors := make([]promoteCandidate, 0, len(cleared))
+	survivors := make([]promoteCandidate, 0, len(cleared)+len(exempt))
+	survivors = append(survivors, exempt...)
 	for _, c := range cleared {
 		if _, isHeld := held[c.id]; !isHeld {
 			survivors = append(survivors, c)
 		}
 	}
-	return survivors, holds, nil
+	return survivors, holds, cov, nil
+}
+
+// judgeCoverage is the judge's own reporting, carried out of the batch.
+// "0 held" says nothing without "out of how many reviewed", and a
+// permanently-zero RuleUngrounded is how an inert grounding check reads.
+type judgeCoverage struct {
+	reviewed        int
+	ruleUngrounded  int
+	quoteUnverified int
 }
 
 // groupCrossProject maps instinct id -> the per-project copies of it,
@@ -420,8 +458,16 @@ project instincts are left untouched and ids already global are skipped
 }
 
 func renderPromote(w io.Writer, res promoteResult) {
+	if res.judgeErr != nil {
+		// Never "nothing qualified": candidates reached the judge and it
+		// refused. Saying the corpus was empty hides the refusal behind
+		// the one line an operator is most likely to stop reading at.
+		fmt.Fprintf(w, "nothing was promoted — %v\n", res.judgeErr)
+	}
 	if len(res.promoted) == 0 && len(res.skippedGlobal) == 0 && res.belowThresh == 0 && len(res.gateHeld) == 0 {
-		fmt.Fprintln(w, "(no cross-project instincts found — need an id present in 2+ projects)")
+		if res.judgeErr == nil {
+			fmt.Fprintln(w, "(no cross-project instincts found — need an id present in 2+ projects)")
+		}
 		return
 	}
 	verb := "promoted"
@@ -445,6 +491,13 @@ func renderPromote(w io.Writer, res promoteResult) {
 		for _, h := range res.gateHeld {
 			fmt.Fprintf(w, "  %-44s %s\n", truncate(h.id, 44), h.rule)
 		}
+	}
+	// The judge's coverage, always: "0 held" is meaningless without how
+	// many were reviewed, and a permanently-zero RuleUngrounded is
+	// exactly how an inert grounding check reads.
+	if res.judge.reviewed > 0 || res.judge.ruleUngrounded > 0 {
+		fmt.Fprintf(w, "judge reviewed %d id(s); %d released on an ungrounded citation, %d hold(s) with an unlocatable quote\n",
+			res.judge.reviewed, res.judge.ruleUngrounded, res.judge.quoteUnverified)
 	}
 	if res.dryRun {
 		fmt.Fprintln(w, "(dry-run: no files written)")

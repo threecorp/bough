@@ -83,12 +83,13 @@ func TestInventedRuleQuoteReleasesTheHold(t *testing.T) {
 	}
 }
 
-// An empty rule_quote is not a fabrication — the prompt tells the judge
-// to leave it empty rather than paraphrase. This check can only ever
-// RELEASE a hold, so silence must not release one. Governance.Grounded
-// carries it: a citation shorter than groundingRunLength is grounded,
-// and nothing is shorter than nothing.
-func TestEmptyRuleQuoteDoesNotReleaseTheHold(t *testing.T) {
+// An unciteable hold is released exactly like an invented one. The
+// prompt tells the judge not to report a violation it cannot cite, so an
+// empty rule_quote is a broken contract rather than modesty — and a hold
+// nobody can trace to a written rule is the kind that erodes trust in
+// every real one. Mirrors the reference implementation, where a quote
+// below the run length must match the corpus whole and nothing does.
+func TestEmptyRuleQuoteReleasesTheHold(t *testing.T) {
 	cat := DefaultForbiddenActions[1]
 	fn, _ := scriptedReviewer(verdictWithRuleQuote(cat, ""))
 	r := NewReviewer(fn)
@@ -97,8 +98,46 @@ func TestEmptyRuleQuoteDoesNotReleaseTheHold(t *testing.T) {
 	r.Governance = ruleGovernance(t)
 
 	got := r.Review(context.Background(), proseCandidate())
+	if got.Violation {
+		t.Errorf("a hold citing no rule at all must be released: %+v", got)
+	}
+	if !got.RuleUngrounded {
+		t.Errorf("the release must be reported as ungrounded: %+v", got)
+	}
+}
+
+// A fragment is not a citation either: below the run length the quote
+// must appear in the corpus WHOLE and carry enough characters to mean
+// something, so a couple of words shared with the documents does not
+// keep a hold alive.
+func TestTooShortRuleQuoteReleasesTheHold(t *testing.T) {
+	cat := DefaultForbiddenActions[1]
+	fn, _ := scriptedReviewer(verdictWithRuleQuote(cat, "never"))
+	r := NewReviewer(fn)
+	r.Votes, r.Agree = 1, 1
+	r.Categories = DefaultForbiddenActions
+	r.Governance = ruleGovernance(t)
+
+	got := r.Review(context.Background(), proseCandidate())
+	if got.Violation {
+		t.Errorf("a five-letter fragment is not a citation: %+v", got)
+	}
+}
+
+// But a short quote that IS in the documents and long enough to be
+// distinctive still grounds — the floor rejects fragments, not brevity
+// that happens to be exact.
+func TestShortButExactRuleQuoteHolds(t *testing.T) {
+	cat := DefaultForbiddenActions[1]
+	fn, _ := scriptedReviewer(verdictWithRuleQuote(cat, "never discarded without"))
+	r := NewReviewer(fn)
+	r.Votes, r.Agree = 1, 1
+	r.Categories = DefaultForbiddenActions
+	r.Governance = ruleGovernance(t)
+
+	got := r.Review(context.Background(), proseCandidate())
 	if !got.Violation {
-		t.Errorf("an empty rule_quote must leave the hold standing: %+v", got)
+		t.Errorf("an exact fragment of a real sentence must keep the hold: %+v", got)
 	}
 }
 

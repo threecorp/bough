@@ -234,8 +234,9 @@ type promoteOutcome struct {
 	HeldTripwire int
 	HeldDenylist int
 	HeldJudge    int
-	// RuleUngrounded counts consensus violations RELEASED because the
-	// judge's cited category was not on the list it was given. A
+	// RuleUngrounded counts consensus violations RELEASED because a
+	// citation did not ground: the cited category was not on the list it
+	// was given, or the rule_quote is not in the governance text. A
 	// permanently-zero value is itself suspect — an inert grounding check
 	// reads exactly like a judge that never hallucinates.
 	RuleUngrounded int
@@ -649,7 +650,9 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 // A missing or unreadable .bough.yaml is not an error: the gate is
 // reversible, so the safe fallback is to RUN it (Enabled: true) rather
 // than skip it. When the config loads, the operator's `instinct.gate`
-// block decides — defaulting on when the block is absent (GateEnabled). They were resolved by two functions that each opened the
+// block decides — defaulting on when the block is absent (GateEnabled).
+//
+// The two halves were resolved by two functions that each opened the
 // file, so a run parsed it twice and — if it changed in between — could
 // screen against one version and judge against another. A tripwire and a
 // judge configured from different versions of the same file is the split

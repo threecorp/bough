@@ -49,5 +49,8 @@ instinct — it is checked against the text, and a quote that cannot be
 located is flagged. The rule_quote must be copied verbatim from the rule
 documents — it is checked against them, and a sentence that is not there
 releases the hold, because a rule nobody wrote cannot forbid anything.
-Leave it empty rather than paraphrasing: an empty rule_quote does not
-release the hold, an invented one does.
+So a rule you cannot find a real sentence for is not a rule: if no
+sentence in the documents above forbids the behaviour, do not report a
+violation at all, even if it feels wrong. Do not invent or paraphrase a
+governance rule, and do not leave rule_quote empty in a violation you
+report — an unciteable hold is released the same as an invented one.
