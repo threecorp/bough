@@ -8,11 +8,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ikeikeikeike/bough/internal/fsutil"
 	"github.com/ikeikeikeike/bough/internal/homunculus"
+	"github.com/ikeikeikeike/bough/internal/instinctgate"
 )
 
 // DefaultECCRoot is the canonical ECC homunculus path. `bough ecc
@@ -57,6 +59,23 @@ the copy.`,
 			dst := homunculus.NewLayout()
 			stdout := cmd.OutOrStdout()
 
+			// The gate is built ONCE for the whole import, from the config
+			// at the cwd's monorepo root. gateConfigFor falls back to
+			// Enabled:true when it cannot read a config, which is the
+			// fail-closed half of this path: an unreadable config must not
+			// let a foreign corpus in unscreened.
+			cwd, cwderr := os.Getwd()
+			if cwderr != nil {
+				return fmt.Errorf("ecc import: getwd: %w", cwderr)
+			}
+			gateCfg := gateConfigFor(cmd, resolveMonorepoRoot(cwd))
+			screen := &importScreen{
+				gate:    instinctgate.New(gateCfg),
+				layout:  dst,
+				now:     time.Now(),
+				enabled: gateCfg.Enabled,
+			}
+
 			projects, err := readECCProjects(eccRoot)
 			if err != nil {
 				return err
@@ -94,10 +113,34 @@ the copy.`,
 				// attempted, with a non-zero exit + failure summary at
 				// the end so the operator knows exactly what needs a
 				// retry.
-				if err := copyProject(srcDir, dst.ProjectDir(id)); err != nil {
+				screen.projectID = id
+				if err := copyProject(srcDir, dst.ProjectDir(id), screen); err != nil {
 					fmt.Fprintf(stdout, "    FAILED to copy: %v\n", err)
 					failed = append(failed, id)
+					// Drop this project's counts and held records: carried
+					// forward they would be reported under the NEXT project,
+					// naming files in this project's quarantine with the next
+					// project's restore dir.
+					screen.reset()
 					continue
+				}
+				// Printed even when zero: an unmeasured 0 and an unswept
+				// directory read identically in a report.
+				scanned, heldN, batch, ferr := screen.flush()
+				if screen.enabled {
+					fmt.Fprintf(stdout, "    screened %d instinct(s), held %d\n", scanned, heldN)
+				} else {
+					fmt.Fprintf(stdout, "    policy gate OFF (instinct.gate.enabled: false): %d instinct(s) copied unscreened\n", scanned)
+				}
+				if heldN > 0 {
+					// --root names the IMPORTED project: `verdict` resolves the
+					// project from the cwd, so run from anywhere else it would
+					// allowlist and restore into whatever project the operator
+					// happens to be standing in.
+					fmt.Fprintf(stdout, "      → %s (reversible; `bough instinct verdict keep|retire <id> --root %s`)\n", batch, meta.Root)
+				}
+				if ferr != nil {
+					fmt.Fprintf(stdout, "      WARNING: quarantine report: %v\n", ferr)
 				}
 				toRegister = append(toRegister, homunculus.Project{
 					ID: id, Name: meta.Name, Root: meta.Root, Remote: meta.Remote,
@@ -221,11 +264,15 @@ const maxSymlinkDepth = 32
 // `import --apply` looked like a success yet migrated nothing. A
 // dangling link (e.g. a stale ~/.claude/skills entry pointing outside
 // the tree) is skipped rather than failing the whole import.
-func copyProject(src, dst string) error {
-	return copyTree(src, dst, 0)
+func copyProject(src, dst string, screen *importScreen) error {
+	return copyTree(src, dst, dst, 0, screen)
 }
 
-func copyTree(src, dst string, depth int) error {
+// root is the destination PROJECT dir, carried unchanged through the
+// recursion so a file's path relative to the project — which is what
+// decides whether it lands in the instincts tree — survives the symlink
+// descent that rebases src/dst.
+func copyTree(src, dst, root string, depth int, screen *importScreen) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -239,9 +286,9 @@ func copyTree(src, dst string, depth int) error {
 			return os.MkdirAll(target, 0o755)
 		}
 		if d.Type()&os.ModeSymlink != 0 {
-			return copySymlink(path, target, depth)
+			return copySymlink(path, target, root, depth, screen)
 		}
-		return copyFile(path, target)
+		return copyFile(path, target, root, screen)
 	})
 }
 
@@ -250,7 +297,7 @@ func copyTree(src, dst string, depth int) error {
 // dedup case); a symlink to a file is copied by value (copyFile opens
 // through the link); a dangling or unreadable link is skipped so one bad
 // link never aborts the migration.
-func copySymlink(path, target string, depth int) error {
+func copySymlink(path, target, root string, depth int, screen *importScreen) error {
 	if depth >= maxSymlinkDepth {
 		// A nesting this deep is a cycle, not a real corpus (ECC nests a
 		// single level). Skip this one link rather than returning an error:
@@ -268,12 +315,12 @@ func copySymlink(path, target string, depth int) error {
 		if rerr != nil {
 			return nil
 		}
-		return copyTree(real, target, depth+1)
+		return copyTree(real, target, root, depth+1, screen)
 	}
-	return copyFile(path, target)
+	return copyFile(path, target, root, screen)
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst, root string, screen *importScreen) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -287,6 +334,18 @@ func copyFile(src, dst string) error {
 	// below — matching the same trio ScanInstincts ignores.
 	base := filepath.Base(src)
 	if strings.HasSuffix(src, ".md") && base != "INSTINCTS.md" && base != "MEMORY.md" && base != "README.md" {
+		// Screen before writing, and only ever SUBTRACT: a held note is
+		// diverted to quarantine and this write is skipped, so a refusal
+		// can never destroy a good file already sitting at dst.
+		if rel, rerr := filepath.Rel(root, dst); rerr == nil && screensInstinct(rel) {
+			held, serr := screen.screen(src, dst)
+			if serr != nil {
+				return serr
+			}
+			if held {
+				return nil
+			}
+		}
 		return copyInstinctFile(src, dst)
 	}
 	return fsutil.CopyFile(src, dst)
