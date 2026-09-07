@@ -104,12 +104,19 @@ func TestGroundingIgnoresFormatting(t *testing.T) {
 	}
 }
 
-// TestGroundingShortClaimIsNotPunished pins that a claim too short to
-// contain a full run is treated as grounded — holding it would punish
-// brevity rather than invention, which is not what this layer is for.
-func TestGroundingShortClaimIsNotPunished(t *testing.T) {
-	if !governanceFixture(t).Grounded("policy: review first") {
-		t.Error("a claim shorter than the run length must not be held")
+// TestGroundingShortClaimMustMatchWhole pins the reference rule for a
+// claim too short to carry a full run: it grounds only by appearing in
+// the corpus WHOLE, and only above a character floor. Brevity is not
+// the thing being punished — a fragment that would match almost any
+// prose is not a citation, and this check exists to tell a real one
+// from an invented one.
+func TestGroundingShortClaimMustMatchWhole(t *testing.T) {
+	g := governanceFixture(t)
+	if g.Grounded("policy: review first") {
+		t.Error("a short claim absent from the corpus must not ground")
+	}
+	if g.Grounded("review") {
+		t.Error("a fragment under the character floor is not a citation")
 	}
 }
 

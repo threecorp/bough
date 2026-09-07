@@ -36,19 +36,36 @@ import (
 // edges.
 const groundingRunLength = 5
 
+// groundingMinShortQuote is the character floor for a quote too short to
+// carry a full run. Below it a "citation" is a fragment that would match
+// almost any prose, so it counts as no citation at all.
+const groundingMinShortQuote = 12
+
 // Governance is the project's actual rule text, loaded once and reused
 // across a batch. Sources records where it came from so a report can
 // say what an instinct was grounded against — "we found no rule" is
 // only actionable if the operator knows which documents were read.
 type Governance struct {
-	words []string
-	// index maps each governance word to every position it occupies, so a
-	// candidate run can jump straight to its possible starts. It is built
-	// ONCE with the corpus rather than per Grounded call: the corpus is a
-	// few thousand words and a batch screens many candidates, so rebuilding
-	// it per call re-tokenized the whole corpus once per instinct.
-	index   map[string][]int
+	// norm is the corpus folded once for matching. Grounded compares
+	// against this string rather than a word index because the reference
+	// implementation matches by substring on the folded text, and the
+	// two disagree on tokens the fold keeps (`--force` stays one token
+	// there, becomes `force` under a strip-everything tokenizer).
+	norm    string
 	Sources []string
+	// raw is the corpus verbatim, for the prompt. The judge is asked to
+	// quote the forbidding sentence FROM these documents, so it has to be
+	// shown them: a citation cannot be verified against a text the judge
+	// never saw, it can only be invented.
+	raw string
+}
+
+// Text returns the governance corpus verbatim, or "" when none loaded.
+func (g *Governance) Text() string {
+	if g == nil {
+		return ""
+	}
+	return g.raw
 }
 
 // LoadGovernance reads the governance documents at the given paths.
@@ -87,11 +104,8 @@ func LoadGovernance(paths []string) *Governance {
 			g.Sources = append(g.Sources, p)
 		}
 	}
-	g.words = normalizeWords(b.String())
-	g.index = make(map[string][]int, len(g.words))
-	for i, w := range g.words {
-		g.index[w] = append(g.index[w], i)
-	}
+	g.raw = b.String()
+	g.norm = normRule(g.raw)
 	return g
 }
 
@@ -99,58 +113,49 @@ func LoadGovernance(paths []string) *Governance {
 // layer must not hold anything: every citation would look unfounded,
 // and a guard that rejects everything is indistinguishable from a
 // broken one.
-func (g *Governance) Active() bool { return g != nil && len(g.words) > 0 }
+func (g *Governance) Active() bool { return g != nil && g.norm != "" }
 
-// Grounded reports whether text shares a contiguous run of
-// groundingRunLength words with the governance corpus. Text shorter
-// than the run length is treated as grounded: it is too short to be
-// judged, and holding it would punish brevity rather than invention.
+// Grounded reports whether the cited rule really appears in the
+// governance corpus, matched by a contiguous run of groundingRunLength
+// words. A run, not a bag of words: paraphrase is what hallucination
+// looks like, and any measure tolerating reordering would accept "two
+// approvals are required before merging" against a document that says
+// "approvals" and "merge" in unrelated sentences.
+//
+// A quote too short to carry a run must instead appear whole AND be at
+// least groundingMinShortQuote characters. A handful of words is not
+// evidence that a rule exists, so brevity does not earn a pass — an
+// EMPTY quote fails here and releases the hold, which is the contract:
+// the judge is told not to report a violation it cannot cite.
 func (g *Governance) Grounded(text string) bool {
 	if !g.Active() {
 		return true // nothing to ground against ⇒ nothing to contradict
 	}
-	claim := normalizeWords(text)
-	if len(claim) < groundingRunLength {
-		return true
+	q := normRule(text)
+	words := strings.Fields(q)
+	if len(words) < groundingRunLength {
+		return len(q) >= groundingMinShortQuote && strings.Contains(g.norm, q)
 	}
-	for i := 0; i+groundingRunLength <= len(claim); i++ {
-		for _, start := range g.index[claim[i]] {
-			if runMatches(g.words, claim[i:i+groundingRunLength], start) {
-				return true
-			}
+	for i := 0; i+groundingRunLength <= len(words); i++ {
+		if strings.Contains(g.norm, strings.Join(words[i:i+groundingRunLength], " ")) {
+			return true
 		}
 	}
 	return false
 }
 
-// runMatches reports whether run appears in words starting at start.
-func runMatches(words, run []string, start int) bool {
-	if start+len(run) > len(words) {
-		return false
-	}
-	for k, w := range run {
-		if words[start+k] != w {
-			return false
+// normRule folds the differences a model introduces when copying a
+// sentence out of markdown — back-ticks, quotes, emphasis, rewrapping —
+// and nothing else. Punctuation and hyphens are KEPT: stripping them
+// would let a cited `git push --force` match prose that merely says
+// "force", which is the looseness the run-length rule exists to avoid.
+func normRule(s string) string {
+	folded := strings.Map(func(r rune) rune {
+		switch r {
+		case '`', '"', '\'', '*', '_':
+			return ' '
 		}
-	}
-	return true
-}
-
-// normalizeWords lowercases and strips punctuation so a citation
-// matches its source across quoting and formatting differences —
-// markdown emphasis, back-ticks, and trailing commas must not decide
-// whether a rule is considered grounded.
-func normalizeWords(s string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		isLetter := r >= 'a' && r <= 'z'
-		isDigit := r >= '0' && r <= '9'
-		return !isLetter && !isDigit
-	})
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		if f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
+		return r
+	}, strings.ToLower(s))
+	return strings.Join(strings.Fields(folded), " ")
 }

@@ -209,7 +209,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 			// One read of .bough.yaml for both halves of the gate: the
 			// deterministic screen and the judge's categories must come
 			// from the same version of the same file.
-			gateCfg, forbidden := gateSettings(cmd, root)
+			gateCfg, forbidden, governance := gateSettings(cmd, root)
 			gate := instinctgate.New(gateCfg)
 			// The judge is opt-in per pass: it spends LLM calls, so an
 			// operator who wants only the free deterministic layers passes
@@ -227,7 +227,7 @@ func newObserverRunOnceCmd() *cobra.Command {
 					if budget <= 0 {
 						budget = min(candidates*instinctgate.DefaultVotes, judgeCallCeiling)
 					}
-					return newGateReviewer(model, budget, forbidden)
+					return newGateReviewer(model, budget, forbidden, governance)
 				}
 			}
 			outcome := screenAndPromote(ctx, layout, ident.ID, staged, gate, newJudge, now)

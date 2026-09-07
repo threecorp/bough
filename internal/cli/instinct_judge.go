@@ -39,7 +39,7 @@ const judgeCallCeiling = 30
 // But the REASON is returned so the caller can say so — a pass where the
 // judge never ran must not print what a pass that judged everything and
 // found nothing prints.
-func newGateReviewer(model string, budget int, forbidden []string) (*instinctgate.Reviewer, *claudecli.Provider, error) {
+func newGateReviewer(model string, budget int, forbidden []string, gov *instinctgate.Governance) (*instinctgate.Reviewer, *claudecli.Provider, error) {
 	// Resolve the category list once, up front: the same resolved list
 	// must reach the prompt (via newGatePromptData, which re-applies this
 	// default as its own safety net) AND the reviewer's grounding check.
@@ -59,7 +59,8 @@ func newGateReviewer(model string, budget int, forbidden []string) (*instinctgat
 	// reaches the template — so a prompt that does not parse used to burn
 	// 3 judge slots per candidate and could trip the circuit breaker,
 	// reported as if the model were down.
-	if _, rerr := renderGatePrompt(tpl.Body, "probe", "probe", forbidden); rerr != nil {
+	govText := gov.Text()
+	if _, rerr := renderGatePrompt(tpl.Body, "probe", "probe", forbidden, govText); rerr != nil {
 		return nil, nil, rerr
 	}
 	prov := claudecli.NewProvider()
@@ -88,7 +89,7 @@ func newGateReviewer(model string, budget int, forbidden []string) (*instinctgat
 		// would double the work on every vote (3 per candidate) for a byte
 		// count only the empty-response error ever reads, so that render is
 		// deferred to the error path below.
-		res, gerr := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: newGatePromptData(trigger, action, forbidden)})
+		res, gerr := prov.Generate(ctx, claudecli.GenerateRequest{Template: tpl, Data: newGatePromptData(trigger, action, forbidden, govText)})
 		if gerr != nil {
 			return nil, gerr
 		}
@@ -110,7 +111,7 @@ func newGateReviewer(model string, budget int, forbidden []string) (*instinctgat
 		// rather than replacing it: the empty response is the finding, and
 		// swapping in the render error would hide the very condition this
 		// branch exists to report.
-		body, rerr := renderGatePrompt(tpl.Body, trigger, action, forbidden)
+		body, rerr := renderGatePrompt(tpl.Body, trigger, action, forbidden, govText)
 		size := fmt.Sprintf("%d bytes", len(body))
 		if rerr != nil {
 			size = "size unavailable: " + rerr.Error()
@@ -118,6 +119,7 @@ func newGateReviewer(model string, budget int, forbidden []string) (*instinctgat
 		return nil, fmt.Errorf("instinct gate: empty judge response (prompt %s)", size)
 	}
 	rv := instinctgate.NewReviewer(review)
+	rv.Governance = gov
 	rv.Categories = forbidden
 	return rv, prov, nil
 }
@@ -133,6 +135,12 @@ type gatePromptData struct {
 	// whose rules go beyond bough's defaults can be judged against its
 	// own — a category the judge was never told about is one it clears.
 	ForbiddenActions []string
+	// Governance is the project's rule text, verbatim. It travels with
+	// the prompt because the judge is asked to QUOTE the forbidding
+	// sentence from it, and that quote is then verified against the same
+	// text — a judge asked for a citation it was never shown can only
+	// invent one.
+	Governance string
 }
 
 // newGatePromptData is the ONE place the judge's view of a candidate is
@@ -144,22 +152,25 @@ type gatePromptData struct {
 // produce a prompt with NO categories at all. A judge asked to check an
 // instinct against nothing clears everything while reporting a full
 // review, which is the failure this layer exists to prevent.
-func newGatePromptData(trigger, action string, forbidden []string) gatePromptData {
+func newGatePromptData(trigger, action string, forbidden []string, governance string) gatePromptData {
 	if len(forbidden) == 0 {
 		forbidden = instinctgate.DefaultForbiddenActions
 	}
-	return gatePromptData{Trigger: trigger, Action: action, ForbiddenActions: forbidden}
+	return gatePromptData{
+		Trigger: trigger, Action: action,
+		ForbiddenActions: forbidden, Governance: governance,
+	}
 }
 
 // renderGatePrompt renders the judge template. Used for the byte count
 // in the empty-response error and by the dry-run preview.
-func renderGatePrompt(body, trigger, action string, forbidden []string) (string, error) {
+func renderGatePrompt(body, trigger, action string, forbidden []string, governance string) (string, error) {
 	tpl, err := template.New("instinct_gate").Parse(body)
 	if err != nil {
 		return "", fmt.Errorf("instinct gate: parse prompt: %w", err)
 	}
 	var b strings.Builder
-	if err := tpl.Execute(&b, newGatePromptData(trigger, action, forbidden)); err != nil {
+	if err := tpl.Execute(&b, newGatePromptData(trigger, action, forbidden, governance)); err != nil {
 		return "", fmt.Errorf("instinct gate: render prompt: %w", err)
 	}
 	return b.String(), nil

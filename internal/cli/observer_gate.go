@@ -234,8 +234,9 @@ type promoteOutcome struct {
 	HeldTripwire int
 	HeldDenylist int
 	HeldJudge    int
-	// RuleUngrounded counts consensus violations RELEASED because the
-	// judge's cited category was not on the list it was given. A
+	// RuleUngrounded counts consensus violations RELEASED because a
+	// citation did not ground: the cited category was not on the list it
+	// was given, or the rule_quote is not in the governance text. A
 	// permanently-zero value is itself suspect — an inert grounding check
 	// reads exactly like a judge that never hallucinates.
 	RuleUngrounded int
@@ -642,53 +643,53 @@ func writeMoveReport(batchDir string, spec reportSpec, records []movedRecord, no
 	return nil
 }
 
-// gateConfigFor builds the policy-gate config for the monorepo at root.
-// A missing or unreadable .bough.yaml is not an error here: the gate is
-// reversible, so the safe fallback is to run it (Enabled: true) rather
-// than skip it. When the config loads, the operator's `instinct.gate`
-// block decides — defaulting on when the block is absent (GateEnabled).
-func gateConfigFor(cmd *cobra.Command, root string) instinctgate.Config {
-	c, _ := gateSettings(cmd, root)
-	return c
-}
-
 // gateSettings reads .bough.yaml ONCE and derives both halves of the
 // gate from it: the deterministic layer's config and the categories the
-// judge weighs. They were resolved by two functions that each opened the
+// judge weighs.
+//
+// A missing or unreadable .bough.yaml is not an error: the gate is
+// reversible, so the safe fallback is to RUN it (Enabled: true) rather
+// than skip it. When the config loads, the operator's `instinct.gate`
+// block decides — defaulting on when the block is absent (GateEnabled).
+//
+// The two halves were resolved by two functions that each opened the
 // file, so a run parsed it twice and — if it changed in between — could
 // screen against one version and judge against another. A tripwire and a
 // judge configured from different versions of the same file is the split
 // the configurable categories were added to close.
-func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string) {
+func gateSettings(cmd *cobra.Command, root string) (instinctgate.Config, []string, *instinctgate.Governance) {
 	cfg, err := loadConfigQuiet(resolveConfigPath(cmd, root))
 	if err != nil {
 		return instinctgate.Config{
-			Enabled:  true,
-			Denylist: loadDenylistQuiet(root, ""),
-		}, instinctgate.DefaultForbiddenActions
+				Enabled:  true,
+				Denylist: loadDenylistQuiet(root, ""),
+			}, instinctgate.DefaultForbiddenActions,
+			instinctgate.LoadGovernance(governancePaths(root, nil))
 	}
 	forbidden := cfg.Instinct.Gate.ForbiddenActions
 	if len(forbidden) == 0 {
 		forbidden = instinctgate.DefaultForbiddenActions
 	}
-	// governance_paths is not read here any more: the deterministic gate
-	// holds only on tripwires + the denylist, and the governance corpus
-	// belongs to the judge's rule grounding.
+	// The governance corpus is returned for the JUDGE, not for the gate
+	// config: the deterministic layer holds only on tripwires + the
+	// denylist, while the judge quotes a forbidding sentence from these
+	// documents and has that quote verified against them.
 	return instinctgate.Config{
-		Enabled:  cfg.Instinct.GateEnabled(),
-		AllowIDs: cfg.Instinct.Gate.AllowIDs,
-		Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
-	}, forbidden
+			Enabled:  cfg.Instinct.GateEnabled(),
+			AllowIDs: cfg.Instinct.Gate.AllowIDs,
+			Denylist: loadDenylistQuiet(root, cfg.Instinct.Gate.DenylistPath),
+		}, forbidden,
+		instinctgate.LoadGovernance(governancePaths(root, cfg.Instinct.Gate.GovernancePaths))
 }
 
 // gateForbiddenActions resolves the categories the LLM layer judges
-// against. It sits beside gateConfigFor and reads the same file, so the
+// against. It shares gateSettings with the deterministic layer, so the
 // deterministic layer and the judge cannot end up configured from
 // different places. An unreadable config falls back to the defaults
 // rather than to nothing: a judge with an empty category list clears
 // everything while reporting a full review.
 func gateForbiddenActions(cmd *cobra.Command, root string) []string {
-	_, forbidden := gateSettings(cmd, root)
+	_, forbidden, _ := gateSettings(cmd, root)
 	return forbidden
 }
 

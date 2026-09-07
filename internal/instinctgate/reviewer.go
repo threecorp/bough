@@ -68,6 +68,14 @@ type reviewVerdict struct {
 	// release the hold — the consensus still stands — but it is flagged,
 	// because a hold whose evidence cannot be found needs a closer look.
 	Quote string `json:"quote"`
+	// RuleQuote is the forbidding sentence, copied verbatim FROM THE
+	// GOVERNANCE DOCUMENTS. It is the half consensus cannot check:
+	// voting kills random per-call variance, but the same model on the
+	// same fixed text invents the same non-existent rule every time, so
+	// 3/3 agreement on a hallucinated rule means nothing. The governance
+	// text is fixed, so this is verifiable without another model call —
+	// and a fabricated rule cannot produce a real governance sentence.
+	RuleQuote string `json:"rule_quote"`
 }
 
 // Reviewer runs the consensus vote. Votes and Agree are struct fields
@@ -87,6 +95,13 @@ type Reviewer struct {
 	// which is what grounding is for — the two are not substitutes.
 	// Empty disables the check (nothing to ground against).
 	Categories []string
+	// Governance is the project's rule text. It grounds the OTHER half
+	// of the citation: Categories checks that the judge named a category
+	// it was given, this checks that the sentence it quoted really
+	// appears in the documents. An ungrounded rule quote RELEASES the
+	// hold — quarantining on an invented rule erodes trust in every real
+	// hold, and consensus cannot catch it. nil leaves the check off.
+	Governance *Governance
 }
 
 // DefaultVotes is how many independent samples NewReviewer takes per
@@ -232,7 +247,12 @@ func (r *Reviewer) Review(ctx context.Context, c Candidate) ReviewResult {
 		// is held on nothing.
 		chosen := -1
 		for i, v := range violating {
-			if v.Category == "" || r.groundedCategory(v.Category) {
+			// Governance.Grounded owns the whole rule-quote side, nil
+			// receiver included: with no corpus loaded every citation
+			// grounds, so a project with no rule documents keeps its
+			// holds. With one loaded, a citation that is not in it —
+			// invented, paraphrased, or absent — releases instead.
+			if (v.Category == "" || r.groundedCategory(v.Category)) && r.Governance.Grounded(v.RuleQuote) {
 				chosen = i
 				break
 			}
@@ -301,10 +321,12 @@ type BatchResult struct {
 	Failed     int
 	Unreviewed []string
 	Cancelled  bool
-	// RuleUngrounded counts consensus violations RELEASED because the
-	// judge's citation was not on the category list. A permanently-zero
-	// count is itself suspect — it is how an inert check reads — so it
-	// travels to telemetry rather than living only in stdout.
+	// RuleUngrounded counts consensus violations RELEASED because a
+	// citation did not ground: the category was not on the list it was
+	// given, or the rule_quote is not in the governance text. A
+	// permanently-zero count is itself suspect — it is how an inert
+	// check reads — so it travels to telemetry rather than living only
+	// in stdout.
 	RuleUngrounded int
 	// QuoteUnverified counts holds whose quoted evidence could not be
 	// located. The holds stand; the count tells the reviewer where to

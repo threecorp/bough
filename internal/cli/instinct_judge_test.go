@@ -18,7 +18,7 @@ import (
 // chose — and the run then told them to re-run with the very value that
 // had just been overridden.
 func TestJudgeBudgetRaisesBothCaps(t *testing.T) {
-	_, prov, err := newGateReviewer("", 45, nil)
+	_, prov, err := newGateReviewer("", 45, nil, nil)
 	if err != nil {
 		t.Fatalf("build reviewer: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestJudgeBudgetRaisesBothCaps(t *testing.T) {
 // TestSmallBudgetLeavesTheHourlyCapAlone: the hourly cap protects the
 // operator's interactive session, so a budget below it must not lower it.
 func TestSmallBudgetLeavesTheHourlyCapAlone(t *testing.T) {
-	_, prov, err := newGateReviewer("", 6, nil)
+	_, prov, err := newGateReviewer("", 6, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestForbiddenCategoriesReachThePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := renderGatePrompt(tpl.Body, "when a spec is late", "move the items out of the sprint",
-		[]string{"deferring agreed scope out of a sprint without asking"})
+		[]string{"deferring agreed scope out of a sprint without asking"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestDefaultCategoriesRenderWhenNoneConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := renderGatePrompt(tpl.Body, "t", "a", nil)
+	body, err := renderGatePrompt(tpl.Body, "t", "a", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

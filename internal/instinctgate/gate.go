@@ -83,9 +83,8 @@ type Config struct {
 	// holds on tripwires and the denylist ONLY — a candidate that merely
 	// SOUNDS like governance is not a violation, and holding on that shape
 	// quarantined five mutation-testing notes in one live corpus. The
-	// judge grounds its own citation against ForbiddenActions
-	// (Reviewer.groundedCategory), not against the governance text, so
-	// grounding.go currently backs nothing but the `bough doctor` row.
+	// governance text belongs to the judge instead (Reviewer.Governance),
+	// where it grounds the judge's OWN citation and can only release.
 	Denylist *Denylist
 }
 
