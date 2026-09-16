@@ -163,3 +163,27 @@ func isPortFreeForTest(t *testing.T, port int) bool {
 	_ = l.Close()
 	return true
 }
+
+// TestMergeExtras_StampsDefaultBackend pins what the suite exercises
+// when a plugin author's Config names no backend: the same token the
+// host sends for a .bough.yaml that omits `backend:`, so the checked
+// path is the one operators actually run.
+func TestMergeExtras_StampsDefaultBackend(t *testing.T) {
+	out := mergeExtras(Config{Image: "mysql:8.4"})
+	if got := out["backend"]; got != engineapi.DefaultBackend {
+		t.Errorf(`extras["backend"] = %q, want %q`, got, engineapi.DefaultBackend)
+	}
+	if got := out["docker.image"]; got != "mysql:8.4" {
+		t.Errorf(`extras["docker.image"] = %q, want %q`, got, "mysql:8.4")
+	}
+}
+
+// TestMergeExtras_HonoursExplicitBackend keeps the escape hatch a
+// plugin with a second backend needs: a token the author set is not
+// overwritten by the default.
+func TestMergeExtras_HonoursExplicitBackend(t *testing.T) {
+	out := mergeExtras(Config{Extras: map[string]string{"backend": "podman"}})
+	if got := out["backend"]; got != "podman" {
+		t.Errorf(`extras["backend"] = %q, want the caller's "podman"`, got)
+	}
+}

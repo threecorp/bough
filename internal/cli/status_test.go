@@ -1,20 +1,19 @@
 package cli
 
 import (
-	"context"
 	"testing"
 
 	"github.com/ikeikeikeike/bough/internal/config"
+	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
-// TestComputeEngineBackends_ExplicitBackendFieldWins is unaffected by
-// the wave-3 review fixes but pins the base case: an explicit
-// `backend:` YAML value must never trigger a Detect() probe.
+// TestComputeEngineBackends_ExplicitBackendFieldWins pins the base
+// case: an explicit `backend:` YAML value is reported verbatim.
 func TestComputeEngineBackends_ExplicitBackendFieldWins(t *testing.T) {
 	cfg := &config.Config{Engines: []config.Engine{
 		{Kind: "mysql", Backend: "docker"},
 	}}
-	got := computeEngineBackends(context.Background(), cfg, map[string]bool{"mysql": true})
+	got := computeEngineBackends(cfg, map[string]bool{"mysql": true})
 	if got["mysql"] != "docker" {
 		t.Errorf("Backend[mysql] = %q, want %q", got["mysql"], "docker")
 	}
@@ -30,26 +29,35 @@ func TestComputeEngineBackends_ExtrasBackendOverrideIsHonored(t *testing.T) {
 	cfg := &config.Config{Engines: []config.Engine{
 		{Kind: "redis", Extras: map[string]string{"backend": "docker"}},
 	}}
-	got := computeEngineBackends(context.Background(), cfg, map[string]bool{"redis": true})
+	got := computeEngineBackends(cfg, map[string]bool{"redis": true})
 	if got["redis"] != "docker" {
 		t.Errorf("Backend[redis] = %q, want %q (extras.backend override was ignored)", got["redis"], "docker")
 	}
 }
 
-// TestComputeEngineBackends_SkipsUnregisteredKinds is the regression
-// guard for the wave-3 review finding: computeEngineBackends used to
-// call Detect() unconditionally for every auto-detect engine in the
-// YAML, even ones with zero rows in the registry (e.g. no worktree
-// created yet), paying probe latency status's own caller had no way
-// to avoid. A kind absent from registeredKinds must never trigger
-// Detect() and must be absent from the returned map.
+// TestComputeEngineBackends_SkipsUnregisteredKinds keeps status from
+// reporting a backend for an engine kind the registry has no row for
+// (e.g. declared in the YAML but no worktree created yet) — that entry
+// would describe something that does not exist.
 func TestComputeEngineBackends_SkipsUnregisteredKinds(t *testing.T) {
 	cfg := &config.Config{Engines: []config.Engine{
-		{Kind: "mysql"}, // auto-detect, but NOT in registeredKinds below
+		{Kind: "mysql"}, // no backend declared, and NOT in registeredKinds below
 	}}
-	got := computeEngineBackends(context.Background(), cfg, map[string]bool{})
+	got := computeEngineBackends(cfg, map[string]bool{})
 	if _, ok := got["mysql"]; ok {
 		t.Errorf("Backend map contains %q for an engine kind absent from the registry: %v", "mysql", got)
+	}
+}
+
+// TestComputeEngineBackends_OmittedBackendReportsDefault pins what an
+// operator sees for a .bough.yaml that names no backend: the default
+// the create path would stamp in, marked as such rather than presented
+// as the operator's own choice.
+func TestComputeEngineBackends_OmittedBackendReportsDefault(t *testing.T) {
+	cfg := &config.Config{Engines: []config.Engine{{Kind: "mysql"}}}
+	got := computeEngineBackends(cfg, map[string]bool{"mysql": true})
+	if want := engineapi.DefaultBackend + " (default)"; got["mysql"] != want {
+		t.Errorf("Backend for an omitted field = %q, want %q", got["mysql"], want)
 	}
 }
 
@@ -71,7 +79,7 @@ func TestBuildStatus_NonEngineKindHasEmptyBackend(t *testing.T) {
 	reg := map[string]map[string]int{
 		"F-Test": {"mysql.main": 42000, "api": 45000},
 	}
-	out := buildStatus(context.Background(), reg, cfg)
+	out := buildStatus(reg, cfg)
 	byKind := make(map[string]statusEntry, len(out))
 	for _, e := range out {
 		byKind[e.Kind] = e

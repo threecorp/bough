@@ -49,12 +49,6 @@ func TestComposeConformance(t *testing.T) {
 		ReadyTimeout:    60 * time.Second,
 		IdempotentCount: 2,
 		NativeProbe:     conformance.RedisPing,
-
-		// Up() never touches Datadir (compose owns its own volumes) —
-		// a permission-denied Datadir parent would not be exercised at
-		// all, making the assert false-red rather than proving
-		// anything.
-		SkipDatadirPermission: true,
 		// Up() never reads extras["docker.image"] — the wrapped
 		// service's image lives inside the compose file itself, so
 		// forcing a bogus docker.image value here would not be

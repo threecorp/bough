@@ -23,10 +23,14 @@ and the suite will treat the clause as not-applicable rather than failed.
    where `<port>` is the value of the `Role: "main"` entry in
    `UpReq.Ports` (or the first entry for engines that emit a single
    port). Multi-port engines bind every entry in `Ports`.
-2. **`Up` pulls the image** declared by `Extras["docker.image"]` (or the
-   plugin default if absent) when it is not already cached. Pull failures
-   surface as a non-nil error from `Up`; the suite asserts this via
-   `Fault_ImagePullFailure`.
+2. **`Up` pulls the image** declared by `Extras["docker.image"]`, else the
+   one the plugin derives from `Extras["version"]`, else the plugin
+   default, when it is not already cached. Pull failures surface as a
+   non-nil error from `Up`; the suite asserts this via
+   `Fault_ImagePullFailure`. A version the active backend cannot honour
+   MUST come back as an `Up` error naming a version that works — never as
+   a silent substitution. The host expands `{{ .Version }}` in each
+   `PluginSpec.Location` before `Up`, so a plugin sees a finished URL.
 3. **`Up` is up-or-reuse**: if a container with the canonical name is
    already running, `Up` returns nil without recreating it. The suite
    asserts this in the `UpReuse` phase — it calls `Up` a second time
@@ -42,14 +46,15 @@ and the suite will treat the clause as not-applicable rather than failed.
    itself is ready.
 6. **`Down` is graceful within `GracefulTimeoutSec`**. After that
    deadline the plugin must SIGKILL the workload. When a plugin
-   supports more than one backend (e.g. nix + docker) and self-detects
-   which one is active, that detection must check the candidate
-   resource is actually *running* — not merely that it exists. A
-   stopped/leftover Docker container matching the engine's naming
-   convention must not count as "this backend is in use": `Down`
-   would then act on the wrong resource while the real, active engine
-   (possibly on the other backend) keeps running untouched, and a
-   later `Cleanup` would delete its `Datadir` out from under it.
+   registers more than one backend, `Down` and `ReadyCheck` carry no
+   backend token, so the plugin decides from what is running — and that
+   check must confirm the candidate resource is actually *running*, not
+   merely that it exists. A stopped/leftover Docker container matching
+   the engine's naming convention must not count as "this backend is in
+   use": `Down` would then act on the wrong resource while the real,
+   active engine keeps running untouched, and a later `Cleanup` would
+   delete its `Datadir` out from under it. `api.Backends.ForPort`
+   implements this; a single registered backend short-circuits it.
 7. **`Cleanup` is idempotent.** A second `Cleanup` on the same
    `datadir` + `ports` must return nil.
 
@@ -79,18 +84,14 @@ and the suite will treat the clause as not-applicable rather than failed.
 
 ## Datadir
 
-11. **On the host-process backend, `Up` prepares `Datadir` and surfaces
-    an un-writable parent as a non-nil error.** The services-flake /
-    process-compose path mkdirs `Datadir` (or its parent, for engines
-    like postgres that must not pre-create `$PGDATA`) synchronously
-    inside `Up`, before it launches the engine — so a `chmod 0o000`
-    parent is a real `Up` failure. The suite's `Fault_DatadirPermission`
-    asserts this, forcing the host-process backend via
-    `DatadirFaultBackend` (default `"nix"`). The docker backend
-    legitimately only bind-mounts `Datadir` and lets the container write
-    there, so it does not surface this error; a plugin that is
-    docker-only (no host-process path) opts out with
-    `SkipDatadirPermission=true`.
+11. **`Up` is not required to surface an un-writable `Datadir`.** A
+    container backend only bind-mounts the directory and lets the engine
+    write there, so the failure arrives asynchronously, long after `Up`
+    returned nil. The suite's `Fault_DatadirPermission` asserted the
+    opposite for the host-process backend bough used to bundle; it was
+    retired with that backend and nothing replaces it. A plugin that
+    does prepare `Datadir` synchronously may still do so — it is simply
+    not checked here.
 
 ## Plugins (optional)
 
@@ -107,21 +108,21 @@ and the suite will treat the clause as not-applicable rather than failed.
 
 ## Notes for plugin authors
 
-- A detached, long-lived subprocess launched from `Up` (e.g. a nix
-  daemon meant to outlive the RPC call) must not be started with the
-  incoming `Up` context directly: go-plugin's gRPC transport cancels
-  that context the instant `Up` returns, and Go's
+- A detached, long-lived subprocess launched from `Up` (e.g. a
+  supervisor meant to outlive the RPC call) must not be started with
+  the incoming `Up` context directly: go-plugin's gRPC transport
+  cancels that context the instant `Up` returns, and Go's
   `exec.CommandContext` watchdog then kills the child within
   microseconds regardless of `Setsid`. Use `context.WithoutCancel(ctx)`
   (or an equivalent detached context) for the subprocess, and reap it
   in a goroutine afterward to avoid a zombie.
-- `extras["backend"]="docker"` is forced by the conformance suite by
-  default so the docker path is always exercised. Pass
-  `cfg.Extras["backend"]="nix"` to verify the services-flake path.
-  `Fault_DatadirPermission` is the one exception: it forces the
-  host-process backend (`DatadirFaultBackend`, default `"nix"`) because
-  only that path prepares `Datadir` synchronously and can surface an
-  un-writable parent as an `Up` error.
+- `extras["backend"]` names the lifecycle implementation. The host
+  sends `api.DefaultBackend` for an engine whose YAML omits `backend:`,
+  and the conformance suite stamps the same token when `cfg.Extras`
+  carries none — pass one there to exercise another backend your plugin
+  registers. An unregistered token must be refused, not silently
+  swapped: `api.Backends.ForUp` returns an `*api.UnknownBackendError`
+  naming what the plugin does provide.
 - `MainPortRole` on `conformance.Config` defaults to `"main"`; override
   it if your plugin's "primary" port is named differently.
 - The contract bound is on plugins/engine/api/proto/engine.proto. Any

@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,7 +54,6 @@ import (
 
 const (
 	dockerEngine         = "mysql"
-	dockerDefaultImage   = "mysql:8.4"
 	dockerInternalPort   = "3306/tcp"
 	dockerInternalMysqlx = "33060/tcp"
 	dockerDataDir        = "/var/lib/mysql"
@@ -61,16 +61,15 @@ const (
 	dockerReadyPollMS    = 500
 )
 
-// pickDockerImage honours `extras["docker.image"]` and falls back to the
-// version-derived tag (`mysql:<version>`), then to dockerDefaultImage.
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return "mysql:" + v
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. Docker Hub publishes short and
+// full tags alike (8.4, 9, 8.4.5); a variant such as 8.4-oracle needs
+// the docker.image escape hatch.
+var dockerImage = api.DockerImage{
+	Image:      "mysql:%s",
+	Default:    "8.4",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+){0,2}$`),
+	TagHint:    "a version tag such as 8.4 or 9",
 }
 
 func dockerContainerName(port int) string {
@@ -103,13 +102,18 @@ func buildDockerEnv(initDB string, extras map[string]string) []string {
 	return env
 }
 
-// usingDockerBackend is the cheap self-detection used by Down /
-// ReadyCheck when neither RPC carries an explicit backend hint. A
-// container named `bough-mysql-<port>` is uniquely owned by this
-// plugin (the bough port allocator guarantees worktree-scoped
-// uniqueness). See dockerutil.IsBackendRunning for the shared
-// stale-container-detection logic all four engine plugins share.
-func usingDockerBackend(ctx context.Context, port int) bool {
+// dockerBackend runs mysqld in a container. Stateless: the tunables
+// are the consts above and the image comes from dockerImage.
+type dockerBackend struct{}
+
+var _ api.Backend = dockerBackend{}
+
+// Running answers ForPort's disambiguation question. A container named
+// `bough-mysql-<port>` is uniquely owned by this plugin (the bough port
+// allocator guarantees worktree-scoped uniqueness). See
+// dockerutil.IsBackendRunning for the stale-container rule all four
+// engine plugins share.
+func (dockerBackend) Running(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
@@ -121,7 +125,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return dockerutil.IsBackendRunning(ctx, cli, dockerContainerName(port))
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("mysql docker: invalid port %d (Ports=%v)", port, req.Ports)
@@ -130,13 +134,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("mysql docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	// Idempotency: claude --resume re-fires WorktreeCreate, so an
@@ -196,14 +204,14 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	return dockerutil.StartOrCleanup(ctx, cli, resp.ID, "mysql", port)
 }
 
-// dockerReadyCheck polls a TCP dial against the host-side port as a
-// cheap pre-gate, then confirms readiness with an in-container SELECT
-// 1 forced over TCP (mysqlTCPReady). The host-side dial alone is not
+// ReadyCheck polls a TCP dial against the host-side port as a cheap
+// pre-gate, then confirms readiness with an in-container SELECT 1
+// forced over TCP (mysqlTCPReady). The host-side dial alone is not
 // sufficient: docker-proxy accepts the host port from the moment the
 // container starts, regardless of whether mysqld is listening yet.
 // mysqlTCPReady is what actually distinguishes "the real server is
 // serving queries" from "docker-proxy answered".
-func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 600
 	}
@@ -283,7 +291,7 @@ func mysqlTCPReady(ctx context.Context, cli *client.Client, name string) error {
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {

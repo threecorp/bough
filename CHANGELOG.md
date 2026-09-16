@@ -1,5 +1,102 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **BREAKING: the Nix engine backend is gone; every engine runs on
+  Docker.** It could not start Elasticsearch at all — the bundled flake
+  invoked nixpkgs' launcher without `ES_HOME`, which refuses — gave
+  Postgres a different superuser than the container path creates, and
+  no CI job had ever run any of it: the conformance suite forces the
+  docker token, and the one integration test that reached the Nix path
+  had been failing on an unrelated assertion since July. Auto-detect
+  preferred it, so the least-exercised path was the default.
+
+  `engines[].backend` now accepts only `docker` and may be omitted —
+  omitted means `docker`, decided without a host-side probe. A
+  `.bough.yaml` that still says `backend: nix` **fails validation**
+  until the line is deleted: `bough create`, `remove`, `list`,
+  `status`, `verify`, `backfill`, `config validate` and the
+  WorktreeCreate/Remove hooks all exit 1 with `Key:
+  'Config.Engines[N].Backend' Error:Field validation for 'Backend'
+  failed on the 'oneof' tag` — `remove` included, which is the one
+  needed to back a worktree out. Delete the line (or write
+  `backend: docker`) and they work again.
+
+  **Stop any Nix-backed worktree before upgrading.** The new `Down`
+  finds no container and returns nil, and `remove` then deletes the
+  datadir under a still-running engine. Run `bough remove` on the old
+  binary first.
+
+  With it went:
+  - `internal/backend/` and the nix-with-flakes / docker-daemon race on
+    every `bough create`. `bough status` reports `docker (default)` for
+    an omitted field instead of `<probe> (auto)`, and no longer pings
+    the daemon to say so.
+  - `BOUGH_MYSQL_SOCKET` and `BOUGH_POSTGRES_SOCKET_DIR` from
+    `.env.local` — a container publishes TCP only, so they named a
+    socket that never existed on this backend. `{{ .Mysql.Socket }}`
+    and its siblings still render, as the empty string.
+  - `engines[].socket_dir`, which still parses but does nothing; every
+    load prints `bough: WARNING engines[N].socket_dir has no effect …`
+    until the line is deleted.
+  - the per-plugin flakes under
+    `plugins/engine/{mysql,postgres,redis,elasticsearch}/nix/`.
+  - **For plugin authors:** `conformance.Config.DatadirFaultBackend`,
+    `SkipDatadirPermission` and the `Fault_DatadirPermission` case,
+    which only a host-process backend could satisfy (contract clause 11
+    now says the property is not checked). A plugin test that sets
+    either field no longer compiles; delete the line.
+
+  A monorepo that ran engines through services-flake needs a reachable
+  Docker-compatible daemon (Docker Desktop / OrbStack / Colima / podman
+  with the docker socket). Data directories are not migrated: a
+  `.local/<kind>-data` written by a nix-run engine is not guaranteed to
+  open under the image's version — `bough remove` and recreate.
+
+### Fixed
+
+- **`engines[].version` is honoured or refused by every engine that
+  provisions one, never silently ignored.** (`kind: compose` is the
+  exception by design: the compose file it wraps owns the image, and
+  its `version:` stays descriptive.) The field was required of every
+  engine and then only half-read. The version is a tag fragment, and a
+  shape the registry does not publish is now refused at `Up` rather
+  than at the pull: `version: "7"` on Elasticsearch — the value the
+  README itself suggested — became a ref Elastic has never published,
+  and surfaced as "manifest unknown" naming neither the YAML key nor
+  the escape hatch. The same release retired the Nix backend (see
+  Removed), which had never read the field at all.
+
+### Changed
+
+- **Elasticsearch runs the 9.x line by default.** The Docker default was
+  the last 7.17 patch, a line Elastic ended support for in January 2026.
+  Nothing in the container's configuration was tied to it — single-node
+  discovery, the disabled security realm and the
+  `elasticsearch-plugins.yml` install path all hold on 9.x — so any
+  published `x.y.z` runs. `BOUGH_CONFORMANCE_ES_IMAGE` runs the
+  conformance suite against another line.
+- **A plugin picks its lifecycle implementation from a table it seeds
+  in `New()`.** `api.Backend` is that implementation and `api.Backends`
+  the token table; `Up` resolves through it, `ReadyCheck` and `Down`
+  resolve from what is running (they carry no token on the wire), and a
+  single registered backend short-circuits that probe. Adding a second
+  runtime is an implementation plus one map entry rather than a branch
+  in three methods across four plugins. An unregistered token is
+  refused by name — `unknown backend "nix" (this plugin provides
+  docker)` — instead of falling through to whatever is registered.
+
+### Added
+
+- **`{{ .Version }}` in `plugins[].location`.** A third-party engine
+  plugin's archive is built for one exact engine version and its URL says
+  so, which meant writing that version twice and discovering a drift as a
+  ready-check timeout — the engine refuses to boot on a plugin built for
+  another version. The location is now a template over the engine's own
+  version, rendered before `Up`.
+
 ## v0.26.0
 
 ### Fixed

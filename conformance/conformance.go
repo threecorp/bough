@@ -95,19 +95,13 @@ type Config struct {
 	// count itself. Default: 2.
 	IdempotentCount int
 
-	// SkipPortConflict / SkipDatadirPermission / SkipImagePullFailure
-	// turn off the corresponding fault-injection cases. Plugin authors
-	// who cannot fault-simulate a given path (e.g. an in-cluster
-	// provisioner that cannot bind a sidecar listener) declare a skip
-	// here rather than silently leaving the contract unverified.
-	//
-	// SkipDatadirPermission specifically opts out of the host-process
-	// datadir fault (see DatadirFaultBackend): set it only for a plugin
-	// with no host-process path that prepares Datadir synchronously —
-	// a pure docker / in-cluster provisioner that merely bind-mounts.
-	SkipPortConflict      bool
-	SkipDatadirPermission bool
-	SkipImagePullFailure  bool
+	// SkipPortConflict / SkipImagePullFailure turn off the corresponding
+	// fault-injection cases. Plugin authors who cannot fault-simulate a
+	// given path (e.g. an in-cluster provisioner that cannot bind a
+	// sidecar listener) declare a skip here rather than silently leaving
+	// the contract unverified.
+	SkipPortConflict     bool
+	SkipImagePullFailure bool
 
 	// AllowShellMetachars lifts the AssertShellSafe invariant. Plugins
 	// whose URL/DSN values legitimately contain `(`, `&`, `?`, etc.
@@ -142,17 +136,6 @@ type Config struct {
 	// returned by PortRangeDefault — MainPortRole only affects the
 	// single-port-shaped corners (faults + error messages).
 	MainPortRole string
-
-	// DatadirFaultBackend is the extras["backend"] token
-	// Fault_DatadirPermission injects to select the plugin's
-	// host-process path (services-flake / process-compose) — the
-	// inverse of Fault_ImagePullFailure forcing "docker". On that path
-	// the engine runs as the host user and the plugin prepares Datadir
-	// with a synchronous os.MkdirAll inside Up, so a 0o000 parent
-	// surfaces as a real Up error, deterministically and cross-platform.
-	// Defaults to "nix". A docker-only plugin with no such path sets
-	// SkipDatadirPermission=true instead.
-	DatadirFaultBackend string
 }
 
 // Run executes the conformance suite against the plugin binary
@@ -188,9 +171,6 @@ func applyDefaults(cfg Config) Config {
 	}
 	if cfg.MainPortRole == "" {
 		cfg.MainPortRole = "main"
-	}
-	if cfg.DatadirFaultBackend == "" {
-		cfg.DatadirFaultBackend = "nix"
 	}
 	return cfg
 }

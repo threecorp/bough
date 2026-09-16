@@ -6,22 +6,38 @@ import (
 	"strings"
 )
 
+// deprecationWarnings lists the keys a config still sets that no longer
+// do anything. They stay parseable — a strict decode would otherwise
+// reject a file that merely carries a stale line — so the only way an
+// operator learns is this notice. Emitted by LoadFromBytes alongside the
+// legacy-migration warnings.
+func (c *Config) deprecationWarnings() []string {
+	var out []string
+	for i, eng := range c.Engines {
+		if eng.SocketDir != "" {
+			out = append(out, fmt.Sprintf(
+				"engines[%d].socket_dir has no effect: the bundled engines expose TCP only; delete the line", i))
+		}
+	}
+	return out
+}
+
 // validateSemantic enforces cross-field rules that go-playground/
 // validator struct tags cannot express:
 //
 //  1. Exactly one repository must carry role:"engine-provider" (or the
 //     v0.3 alias "db-provider") when at least one `engines:` entry is
-//     present. The bough host cd's into that repo to issue
-//     `nix run --impure '.#mysql' -- up`, so an ambiguous (>1) or
-//     absent (0) provider produces an undefined launch site.
+//     present. That repo's worktree is the WorktreeRoot each engine's
+//     Up receives, so an ambiguous (>1) or absent (0) provider leaves
+//     it undefined.
 //  2. Each Engine.PortRanges entry must be a [low, high] pair with
 //     low < high so the allocator never traps in an infinite probe.
 //     Every engine must have at least one entry.
 //  3. Each Ports[<kind>].Range must satisfy the same low<high
 //     constraint.
-//  4. Engine.Kind values must be unique — spawning two
-//     `bough-plugin-mysql` instances for the same worktree would
-//     clash on /tmp socket path.
+//  4. Engine.Kind values must be unique — the allocator keys a
+//     worktree's ports by kind, so a second entry of the same kind
+//     would silently reuse the first one's port and env vars.
 //  5. An Engine with Kind == "compose" must carry a compose: block
 //     (file, service) — the plugin wraps an existing docker-compose
 //     file/service rather than provisioning its own, so it has

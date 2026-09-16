@@ -82,6 +82,9 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 		WorktreeRoot: engineProviderWorktree,
 		Plugins:      []api.PluginSpec{{ID: "analysis-icu"}},
 		Extras: map[string]string{
+			// A pinned x.y.z version, so this exercises the version→image
+			// path rather than the plugin's own default.
+			"version":                "9.4.1",
 			"es.config_mount":        configMountRel,
 			"es.config_mount_target": "/usr/share/elasticsearch/config/sudachi",
 			"es.heap":                "512m", // keep the smoke test light

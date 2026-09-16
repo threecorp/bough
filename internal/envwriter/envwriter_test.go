@@ -11,10 +11,10 @@ func sampleCtx() Context {
 	return Context{
 		Worktree:      WorktreeCtx{Name: "F-Auth", Root: "/wt/root"},
 		Repo:          RepoCtx{Name: "demo-api", Path: "/wt/root/demo-api"},
-		Mysql:         DBCtx{Port: 42345, Host: "127.0.0.1", Socket: "/tmp/bough-mysql-42345.sock"},
-		Postgres:      DBCtx{Port: 42346, Host: "127.0.0.1", Socket: "/tmp/bough-postgres-42346.sock"},
-		Redis:         DBCtx{Port: 53345, Host: "127.0.0.1", Socket: "/tmp/bough-redis-53345.sock"},
-		Elasticsearch: DBCtx{Port: 56345, Host: "127.0.0.1", Socket: "/tmp/bough-elasticsearch-56345.sock"},
+		Mysql:         DBCtx{Port: 42345, Host: "127.0.0.1"},
+		Postgres:      DBCtx{Port: 42346, Host: "127.0.0.1"},
+		Redis:         DBCtx{Port: 53345, Host: "127.0.0.1"},
+		Elasticsearch: DBCtx{Port: 56345, Host: "127.0.0.1"},
 		Ports:         map[string]int{"api": 45123, "gateway": 48045},
 	}
 }

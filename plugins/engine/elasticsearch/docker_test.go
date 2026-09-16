@@ -362,3 +362,35 @@ func TestActionableDatadirError(t *testing.T) {
 		}
 	}
 }
+
+// TestDockerImageTable is the regression guard for the README example
+// `version: "7"`, which used to become a ref Elastic has never
+// published (the registry carries only full x.y.z tags). The failure
+// surfaced at the pull, as "manifest unknown", naming neither the YAML
+// key nor the way out.
+func TestDockerImageTable(t *testing.T) {
+	cases := []struct {
+		name    string
+		extras  map[string]string
+		want    string
+		wantErr bool
+	}{
+		{"full tag fills the template", map[string]string{"version": "9.4.1"}, "docker.elastic.co/elasticsearch/elasticsearch:9.4.1", false},
+		{"the 7 line still resolves", map[string]string{"version": "7.17.29"}, "docker.elastic.co/elasticsearch/elasticsearch:7.17.29", false},
+		{"docker.image wins", map[string]string{"docker.image": "my.registry/es:custom", "version": "9"}, "my.registry/es:custom", false},
+		{"nil extras falls back to the default", nil, "docker.elastic.co/elasticsearch/elasticsearch:9.5.3", false},
+		{"major only is rejected", map[string]string{"version": "7"}, "", true},
+		{"major.minor is rejected", map[string]string{"version": "9.4"}, "", true},
+	}
+	for _, c := range cases {
+		got, err := dockerImage.Resolve(c.extras)
+		switch {
+		case c.wantErr && err == nil:
+			t.Errorf("%s: Resolve = %q, want an error", c.name, got)
+		case !c.wantErr && err != nil:
+			t.Errorf("%s: Resolve returned %v, want %q", c.name, err, c.want)
+		case !c.wantErr && got != c.want:
+			t.Errorf("%s: Resolve = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

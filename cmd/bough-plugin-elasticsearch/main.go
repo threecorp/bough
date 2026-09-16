@@ -1,5 +1,5 @@
 // Command bough-plugin-elasticsearch is the Hashicorp go-plugin gRPC
-// server for the Elasticsearch 7.x engine.
+// server for the Elasticsearch engine.
 package main
 
 import (

@@ -39,10 +39,5 @@ func TestPostgresConformance(t *testing.T) {
 		ReadyTimeout:    postgresConformanceReadyMax,
 		IdempotentCount: 2,
 		NativeProbe:     conformance.PostgresProbe,
-		// SkipDatadirPermission is intentionally NOT set: the
-		// Fault_DatadirPermission case forces the host-process
-		// (services-flake) backend, whose Up mkdirs filepath.Dir(Datadir)
-		// synchronously and so surfaces a 0o000 grandparent as a real Up
-		// error. See conformance.Config.DatadirFaultBackend.
 	})
 }

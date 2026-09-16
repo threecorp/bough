@@ -7,32 +7,32 @@ import (
 	"testing/fstest"
 )
 
-// TestDeployFlake_MaterialisesAndOverwrites feeds an in-memory fs.FS
+// TestDeployAssets_MaterialisesAndOverwrites feeds an in-memory fs.FS
 // (embed.FS satisfies the same interface) and asserts every file lands
 // byte-exact with its directory tree, and that a re-run overwrites in
-// place — the idempotency a plugin upgrade relies on.
-func TestDeployFlake_MaterialisesAndOverwrites(t *testing.T) {
+// place — the idempotency a skills / commands upgrade relies on.
+func TestDeployAssets_MaterialisesAndOverwrites(t *testing.T) {
 	assets := fstest.MapFS{
-		"nix/flake.nix":     {Data: []byte("flake contents")},
-		"nix/mod/redis.nix": {Data: []byte("redis module")},
+		"skills/using-bough/SKILL.md": {Data: []byte("skill contents")},
+		"skills/nested/dir/NOTE.md":   {Data: []byte("nested note")},
 	}
 	dst := t.TempDir()
 
-	if err := DeployFlake(assets, "nix", dst); err != nil {
-		t.Fatalf("DeployFlake: %v", err)
+	if err := DeployAssets(assets, "skills", dst); err != nil {
+		t.Fatalf("DeployAssets: %v", err)
 	}
-	assertFileContent(t, filepath.Join(dst, "flake.nix"), "flake contents")
-	assertFileContent(t, filepath.Join(dst, "mod", "redis.nix"), "redis module")
+	assertFileContent(t, filepath.Join(dst, "using-bough", "SKILL.md"), "skill contents")
+	assertFileContent(t, filepath.Join(dst, "nested", "dir", "NOTE.md"), "nested note")
 
 	// Mutate a materialised file, re-run, and the embedded content must
 	// be restored.
-	if err := os.WriteFile(filepath.Join(dst, "flake.nix"), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dst, "using-bough", "SKILL.md"), []byte("stale"), 0o644); err != nil {
 		t.Fatalf("mutate: %v", err)
 	}
-	if err := DeployFlake(assets, "nix", dst); err != nil {
-		t.Fatalf("DeployFlake (2nd run): %v", err)
+	if err := DeployAssets(assets, "skills", dst); err != nil {
+		t.Fatalf("DeployAssets (2nd run): %v", err)
 	}
-	assertFileContent(t, filepath.Join(dst, "flake.nix"), "flake contents")
+	assertFileContent(t, filepath.Join(dst, "using-bough", "SKILL.md"), "skill contents")
 }
 
 func assertFileContent(t *testing.T, path, want string) {

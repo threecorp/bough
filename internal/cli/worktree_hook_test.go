@@ -37,7 +37,7 @@ func gitInitMain(t *testing.T, dir string) {
 
 // writeMinimalBoughYAML drops the smallest .bough.yaml that both passes
 // validation and drives runCreate/runRemove: one already-present repo
-// (branched off main, no clone), no engines (docker/nix-free), a registry.
+// (branched off main, no clone), no engines (engine-free), a registry.
 func writeMinimalBoughYAML(t *testing.T, root string) {
 	t.Helper()
 	yaml := "schema_version: 2\n" +
@@ -62,7 +62,7 @@ func writeMinimalBoughYAML(t *testing.T, root string) {
 func TestHookHandle_WorktreeCreateEmitsPath(t *testing.T) {
 	root := t.TempDir()
 	// A present local git repo so AddOrAttach branches off it without a
-	// clone; no engines declared, so create stays docker/nix-free + fast.
+	// clone; no engines declared, so create stays engine-free + fast.
 	gitInitMain(t, filepath.Join(root, "demo"))
 	writeMinimalBoughYAML(t, root)
 

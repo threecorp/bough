@@ -1,19 +1,22 @@
 //go:build integration
 
 // e2e_mysql_test.go drives the full bough host + bough-plugin-mysql
-// loop against a real services-flake-launched mysqld. The cold-start
-// path takes ~30-60s on a fresh nix store cache and ~10s on warm
-// runs, so this test only runs when invoked with `go test -tags
-// integration` (the standard `go test ./...` skips it).
+// loop against a real containerised mysqld. It needs a reachable
+// docker daemon, and the first run pulls mysql:8.4, so it only runs
+// when invoked with `go test -tags integration` (the standard
+// `go test ./...` skips it).
+//
+// Neither fixture below names a backend: the omitted field is exactly
+// what most .bough.yaml files carry, so this exercises the path an
+// operator actually takes, and the container assertion below is what
+// proves docker is what ran.
 //
 // Local invocation:
 //
 //	make build
 //	make integration-test
 //
-// CI invocation: .github/workflows/ci.yml runs `make integration-test`
-// inside the Nix devShell so the same services-flake / mysql 8.4 /
-// process-compose-flake versions exercise as locally.
+// No CI job runs it today.
 
 package integration
 
@@ -31,6 +34,7 @@ import (
 
 	"github.com/ikeikeikeike/bough/internal/cli"
 	"github.com/ikeikeikeike/bough/internal/registry"
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 )
 
 // monorepoFixture is the minimal layout the integration test exercises
@@ -58,7 +62,6 @@ engines:
     version: "8.4"
     port_ranges:
       main: [42000, 42999]
-    socket_dir: "/tmp"
     initial_resources:
       - { type: database, name: bough }
 registry:
@@ -212,9 +215,14 @@ func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {
 		t.Fatalf("mysql did not accept TCP on %d within 30s", port)
 	}
 
+	// …and it must be the container that is listening. Without this the
+	// test would pass against any mysqld on that port, which is exactly
+	// what "the omitted backend field runs docker" needs to prove.
+	assertContainerRunning(ctx, t, fmt.Sprintf("bough-mysql-%d", port))
+
 	// .env.local must exist in the demo-db worktree and contain the
 	// templated port.
-	envPath := filepath.Join(fx.root, ".worktrees", wtName, "demo-db", ".env.local")
+	envPath := filepath.Join(fx.root, "worktrees", wtName, "demo-db", ".env.local")
 	envBytes, err := os.ReadFile(envPath)
 	if err != nil {
 		t.Fatalf("read .env.local: %v", err)
@@ -251,6 +259,26 @@ func runCLI(ctx context.Context, args ...string) error {
 	root.SetOut(io.Discard)
 	root.SetErr(os.Stderr)
 	return root.ExecuteContext(ctx)
+}
+
+// assertContainerRunning fails unless the docker backend created the
+// container the mysql plugin names for this port. The fixtures declare
+// no `backend:`, so this is what distinguishes "the default resolved to
+// docker" from "something is listening on that port".
+func assertContainerRunning(ctx context.Context, t *testing.T, name string) {
+	t.Helper()
+	cli, err := dockerutil.NewClient()
+	if err != nil {
+		t.Fatalf("docker client: %v", err)
+	}
+	defer func() { _ = cli.Close() }()
+	id, err := dockerutil.LookupByName(ctx, cli, name)
+	if err != nil {
+		t.Fatalf("look up container %s: %v", name, err)
+	}
+	if id == "" {
+		t.Fatalf("no container named %s — the engine did not run on the docker backend", name)
+	}
 }
 
 func waitForTCP(port int, within time.Duration) bool {
