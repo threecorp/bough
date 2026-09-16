@@ -6,30 +6,6 @@ import (
 	"strings"
 )
 
-// validateSemantic enforces cross-field rules that go-playground/
-// validator struct tags cannot express:
-//
-//  1. Exactly one repository must carry role:"engine-provider" (or the
-//     v0.3 alias "db-provider") when at least one `engines:` entry is
-//     present. That repo's worktree is the WorktreeRoot each engine's
-//     Up receives, so an ambiguous (>1) or absent (0) provider leaves
-//     it undefined.
-//  2. Each Engine.PortRanges entry must be a [low, high] pair with
-//     low < high so the allocator never traps in an infinite probe.
-//     Every engine must have at least one entry.
-//  3. Each Ports[<kind>].Range must satisfy the same low<high
-//     constraint.
-//  4. Engine.Kind values must be unique — spawning two
-//     `bough-plugin-mysql` instances for the same worktree would
-//     clash on /tmp socket path.
-//  5. An Engine with Kind == "compose" must carry a compose: block
-//     (file, service) — the plugin wraps an existing docker-compose
-//     file/service rather than provisioning its own, so it has
-//     nothing to do without one.
-//
-// All semantic errors are accumulated and returned as a single joined
-// error so a config-file author sees every problem at once instead of
-// fixing them one-by-one across multiple runs.
 // deprecationWarnings lists the keys a config still sets that no longer
 // do anything. They stay parseable — a strict decode would otherwise
 // reject a file that merely carries a stale line — so the only way an
@@ -46,6 +22,30 @@ func (c *Config) deprecationWarnings() []string {
 	return out
 }
 
+// validateSemantic enforces cross-field rules that go-playground/
+// validator struct tags cannot express:
+//
+//  1. Exactly one repository must carry role:"engine-provider" (or the
+//     v0.3 alias "db-provider") when at least one `engines:` entry is
+//     present. That repo's worktree is the WorktreeRoot each engine's
+//     Up receives, so an ambiguous (>1) or absent (0) provider leaves
+//     it undefined.
+//  2. Each Engine.PortRanges entry must be a [low, high] pair with
+//     low < high so the allocator never traps in an infinite probe.
+//     Every engine must have at least one entry.
+//  3. Each Ports[<kind>].Range must satisfy the same low<high
+//     constraint.
+//  4. Engine.Kind values must be unique — the allocator keys a
+//     worktree's ports by kind, so a second entry of the same kind
+//     would silently reuse the first one's port and env vars.
+//  5. An Engine with Kind == "compose" must carry a compose: block
+//     (file, service) — the plugin wraps an existing docker-compose
+//     file/service rather than provisioning its own, so it has
+//     nothing to do without one.
+//
+// All semantic errors are accumulated and returned as a single joined
+// error so a config-file author sees every problem at once instead of
+// fixing them one-by-one across multiple runs.
 func (c *Config) validateSemantic() error {
 	var errs []error
 

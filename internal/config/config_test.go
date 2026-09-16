@@ -178,9 +178,6 @@ func TestLoad_validExample(t *testing.T) {
 	}
 }
 
-// TestLoad_ComposeEngine_roundTrip is the positive-path companion to
-// the "compose kind" cases in TestLoad_rejectsInvalid: a well-formed
-// compose: block must load and populate Engine.Compose verbatim.
 // TestDeprecationWarnings_SocketDir guards the only signal an operator
 // gets for a key that still parses but no longer does anything: the
 // bundled engines expose TCP only, so a socket_dir line silently did
@@ -201,6 +198,9 @@ func TestDeprecationWarnings_SocketDir(t *testing.T) {
 	}
 }
 
+// TestLoad_ComposeEngine_roundTrip is the positive-path companion to
+// the "compose kind" cases in TestLoad_rejectsInvalid: a well-formed
+// compose: block must load and populate Engine.Compose verbatim.
 func TestLoad_ComposeEngine_roundTrip(t *testing.T) {
 	tmpdir := t.TempDir()
 	path := filepath.Join(tmpdir, "config.yaml")
