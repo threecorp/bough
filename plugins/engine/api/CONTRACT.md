@@ -55,6 +55,10 @@ and the suite will treat the clause as not-applicable rather than failed.
    active engine keeps running untouched, and a later `Cleanup` would
    delete its `Datadir` out from under it. `api.Backends.ForPort`
    implements this; a single registered backend short-circuits it.
+   Registering a second backend therefore also means carrying the token
+   on `DownRequest`/`ReadyCheckRequest`: an engine whose `Up` has not
+   finished is running nowhere yet, and resolving by `Running` alone
+   would hand it to the default backend.
 7. **`Cleanup` is idempotent.** A second `Cleanup` on the same
    `datadir` + `ports` must return nil.
 

@@ -83,10 +83,13 @@
   the token table; `Up` resolves through it, `ReadyCheck` and `Down`
   resolve from what is running (they carry no token on the wire), and a
   single registered backend short-circuits that probe. Adding a second
-  runtime is an implementation plus one map entry rather than a branch
-  in three methods across four plugins. An unregistered token is
-  refused by name — `unknown backend "nix" (this plugin provides
-  docker)` — instead of falling through to whatever is registered.
+  runtime is an implementation plus one map entry for `Up`, rather than
+  a branch in three methods across four plugins; `ReadyCheck` and `Down`
+  need the token on `DownRequest`/`ReadyCheckRequest` as well, since
+  `Running` cannot tell a stopped engine from one still starting. An
+  unregistered token is refused by name — `unknown backend "nix" (this
+  plugin provides docker)` — instead of falling through to whatever is
+  registered.
 
 ### Added
 

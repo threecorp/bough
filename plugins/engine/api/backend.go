@@ -67,6 +67,11 @@ func (b Backends) ForUp(extras map[string]string) (Backend, error) {
 // by name whose Running is true wins, falling back to DefaultBackend —
 // Down is idempotent everywhere, so a fallback when nothing runs stops
 // nothing.
+//
+// Running is the only signal here, so registering a second backend also
+// needs the token on DownRequest/ReadyCheckRequest: until then an engine
+// whose Up is still in flight resolves to DefaultBackend, not to the
+// backend the operator pinned.
 func (b Backends) ForPort(ctx context.Context, port int) (Backend, error) {
 	switch len(b) {
 	case 0:
