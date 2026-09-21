@@ -139,12 +139,12 @@ func newHookReplayCmd() *cobra.Command {
 		Long: `bough hook replay drives a recorded hook-event payload
 through the bough handler so an operator can sanity-check the
 wiring against a fixture file without touching a live Claude Code
-session. v0.7.0 ships canonical fixtures under
-internal/hooks/testdata/ that golden-test the install / handler
+session. Canonical fixtures for both wired events live under
+internal/hooks/testdata/ and golden-test the install / handler
 pair end-to-end.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if event == "" {
-				return fmt.Errorf("--event is required (e.g. --event PreToolUse)")
+				return fmt.Errorf("--event is required (e.g. --event WorktreeCreate)")
 			}
 			if fixture == "" {
 				return fmt.Errorf("--fixture is required (= '-' for stdin, or path to a JSON payload file)")
@@ -174,7 +174,7 @@ pair end-to-end.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&event, "event", "", "hook event name (e.g. PreToolUse, PostToolUse, SessionEnd)")
+	cmd.Flags().StringVar(&event, "event", "", "hook event name (WorktreeCreate | WorktreeRemove)")
 	cmd.Flags().StringVar(&fixture, "fixture", "", "path to a JSON fixture file (or '-' to read from stdin)")
 	return cmd
 }
