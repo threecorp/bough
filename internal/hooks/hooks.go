@@ -623,8 +623,8 @@ func (r *DoctorReport) renderHookWiring(w io.Writer, st termio.Styler) {
 	case termio.StatusError:
 		fmt.Fprintf(w, "    %s WARNING: bough's hooks are wired twice — here, and by %s.\n",
 			st.Mark(termio.StatusError), strings.Join(r.HookPlugins, " + "))
-		fmt.Fprintln(w, "      Every event fires both: observations double, the instinct block")
-		fmt.Fprintln(w, "      is injected twice. Keep one —")
+		fmt.Fprintln(w, "      Both fire: one `claude --worktree` runs `bough create` twice, and")
+		fmt.Fprintln(w, "      the second run trips over the worktree the first one made. Keep one —")
 		fmt.Fprintln(w, "        bough claude hook uninstall     (keep the plugin's wiring)")
 		fmt.Fprintln(w, "      ...or drop the plugin side, which means ALL of these — uninstalling")
 		fmt.Fprintln(w, "      one of two leaves the other still firing:")

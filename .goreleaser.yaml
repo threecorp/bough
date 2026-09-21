@@ -122,11 +122,10 @@ builds:
     env:
       - CGO_ENABLED=0
 
-  # v0.5-v0.8 memory subsystem + MCP server: deleted on the v0.9
-  # reset (= ECC verbatim port). claude --print subprocess does the
-  # LLM work, so neither bough-plugin-memory-{sqlite,mem0} nor
-  # bough-mcp-server need to ship in the v0.9 archive. Operators
-  # who depend on those surfaces should stay on v0.8.1.
+  # The six binaries above are the whole release. Everything else the
+  # repo ever shipped — the v0.5-v0.8 memory plugins, bough-mcp-server,
+  # and the v0.9-v0.26 learning loop — is retired; pin v0.8.1 or
+  # v0.26.0 respectively to keep one.
 
 archives:
   - id: default

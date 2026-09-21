@@ -14,7 +14,7 @@ and that is the only thing worth choosing between:
 | Plugin | Ships | Install when |
 |---|---|---|
 | `bough` | commands + skill | You want `/bough:*` on hand. Inert until invoked, so it is safe at any scope. |
-| `bough-hooks` | hooks | You drive bough from the shell and only want the observe/inject loop. |
+| `bough-hooks` | hooks | You drive bough from the shell and only want `claude --worktree` wired. |
 | `bough-all` | commands + skill + hooks | You want the lot in one line. |
 
 ```text
@@ -22,9 +22,10 @@ and that is the only thing worth choosing between:
 /plugin install bough-all@bough          # or bough@bough / bough-hooks@bough
 ```
 
-A hook fires on **every** session event in whatever scope it is installed at, so
-install any variant that carries hooks at **project scope** unless observing
-every repo on the machine is genuinely what you want:
+The hooks fire in whatever scope they are installed at, and they act on the
+monorepo they find themselves in, so install any variant that carries hooks at
+**project scope** unless you want `claude --worktree` wired in every repo on the
+machine:
 
 ```text
 claude plugin install bough-all@bough --scope project   # this repo only  (recommended)
@@ -43,8 +44,7 @@ defaults to user scope when `--scope` is omitted, so pass it.)
   marketplace.json   # the catalog: bough / bough-hooks / bough-all
   plugin.json        # manifest for the root `bough` plugin
 commands/            # slash commands — one .md per /bough:<name>
-  create.md remove.md list.md status.md verify.md doctor.md
-  instinct-status.md instinct-list.md instinct-promote.md evolve.md config-validate.md
+  create.md remove.md list.md status.md verify.md doctor.md config-validate.md
 skills/
   using-bough/SKILL.md   # model-invoked orchestration + PATH preflight
 claude-plugins/
@@ -80,11 +80,7 @@ rather than needing a manual bump per command edit.
 | `/bough:status` | Registry + live `lsof` listen state per port (spot stopped engines / collisions). | — |
 | `/bough:verify` | Report drift between a worktree's registry, its `.env.local`, and the declared ranges. | `<name>` |
 | `/bough:config-validate` | Validate a `.bough.yaml` against the schema. | `[path]` |
-| `/bough:instinct-status` | Per-project instinct totals + confidence histogram. | — |
-| `/bough:instinct-list` | List instincts (id, trigger, confidence, domain). | — |
-| `/bough:instinct-promote` | Promote cross-project instincts (≥2 projects, avg confidence ≥0.8) into the global corpus. Previews with `--dry-run`. | `[--dry-run]` |
-| `/bough:evolve` | Cluster instincts into skills/agents/commands via the 5-gate pipeline (`--generate` to emit; GATE 5 runs an LLM judge on your Claude subscription). | `[--generate]` |
-| `/bough:doctor` | Report hook wiring, observer state, and cost posture. | — |
+| `/bough:doctor` | Report hook wiring, engine-plugin posture, and any wiring left over from a retired feature. | — |
 
 ### Skill — Claude invokes this on its own
 
@@ -94,19 +90,18 @@ rather than needing a manual bump per command edit.
 
 ### Hooks (`bough-hooks` / `bough-all`)
 
-All eight events map to `bough hook handle --event <E>`:
+Both events map to `bough hook handle --event <E>`:
 
 | Event | Effect |
 |---|---|
-| PreToolUse / PostToolUse | record the tool call into the homunculus `observations.jsonl` |
-| UserPromptSubmit | inject the confidence-ranked instinct block into the next turn |
-| SessionEnd | summarise the session + re-score instinct confidence (±) |
-| PreCompact | snapshot the top-N instincts before compaction |
-| Stop | record an observation |
-| WorktreeCreate / WorktreeRemove | run `bough create` / `bough remove` for `claude --worktree` |
+| WorktreeCreate | run `bough create` and print the worktree root for `claude --worktree` to `cd` into |
+| WorktreeRemove | run `bough remove` — stop the engines, drop the datadirs, remove the worktree |
 
-LLM instinct **minting** (`bough instinct observer start`) stays opt-in — none of the
-hooks above spawn it.
+Nothing else is wired, so a session that never uses `claude --worktree` never
+runs bough. Versions up to v0.26.0 also wired `PreToolUse`, `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionEnd` and `PreCompact` for a continuous-learning
+loop that no longer exists; they now do nothing, and one
+`bough claude hook install` prunes them out of `settings.json`.
 
 ## The CLI installs the same artifacts
 
@@ -136,7 +131,7 @@ Two notes on the CLI path:
 
 `bough claude hook install` and the `bough-hooks` / `bough-all` plugins wire the
 **same dispatcher** by two different routes. Both at once fires every event
-twice: doubled observations, a doubled instinct block.
+twice, so one `claude --worktree` runs `bough create` twice.
 
 `bough claude doctor` detects it. Claude Code records an enabled plugin as
 `enabledPlugins` in the same `settings.json` bough already manages, so when both
@@ -144,10 +139,12 @@ halves are in that file the doctor says so outright:
 
 ```text
   WARNING: bough's hooks are wired twice — here, and by bough-all@bough.
-           Every event fires both: observations double, the instinct block
-           is injected twice. Keep one —
-             bough claude hook uninstall            (keep the plugin's wiring)
-             claude plugin uninstall bough-all@bough (keep these entries)
+    Both fire: one `claude --worktree` runs `bough create` twice, and
+    the second run trips over the worktree the first one made. Keep one —
+      bough claude hook uninstall     (keep the plugin's wiring)
+      ...or drop the plugin side, which means ALL of these — uninstalling
+      one of two leaves the other still firing:
+        claude plugin uninstall bough-all@bough
 ```
 
 One limit worth knowing: the doctor reads the `settings.json` for the scope it

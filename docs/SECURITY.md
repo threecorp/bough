@@ -14,30 +14,15 @@ A malicious engine plugin could:
 
 Run only plugins you trust. See [SIGNING.md](SIGNING.md) for the (currently unenforced) signature-verification design.
 
-## Plugin security config (schema only, not enforced)
+## Plugin security config
 
-```yaml
-instinct:
-  plugin_security:
-    require_signed: false
-    allowlist: []
-    untrusted_warning: true
-```
-
-This parses (it lives under the config schema's retired `instinct:`
-section — see [docs/attic/](attic/)) but nothing in the current host
-reads it: no NOTICE, no allowlist check, no enforce gate runs today.
-Full detail in [SIGNING.md](SIGNING.md).
-
-## Secret redaction (current)
-
-`internal/cli/scrub.go` truncates any observation field over 5000
-chars and redacts secret-shaped tokens (API key / token / password /
-Bearer-style patterns) at the point bough writes an observation to
-disk — a verbatim port of ECC `observe.sh`'s redaction regex. This
-runs unconditionally on every `bough hook handle` / `bough instinct observer`
-write; there is no opt-out flag and no separate plugin-facing
-redaction layer (there is no plugin in the loop that would need one).
+There is none today. The signature-verification design in
+[SIGNING.md](SIGNING.md) has no config surface: the schema it used to
+carry lived under the `instinct:` section, which was removed in v0.27.0
+along with the rest of the continuous-learning loop. Nothing read it —
+no NOTICE, no allowlist check, no enforce gate — so it went with the
+section rather than being rehomed to a key that would also do nothing.
+Wiring enforcement is what earns a config key back.
 
 ## Recommended posture
 

@@ -30,24 +30,17 @@ authors should mention which scheme they ship in their own
 
 ## Configuration
 
-```yaml
-instinct:
-  plugin_security:
-    require_signed: false              # parses; nothing reads it yet
-    accepted_signature_schemes:        # both supported by the library
-      - cosign
-      - minisign
-    untrusted_warning: true
-    allowlist: []                      # bin-name → bypass the signing notice
-```
+None yet, deliberately. The schema sketched here used to sit under the
+`instinct:` section and was removed with it in v0.27.0; no command path
+called `internal/pluginsign`, so the keys parsed and did nothing. A
+config surface lands in the same change that wires the enforce gate
+below — a key that configures nothing is worse than no key, because it
+reads as a control that is switched off rather than one that is absent.
 
-This schema lives under the (otherwise unrelated, retired) `instinct:`
-root section for historical reasons — see the [attic](attic/) for
-where that section came from. Setting `require_signed: true` here
-has no effect today: no command path calls `internal/pluginsign` to
-enforce it against `bough create`'s engine plugin spawns.
+The shape it will take, once wired up: every engine plugin spawn would
+run through an enforce gate that:
 
-The intended design, once wired up: every engine plugin spawn would
+ every engine plugin spawn would
 run through an enforce gate that:
 
 1. **Skips verification** when the binary name is on

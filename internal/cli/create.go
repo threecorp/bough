@@ -178,14 +178,12 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// data is missing.
 	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
-	// 5b. Expose the monorepo's project-scoped context to the worktree session.
+	// 5b. Expose the monorepo's root CLAUDE.md to the worktree session.
 	// `claude --worktree` cd's into <worktreeRoot> — a non-git container whose
-	// git walk-up cannot reach the monorepo root — so without explicit symlinks
-	// the worktree session would load neither the root CLAUDE.md nor the project
-	// artifacts. Both best-effort. CLAUDE.md follows monorepoRoot (the operative,
-	// possibly-relocated root repos materialize under); the evolved-artifact
-	// symlinks anchor on identityRoot instead — the same root `bough evolve`
-	// deploys into (see resolveIdentityRoot / #60) — so the two commands agree.
+	// git walk-up cannot reach the monorepo root — so without the symlink the
+	// worktree session would not load it. Best-effort, and it follows
+	// monorepoRoot: the operative, possibly-relocated root repos materialize
+	// under.
 	linkWorktreeClaudeMd(stderr, monorepoRoot, worktreeRoot)
 	// The host refuses to open a worktree it has no trust record for, and a
 	// path bough just created can never have one — see worktree_trust.go.
@@ -725,7 +723,7 @@ func ensureSymlink(target, linkPath string) error {
 // symlink the root CLAUDE.md would not load for that session. Best-effort and
 // only when the monorepo root actually has a regular-file CLAUDE.md; a real
 // (non-symlink) CLAUDE.md already in the worktree is left untouched by
-// ensureSymlink. Mirrors linkWorktreeArtifacts for the same reason.
+// ensureSymlink.
 func linkWorktreeClaudeMd(stderr io.Writer, monorepoRoot, worktreeRoot string) {
 	src := filepath.Join(monorepoRoot, "CLAUDE.md")
 	if fi, err := os.Stat(src); err != nil || !fi.Mode().IsRegular() {
