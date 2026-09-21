@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -78,10 +80,16 @@ func retiredConfigKeys(path string) []string {
 	if err != nil {
 		return nil
 	}
+	lines := splitLines(string(data))
 	var found []string
 	for _, key := range []string{"instinct", "memory_backends", "export", "quality_gates"} {
-		for _, line := range splitLines(string(data)) {
-			if line == key+":" {
+		for _, line := range lines {
+			// Prefix, not equality: `export: {}`, `quality_gates: []` and a
+			// key with a trailing space or `# comment` are all sections the
+			// loader warns about, and a doctor that matched only the bare
+			// `key:` spelling would hand out a clean bill for a file bough
+			// itself complains about on every create.
+			if strings.HasPrefix(line, key+":") {
 				found = append(found, key)
 				break
 			}
@@ -100,7 +108,7 @@ func retiredCorpusDir() string {
 		if err != nil {
 			return ""
 		}
-		dir = home + "/.local/share/bough-homunculus"
+		dir = filepath.Join(home, ".local", "share", "bough-homunculus")
 	}
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
 		return dir

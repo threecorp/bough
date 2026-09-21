@@ -40,9 +40,6 @@ reads as a control that is switched off rather than one that is absent.
 The shape it will take, once wired up: every engine plugin spawn would
 run through an enforce gate that:
 
- every engine plugin spawn would
-run through an enforce gate that:
-
 1. **Skips verification** when the binary name is on
    `plugin_security.allowlist` (= the operator's "I vendored this
    one myself, do not verify" signal).

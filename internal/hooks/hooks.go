@@ -137,6 +137,11 @@ func WiredEventNames() string {
 type HookEntry struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
+	// Timeout is Claude Code's per-entry second budget. bough never
+	// writes it, but Install / Uninstall re-encode EVERY event in the
+	// file — including ones bough never wired — so a field that is not
+	// modelled here is deleted from the operator's settings.json.
+	Timeout *int `json:"timeout,omitempty"`
 }
 
 // HookGroup mirrors one matcher group inside an event's hook list.
@@ -405,10 +410,8 @@ func (m *Manager) Replay(ctx context.Context, event HookEvent, fixture []byte) (
 	return result, nil
 }
 
-// ReplayResult describes the outcome of a Replay invocation. The
-// shape mirrors the audit-log record bough plans to persist into
-// the same observations.jsonl the SessionEnd path writes, so the
-// replay path's diagnostics align with production traces.
+// ReplayResult describes the outcome of a Replay invocation: what the
+// wired handler wrote on each stream and how it exited.
 type ReplayResult struct {
 	Event    HookEvent
 	Stdout   string
@@ -416,23 +419,27 @@ type ReplayResult struct {
 	ExitCode int
 }
 
-// DoctorReport is the v0.7.0 transparency surface. Round 5 review
-// flagged silent billing / silent observer / silent Haiku as the
-// recurring failure mode bough must visibly avoid; the doctor
-// report renders everything an operator needs to confirm bough's
-// background loop is not running expensive things without their
-// knowledge. v0.7.1 extends Cost with per-hook + per-session
-// token tallies; v0.7.0 surfaces the structure so downstream
-// docs / shell autocompletes can develop in parallel.
+// DoctorReport is the transparency surface: what bough is wired to
+// run on the operator's behalf, read out of one settings.json. It
+// names the wiring that works, the wiring another tool supplies, and
+// the wiring a previous bough version left behind.
 type DoctorReport struct {
 	SettingsPath string
 	Events       []EventStatus
 	// Retired names the events bough used to wire that still carry a
-	// bough-owned entry in this settings.json. Each one fires the
-	// accept-and-ignore path in `bough hook handle` on every matching
+	// group this settings.json holds wholly for bough. Each one fires
+	// the accept-and-ignore path in `bough hook handle` on every matching
 	// Claude Code event, which costs a process spawn and says nothing.
 	// Empty after `bough claude hook install` has run once.
 	Retired []HookEvent
+	// RetiredManual names retired events whose only bough entry sits in
+	// a group the operator also wrote into. Install preserves such a
+	// group whole rather than rewriting something bough did not author,
+	// so these keep firing after install and must be edited by hand —
+	// reporting them under Retired would promise a prune that never
+	// comes, and omitting them would hand out a clean bill while a shim
+	// still spawns on every event.
+	RetiredManual []HookEvent
 	// HookPlugins names the bough plugin variants that carry hooks and are
 	// enabled somewhere Claude Code will honour them. Empty is the common case;
 	// non-empty alongside wired settings.json entries is a real double-fire,
@@ -528,12 +535,27 @@ func (m *Manager) Doctor(_ context.Context) (*DoctorReport, error) {
 	// by walking every key in the file: a key bough never wrote is the
 	// operator's business, and reporting it would make doctor noisy about
 	// other tools' hooks.
+	//
+	// Split by what Install can actually do about it. A wholly-bough
+	// group is pruned on the next install; a bough entry sharing a group
+	// with the operator's own is preserved (Install never rewrites a
+	// group it did not author) and so fires forever unless it is said out
+	// loud here.
 	for _, event := range RetiredEvents() {
+		prunable, manual := false, false
 		for _, g := range set[event] {
-			if isBoughGroup(g) {
-				report.Retired = append(report.Retired, event)
-				break
+			switch {
+			case isBoughGroup(g):
+				prunable = true
+			case slices.ContainsFunc(g.Hooks, isBoughEntry):
+				manual = true
 			}
+		}
+		if prunable {
+			report.Retired = append(report.Retired, event)
+		}
+		if manual {
+			report.RetiredManual = append(report.RetiredManual, event)
 		}
 	}
 	return report, nil
@@ -595,7 +617,7 @@ func (r *DoctorReport) renderHookWiring(w io.Writer, st termio.Styler) {
 
 	// One line per event, mark first so the column of ✓ / · scans vertically.
 	// The dispatcher command is identical for every bough-installed event, so
-	// it is summarised once below instead of repeated eight times.
+	// it is summarised once below instead of repeated per event.
 	for _, e := range r.Events {
 		mark, label := termio.StatusNeutral, "not wired"
 		switch {
@@ -657,21 +679,38 @@ func (r *DoctorReport) renderHookWiring(w io.Writer, st termio.Styler) {
 // the section prints a single OK line rather than nothing — an absent
 // section reads as "doctor did not check".
 func (r *DoctorReport) renderRetired(w io.Writer, st termio.Styler) {
-	if len(r.Retired) == 0 {
+	if len(r.Retired) == 0 && len(r.RetiredManual) == 0 {
 		fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusOK))
 		fmt.Fprintf(w, "    %s none — settings.json wires only the events bough handles\n",
 			st.Mark(termio.StatusOK))
 		return
 	}
-	names := make([]string, 0, len(r.Retired))
-	for _, e := range r.Retired {
+	fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusWarn))
+	if len(r.Retired) > 0 {
+		fmt.Fprintf(w, "    %s %s still wired to bough and does nothing\n",
+			st.Mark(termio.StatusWarn), eventNames(r.Retired))
+		fmt.Fprintf(w, "    %s run `bough claude hook install` to prune it\n",
+			st.Mark(termio.StatusNeutral))
+	}
+	// Named apart because install will NOT clear these: the bough entry
+	// shares a group with one the operator wrote, and bough does not
+	// rewrite a group it did not author.
+	if len(r.RetiredManual) > 0 {
+		fmt.Fprintf(w, "    %s %s shares a hook group with your own entry, so it keeps firing\n",
+			st.Mark(termio.StatusWarn), eventNames(r.RetiredManual))
+		fmt.Fprintf(w, "    %s install cannot prune that group — delete the `%s --event <Event>`\n",
+			st.Mark(termio.StatusNeutral), boughCommandPrefix)
+		fmt.Fprintf(w, "      line from it by hand in %s\n", r.SettingsPath)
+	}
+}
+
+// eventNames renders a list of events for one report line.
+func eventNames(events []HookEvent) string {
+	names := make([]string, 0, len(events))
+	for _, e := range events {
 		names = append(names, string(e))
 	}
-	fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusWarn))
-	fmt.Fprintf(w, "    %s %s still wired to bough and does nothing\n",
-		st.Mark(termio.StatusWarn), strings.Join(names, ", "))
-	fmt.Fprintf(w, "    %s run `bough claude hook install` to prune it\n",
-		st.Mark(termio.StatusNeutral))
+	return strings.Join(names, ", ")
 }
 
 // loadSettings reads the settings.json file into a top-level

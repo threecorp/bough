@@ -15,29 +15,26 @@ import (
 )
 
 // newHookCmd wires `bough hook install / uninstall / list / replay
-// / doctor`. The v0.7.0 Bootstrap safety floor plan calls for hook
-// auto-wire to ship alongside a replay harness on day one (= round
-// 5 review insistence), so the cobra surface lands in the first
-// v0.7.0 commit even though most subcommands return
-// hooks.ErrNotYetWired until the body work catches up. Surfacing
-// the CLI shape early lets fixture data, docs, and integration
-// scripts develop in parallel rather than block on each other.
+// / doctor / handle`. The replay harness ships alongside install by
+// design (= round 5 review insistence): hook auto-wire without a way
+// to exercise the wiring against a fixture is how regressions reach a
+// live session.
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Manage Claude Code hook handlers bough writes into .claude/settings.json",
 		Long: `bough hook manages the handlers an operator wires into
-Claude Code's .claude/settings.json so bough's observer / bootstrap
-loop fires on session lifecycle events.
+Claude Code's .claude/settings.json so ` + "`claude --worktree`" + ` reaches
+bough: WorktreeCreate builds the isolated environment, WorktreeRemove
+tears it down.
 
 The subcommands keep the JSON round-trip safe — hand-edited entries
 the operator added by mouse stay put; only bough's canonical
 entries get reconciled.
 
-v0.7.0 first commit lands the cobra surface plus the
-internal/hooks/ package skeleton. The Manager bodies (install /
-uninstall / list / replay / doctor) wire in across the rest of the
-v0.7.0 sprint per docs/ROADMAP.md.`,
+install also prunes the six events bough wired for the
+continuous-learning loop it carried until v0.26.0. Until it is re-run,
+those keep firing a no-op shim (see ` + "`bough claude doctor`" + `).`,
 	}
 	cmd.AddCommand(
 		newHookInstallCmd(),
@@ -252,9 +249,17 @@ func newHookHandleCmd() *cobra.Command {
 			// is folded into the model's next turn, so a notice written
 			// there would be read as context every single turn.
 			if hooks.IsRetired(event) {
+				// Both remediations are named because `hook install` only
+				// edits settings.json. When the stale wiring comes from a
+				// cached bough-hooks / bough-all plugin manifest — the other
+				// half of the case this shim exists for — install changes
+				// nothing and the notice would otherwise repeat on every
+				// tool call with no way out.
 				fmt.Fprintf(c.ErrOrStderr(),
 					"[bough] hook event %s is retired since v0.27.0 and does nothing; "+
-						"run `bough claude hook install` to prune the stale wiring\n", event)
+						"run `bough claude hook install` to prune it from settings.json, "+
+						"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
+						"comes from the plugin\n", event)
 				return nil
 			}
 			if !hooks.IsWired(event) {

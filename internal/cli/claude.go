@@ -14,11 +14,10 @@ import (
 //     letter away from an unrelated command. Grouping the Claude Code surface
 //     under `claude` keeps the two vocabularies apart by construction.
 //
-//  2. Altitude. The hook dispatcher's internal verbs (inject-context /
-//     session-end / preserve-instincts / session-evolve-claudemd) were exposed
-//     at root next to create/remove/list, so `bough --help` mixed "things an
-//     operator runs" with "things a hook fires". They stay reachable (hidden
-//     aliases in cli.go) but are no longer part of the advertised surface.
+//  2. Altitude. `bough --help` used to mix "things an operator runs"
+//     (create / remove / list) with "things a hook fires". The dispatcher
+//     lives at `bough hook handle`, hidden, and everything else Claude Code
+//     consumes hangs off this namespace rather than off root.
 //
 // The subcommands are constructed fresh here rather than shared with the root
 // aliases: cobra mutates Parent() on AddCommand, so one *cobra.Command instance
@@ -32,9 +31,9 @@ func newClaudeCmd() *cobra.Command {
 The three kinds differ in when they act, which is why they install
 separately rather than as one blob:
 
-  hook     fires automatically on session events (observe / inject /
-           evolve / preserve, plus WorktreeCreate/Remove). Scoped per
-           project because it runs on EVERY event in that repo.
+  hook     fires automatically on WorktreeCreate / WorktreeRemove, the
+           pair that makes claude --worktree build and tear down an
+           isolated environment. Scoped per project.
   skill    model-invoked; inert until Claude decides it is relevant.
   command  operator-invoked (/bough:<name>); inert until typed.
 

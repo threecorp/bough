@@ -216,9 +216,10 @@ type SymlinkSpec struct {
 // sections but did not mirror them into this superset, so the strict
 // first-pass decode rejected every v0.5+ `.bough.yaml`. Every other
 // subcommand decoded the file fine through a separate entry point, but
-// `bough config validate` reported a false-negative. The fix here adds
-// the four sections as additive fields and migrateLegacy passes them
-// straight through to Config.
+// `bough config validate` reported a false-negative. Three of those four
+// sections are retired as of v0.27.0 and are held below as opaque
+// yaml.Node fields — still accepted, warned about once, and NOT copied
+// into Config, which has no field for them.
 type LegacyConfig struct {
 	SchemaVersion int                  `yaml:"schema_version"`
 	MonorepoRoot  string               `yaml:"monorepo_root"`

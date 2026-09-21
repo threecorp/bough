@@ -802,3 +802,103 @@ func TestManager_Doctor_ReportsRetiredWiring(t *testing.T) {
 		t.Errorf("Install did not clear the stale wiring: %v", after.Retired)
 	}
 }
+
+// TestManager_Install_PreservesEntryTimeout pins the settings.json
+// round-trip. Install re-encodes the whole "hooks" key, including
+// events bough never wired, so any field HookEntry does not model is
+// deleted from the operator's file — silently reverting a deliberate
+// `"timeout": 300` to Claude Code's default on the next install.
+func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{
+  "hooks": {
+    "PostToolUse": [
+      {"matcher": "Write", "hooks": [{"type": "command", "command": "prettier --write", "timeout": 300}]}
+    ]
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	groups := set["PostToolUse"]
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("the operator's own group must survive, got %+v", groups)
+	}
+	got := groups[0].Hooks[0]
+	if got.Timeout == nil || *got.Timeout != 300 {
+		t.Errorf("timeout dropped from a hand-written entry: %+v", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(data), `"timeout": 300`) {
+		t.Errorf("timeout is gone from the file bough wrote:\n%s", data)
+	}
+	// bough's own entries carry no timeout, so the field must not
+	// appear on them just because the struct now models it.
+	if strings.Count(string(data), "timeout") != 1 {
+		t.Errorf("timeout leaked onto an entry bough wrote:\n%s", data)
+	}
+}
+
+// TestManager_Doctor_ReportsRetiredWiringInMixedGroup is the other half
+// of the prune contract. Install deliberately leaves a group that mixes
+// a retired bough entry with one the operator wrote, so that shim keeps
+// firing — and a doctor that reported only prunable groups would hand
+// out a clean bill while it does.
+func TestManager_Doctor_ReportsRetiredWiringInMixedGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{
+  "hooks": {
+    "Stop": [
+      {"hooks": [
+        {"type": "command", "command": "echo mine"},
+        {"type": "command", "command": "bough hook handle --event Stop"}
+      ]}
+    ]
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	report, err := m.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if len(report.Retired) != 0 {
+		t.Errorf("a mixed group is not prunable, so it must not be reported as such: %v", report.Retired)
+	}
+	if len(report.RetiredManual) != 1 || report.RetiredManual[0] != RetiredEventStop {
+		t.Fatalf("RetiredManual: got %v want [Stop]", report.RetiredManual)
+	}
+	var sb strings.Builder
+	report.Render(&sb)
+	out := sb.String()
+	if strings.Contains(out, "none — settings.json wires only the events bough handles") {
+		t.Errorf("doctor reported a clean bill while a retired shim still fires:\n%s", out)
+	}
+	if !strings.Contains(out, "Stop") {
+		t.Errorf("the render must name the event that keeps firing:\n%s", out)
+	}
+}

@@ -14,6 +14,7 @@ package hooks_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,8 +23,11 @@ import (
 )
 
 // TestHooks_EndToEnd_InstallHandleDoctorUninstall walks the canonical
-// user flow: install the wiring, drive both worktree events through
-// `bough hook handle`, render the doctor report, then uninstall.
+// user flow: install the wiring, drive retired and unknown events
+// through `bough hook handle`, render the doctor report, prune a
+// v0.26.0 settings.json, then uninstall. The two worktree events need a
+// monorepo to act on, so they are driven where one exists:
+// internal/cli/worktree_hook_test.go and scripts/entrypoint-smoke.sh.
 func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	bin := buildBoughBinary(t)
 	workdir := t.TempDir()
@@ -97,13 +101,24 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	}
 
 	// The upgrade path an operator actually walks: a settings.json left
-	// over from v0.26.0 still wires all eight events. One install must
-	// leave exactly the two that do something.
-	stale := `{"hooks":{` +
-		`"PreToolUse":[{"hooks":[{"type":"command","command":"bough hook handle --event PreToolUse"}]}],` +
-		`"SessionEnd":[{"hooks":[{"type":"command","command":"bough hook handle --event SessionEnd"}]}],` +
-		`"WorktreeCreate":[{"hooks":[{"type":"command","command":"bough hook handle --event WorktreeCreate"}]}]}}`
-	if err := os.WriteFile(settingsPath, []byte(stale), 0o644); err != nil {
+	// over from v0.26.0 wires all eight events. One install must leave
+	// exactly the two that do something. Seeded with the full set rather
+	// than a sample, so a retired event that stops being pruned cannot
+	// hide in the half the fixture skipped.
+	staleEvents := []string{
+		"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact",
+		"WorktreeCreate", "WorktreeRemove",
+	}
+	var stale strings.Builder
+	stale.WriteString(`{"hooks":{`)
+	for i, e := range staleEvents {
+		if i > 0 {
+			stale.WriteString(",")
+		}
+		fmt.Fprintf(&stale, `%q:[{"hooks":[{"type":"command","command":"bough hook handle --event %s"}]}]`, e, e)
+	}
+	stale.WriteString("}}")
+	if err := os.WriteFile(settingsPath, []byte(stale.String()), 0o644); err != nil {
 		t.Fatalf("seed stale settings.json: %v", err)
 	}
 	stdout, _ = run(t, "doctor on stale wiring", "", "doctor")
@@ -124,7 +139,7 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	if len(doc.Hooks) != 2 {
 		t.Errorf("install should leave exactly the two wired events, got %d: %s", len(doc.Hooks), data)
 	}
-	for _, retired := range []string{"PreToolUse", "SessionEnd"} {
+	for _, retired := range staleEvents[:6] {
 		if _, ok := doc.Hooks[retired]; ok {
 			t.Errorf("%s survived install (an empty array counts — the key must be gone): %s", retired, data)
 		}

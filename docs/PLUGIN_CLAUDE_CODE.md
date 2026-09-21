@@ -123,9 +123,10 @@ Two notes on the CLI path:
 
 - Commands installed this way are **flat** (`/create`, not `/bough:create`) —
   filesystem commands are not namespaced, only plugin ones are.
-- Project scope lands where `bough create` points each worktree's
-  `.claude/<kind>` symlink, so installing once at the monorepo root reaches the
-  worktree sessions too.
+- Project scope lands at the monorepo root's own `.claude/<kind>`. As of
+  v0.27.0 `bough create` symlinks only `CLAUDE.md` into a worktree, so a
+  worktree session does NOT pick these up — install them user-scoped, or wire
+  your own symlink, if you want them there.
 
 ## Pick one wiring for hooks, not both
 

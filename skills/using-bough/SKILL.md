@@ -38,18 +38,25 @@ without it.
 | validate a `.bough.yaml` | `/bough:config-validate` |
 
 The primary way to create a worktree is still `claude --worktree <name>`, which
-fires a `WorktreeCreate` hook — but that hook is wired by
-`bough claude hook install` (see below), not by this plugin. `/bough:create`
-cuts one from inside an already-running session.
+fires a `WorktreeCreate` hook — wired either by the `bough-hooks` / `bough-all`
+plugin or by `bough claude hook install` (see below). `/bough:create` cuts one
+from inside an already-running session.
 
-## Hook wiring (not done by this plugin)
+## Hook wiring
 
-This plugin ships **commands + this skill only — no hooks**. The `/bough:*`
-commands act only when the user invokes them, so installing the plugin (even
-user-scoped, in every repo) has no background side effects.
+This skill and the `/bough:*` commands act only when they are invoked, so they
+have no background side effects wherever they are installed.
 
-The `WorktreeCreate` / `WorktreeRemove` handlers are wired separately, and
-scoped to the repo the user actually wants `claude --worktree` to work in:
+Whether hooks come with them depends on the variant: **`bough`** ships commands
++ this skill and no hooks, while **`bough-hooks`** and **`bough-all`** also ship
+the `WorktreeCreate` / `WorktreeRemove` wiring. With one of those two installed,
+do NOT also run `bough claude hook install` — both fire, and one
+`claude --worktree` runs `bough create` twice. `bough claude doctor` says which
+is in effect.
+
+With the hookless `bough` variant, the `WorktreeCreate` / `WorktreeRemove`
+handlers are wired separately, scoped to the repo the user actually wants
+`claude --worktree` to work in:
 
 - `bough claude hook install --scope project` — wire this repo's `.claude/settings.json` (recommended)
 - `bough claude hook install --scope user` — wire `~/.claude/settings.json` (every repo)
