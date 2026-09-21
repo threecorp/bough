@@ -12,7 +12,7 @@
   skills / agents / commands, and six extra Claude Code hook events.
   All of it is removed. Learning is a Claude Code plugin's job, and an
   isolation tool has no business shipping a second implementation of
-  one. Non-test Go shrank from 28,740 lines to 13,808.
+  one. Non-test Go shrank from 28,763 lines to 13,820.
 
   **Hook wiring is two events, not eight.** `WorktreeCreate` and
   `WorktreeRemove` stay; `PreToolUse`, `PostToolUse`,
