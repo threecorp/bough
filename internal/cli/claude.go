@@ -80,12 +80,3 @@ func deprecatedAlias(cmd *cobra.Command, replacement string) *cobra.Command {
 	}
 	return cmd
 }
-
-// hiddenCmd drops a command from `--help` without unwiring it. Used for the
-// hook dispatcher's internal verbs: the dispatcher calls their Go functions
-// directly (see hook.go's handle switch), so the CLI entry points exist only as
-// a manual escape hatch for debugging — valuable to keep, noise to advertise.
-func hiddenCmd(cmd *cobra.Command) *cobra.Command {
-	cmd.Hidden = true
-	return cmd
-}
