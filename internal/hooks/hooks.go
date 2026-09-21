@@ -45,34 +45,84 @@ import (
 // settings.json stays human-grokable.
 type HookEvent string
 
-// The v0.7.0 canonical event set. Mirrors the Claude Code 1.x
-// reference, plus the bough-specific WorktreeCreate /
-// WorktreeRemove pair the engine + memory plugins already key off.
+// The events bough wires. WorktreeCreate / WorktreeRemove are the
+// host's create/remove contract for `claude --worktree`, which is the
+// whole of what bough does.
 const (
-	EventPreToolUse       HookEvent = "PreToolUse"
-	EventPostToolUse      HookEvent = "PostToolUse"
-	EventUserPromptSubmit HookEvent = "UserPromptSubmit"
-	EventStop             HookEvent = "Stop"
-	EventSessionEnd       HookEvent = "SessionEnd"
-	EventPreCompact       HookEvent = "PreCompact"
-	EventWorktreeCreate   HookEvent = "WorktreeCreate"
-	EventWorktreeRemove   HookEvent = "WorktreeRemove"
+	EventWorktreeCreate HookEvent = "WorktreeCreate"
+	EventWorktreeRemove HookEvent = "WorktreeRemove"
 )
 
-// AllEvents lists every event the v0.7.0 install command wires by
-// default. Ordering is stable so install / uninstall and the
-// doctor's diff output line up reproducibly.
+// The six events bough wired for the continuous-learning loop it
+// carried from v0.9.0 to v0.26.0. They are named — not deleted —
+// because the wiring outlives the binary: an operator's settings.json
+// holds them until the next `bough claude hook install`, and a
+// bough-hooks plugin installed from the marketplace carries its own
+// cached copy until the operator updates it. Install prunes them and
+// `hook handle` accepts-and-ignores them for the v0.27.x line; both go
+// away in v0.28.0.
+const (
+	RetiredEventPreToolUse       HookEvent = "PreToolUse"
+	RetiredEventPostToolUse      HookEvent = "PostToolUse"
+	RetiredEventUserPromptSubmit HookEvent = "UserPromptSubmit"
+	RetiredEventStop             HookEvent = "Stop"
+	RetiredEventSessionEnd       HookEvent = "SessionEnd"
+	RetiredEventPreCompact       HookEvent = "PreCompact"
+)
+
+// AllEvents lists every event the install command wires. Ordering is
+// stable so install / uninstall and the doctor's diff output line up
+// reproducibly.
 func AllEvents() []HookEvent {
 	return []HookEvent{
-		EventPreToolUse,
-		EventPostToolUse,
-		EventUserPromptSubmit,
-		EventStop,
-		EventSessionEnd,
-		EventPreCompact,
 		EventWorktreeCreate,
 		EventWorktreeRemove,
 	}
+}
+
+// RetiredEvents lists the events bough used to wire and no longer
+// does. Disjoint from AllEvents by construction — a test pins that,
+// since an event in both would make Install write and prune the same
+// key in one pass.
+func RetiredEvents() []HookEvent {
+	return []HookEvent{
+		RetiredEventPreToolUse,
+		RetiredEventPostToolUse,
+		RetiredEventUserPromptSubmit,
+		RetiredEventStop,
+		RetiredEventSessionEnd,
+		RetiredEventPreCompact,
+	}
+}
+
+// IsRetired reports whether name is one of the events bough used to
+// wire. `bough hook handle` answers these with a notice and exit 0.
+func IsRetired(name string) bool {
+	for _, e := range RetiredEvents() {
+		if string(e) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// IsWired reports whether name is an event bough currently handles.
+func IsWired(name string) bool {
+	for _, e := range AllEvents() {
+		if string(e) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// WiredEventNames renders AllEvents for an error message.
+func WiredEventNames() string {
+	names := make([]string, 0, len(AllEvents()))
+	for _, e := range AllEvents() {
+		names = append(names, string(e))
+	}
+	return strings.Join(names, ", ")
 }
 
 // HookEntry mirrors one command entry inside Claude Code's
@@ -202,6 +252,33 @@ func (m *Manager) Install(_ context.Context, _ string) error {
 			}},
 		})
 		set[event] = filtered
+	}
+	// Prune what a previous version wired. Install is the only command an
+	// operator is told to re-run, so it has to be what cleans up: looping
+	// AllEvents alone would leave six `bough hook handle --event
+	// PreToolUse` entries firing into the shim forever. Hand-written
+	// entries are kept, and a group mixing one of each is kept whole —
+	// same rule Uninstall applies, so neither command can delete something
+	// the operator wrote.
+	for _, event := range RetiredEvents() {
+		groups, ok := set[event]
+		if !ok {
+			continue
+		}
+		filtered := groups[:0]
+		for _, g := range groups {
+			if !isBoughGroup(g) {
+				filtered = append(filtered, g)
+			}
+		}
+		// Drop the key rather than leaving `"PreToolUse": []` behind: an
+		// empty array is not what an untouched settings.json looks like,
+		// and the next reader cannot tell it from a deliberate override.
+		if len(filtered) == 0 {
+			delete(set, event)
+		} else {
+			set[event] = filtered
+		}
 	}
 	encoded, err := encodeHookSet(set)
 	if err != nil {
@@ -350,8 +427,12 @@ type ReplayResult struct {
 type DoctorReport struct {
 	SettingsPath string
 	Events       []EventStatus
-	Observer     ObserverStatus
-	Cost         CostStatus
+	// Retired names the events bough used to wire that still carry a
+	// bough-owned entry in this settings.json. Each one fires the
+	// accept-and-ignore path in `bough hook handle` on every matching
+	// Claude Code event, which costs a process spawn and says nothing.
+	// Empty after `bough claude hook install` has run once.
+	Retired []HookEvent
 	// HookPlugins names the bough plugin variants that carry hooks and are
 	// enabled somewhere Claude Code will honour them. Empty is the common case;
 	// non-empty alongside wired settings.json entries is a real double-fire,
@@ -410,35 +491,11 @@ type EventStatus struct {
 	HandEntries    []HookEntry
 }
 
-// ObserverStatus tracks whether the raw-event observer is actually
-// capturing into the central homunculus observations.jsonl (since v0.9.10;
-// pre-v0.9.10 this was a working-tree .bough/ file). Configured = false means
-// the operator has not run any session yet (or has not wired hook install).
-type ObserverStatus struct {
-	Configured bool
-	Path       string
-	LineCount  int
-}
-
-// CostStatus mirrors the v0.7.1 cost meter shape so the v0.7.0
-// doctor can render a "not yet capturing" line and the v0.7.1
-// commit only needs to fill Tokens / USDEst / LastSampleAt without
-// touching the render path.
-type CostStatus struct {
-	DataAvailable bool
-	Tokens        int
-	USDEst        float64
-	LastSampleAt  string
-	Message       string
-}
-
-// Doctor returns a snapshot of the wiring, observer, and cost
-// posture an operator needs to confirm bough's background loop is
-// safe. Round 5 review front-loaded this from v0.7.1 because the
-// hook auto-wire is the moment "silent" failure modes become
-// possible; doctor is the operator's first stop when something
-// feels off.
-func (m *Manager) Doctor(_ context.Context, obsPath string) (*DoctorReport, error) {
+// Doctor returns a snapshot of the wiring posture an operator needs to
+// confirm `claude --worktree` will reach bough: which events are wired,
+// which were hand-edited, whether a hook-bearing plugin would
+// double-fire, and whether wiring from a retired event is still there.
+func (m *Manager) Doctor(_ context.Context) (*DoctorReport, error) {
 	// One read, two views. Both halves of the report — the wired hooks and the
 	// enabled plugins — come out of the same settings.json, so reading it twice
 	// (List does its own load) would let the file change underneath and report a
@@ -467,27 +524,18 @@ func (m *Manager) Doctor(_ context.Context, obsPath string) (*DoctorReport, erro
 		}
 		report.Events = append(report.Events, st)
 	}
-	// Observer status: since v0.9.10 raw-event capture lands in the central
-	// homunculus observations.jsonl for the resolved monorepo project (NOT a
-	// working-tree .bough/ file). The caller resolves that path read-only and
-	// passes it in; an empty obsPath means no project identity could be
-	// resolved (non-git dir, no .bough.yaml), so capture is reported as not
-	// yet configured rather than probing a dead, always-absent path.
-	if obsPath != "" {
-		if info, statErr := os.Stat(obsPath); statErr == nil && info.Mode().IsRegular() {
-			report.Observer.Configured = true
-			report.Observer.Path = obsPath
-			if data, readErr := os.ReadFile(obsPath); readErr == nil {
-				report.Observer.LineCount = bytes.Count(data, []byte("\n"))
+	// Stale wiring from a retired event. Scanned explicitly rather than
+	// by walking every key in the file: a key bough never wrote is the
+	// operator's business, and reporting it would make doctor noisy about
+	// other tools' hooks.
+	for _, event := range RetiredEvents() {
+		for _, g := range set[event] {
+			if isBoughGroup(g) {
+				report.Retired = append(report.Retired, event)
+				break
 			}
 		}
 	}
-	// Cost meter: v0.7.0 ships the field shape; the actual counter
-	// integration with the MCP write surface + hook handle path
-	// lands in v0.7.1 once the LLM judge + per-event token tally
-	// have a place to write to.
-	report.Cost.DataAvailable = false
-	report.Cost.Message = "cost meter wires in alongside the v0.7.1 LLM judge integration; not yet capturing"
 	return report, nil
 }
 
@@ -510,9 +558,7 @@ func (r *DoctorReport) Render(w io.Writer) {
 	st := termio.NewStyler(w)
 	r.renderHookWiring(w, st)
 	fmt.Fprintln(w)
-	r.renderObserver(w, st)
-	fmt.Fprintln(w)
-	r.renderCostMeter(w, st)
+	r.renderRetired(w, st)
 }
 
 // renderHookWiring is the [ ] Hook wiring section. Its header status is the
@@ -606,28 +652,26 @@ func (r *DoctorReport) renderHookWiring(w io.Writer, st termio.Styler) {
 	}
 }
 
-func (r *DoctorReport) renderObserver(w io.Writer, st termio.Styler) {
-	if r.Observer.Configured {
-		fmt.Fprintf(w, "%s Observer\n", st.Section(termio.StatusOK))
-		fmt.Fprintf(w, "    %s observations: %s (%d lines)\n",
-			st.Mark(termio.StatusOK), r.Observer.Path, r.Observer.LineCount)
+// renderRetired names wiring a previous bough version wrote for an
+// event this one no longer handles. Silence is the healthy state, so
+// the section prints a single OK line rather than nothing — an absent
+// section reads as "doctor did not check".
+func (r *DoctorReport) renderRetired(w io.Writer, st termio.Styler) {
+	if len(r.Retired) == 0 {
+		fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusOK))
+		fmt.Fprintf(w, "    %s none — settings.json wires only the events bough handles\n",
+			st.Mark(termio.StatusOK))
 		return
 	}
-	// Not capturing yet is not a fault — it is the pre-first-run state.
-	fmt.Fprintf(w, "%s Observer\n", st.Section(termio.StatusNeutral))
-	fmt.Fprintf(w, "    %s not yet capturing (no observations.jsonl recorded yet for this project)\n",
+	names := make([]string, 0, len(r.Retired))
+	for _, e := range r.Retired {
+		names = append(names, string(e))
+	}
+	fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusWarn))
+	fmt.Fprintf(w, "    %s %s still wired to bough and does nothing\n",
+		st.Mark(termio.StatusWarn), strings.Join(names, ", "))
+	fmt.Fprintf(w, "    %s run `bough claude hook install` to prune it\n",
 		st.Mark(termio.StatusNeutral))
-}
-
-func (r *DoctorReport) renderCostMeter(w io.Writer, st termio.Styler) {
-	if r.Cost.DataAvailable {
-		fmt.Fprintf(w, "%s Cost meter\n", st.Section(termio.StatusOK))
-		fmt.Fprintf(w, "    %s tokens=%d est=$%.4f last=%s\n",
-			st.Mark(termio.StatusOK), r.Cost.Tokens, r.Cost.USDEst, r.Cost.LastSampleAt)
-		return
-	}
-	fmt.Fprintf(w, "%s Cost meter\n", st.Section(termio.StatusNeutral))
-	fmt.Fprintf(w, "    %s %s\n", st.Mark(termio.StatusNeutral), r.Cost.Message)
 }
 
 // loadSettings reads the settings.json file into a top-level

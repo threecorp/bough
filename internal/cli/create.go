@@ -53,11 +53,7 @@ func newCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			identityRoot, err := resolveIdentityRoot(cwd)
-			if err != nil {
-				return err
-			}
-			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, identityRoot, name, noFetch, strict)
+			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (mutually exclusive with --stdin-json)")
@@ -94,7 +90,7 @@ type engineInstance struct {
 // Each numbered phase below is a self-contained helper so this body
 // reads as the contract: load → allocate → materialise repos → start
 // engines → render env → run hooks → emit the worktree path.
-func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, identityRoot, name string, noFetch, strict bool) error {
+func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch, strict bool) error {
 	// One mutex per fd: route every create-path stderr write (logf, the
 	// spinner) through the shared termio wrapper so pluginhost's hclog
 	// lines — which target termio.Stderr from their own goroutines —
@@ -191,7 +187,6 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// symlinks anchor on identityRoot instead — the same root `bough evolve`
 	// deploys into (see resolveIdentityRoot / #60) — so the two commands agree.
 	linkWorktreeClaudeMd(stderr, monorepoRoot, worktreeRoot)
-	linkWorktreeArtifacts(stderr, identityRoot, worktreeRoot)
 	// The host refuses to open a worktree it has no trust record for, and a
 	// path bough just created can never have one — see worktree_trust.go.
 	trustWorktree(stderr, worktreeRoot)
@@ -752,33 +747,6 @@ func linkWorktreeClaudeMd(stderr io.Writer, monorepoRoot, worktreeRoot string) {
 		return
 	}
 	logf(stderr, "[bough] CLAUDE.md → %s", src)
-}
-
-// linkWorktreeArtifacts symlinks <worktreeRoot>/.claude/{skills,agents,commands}
-// -> <identityRoot>/.claude/{skills,agents,commands} so the worktree's Claude
-// session loads the project-scoped evolved artifacts. The session cd's into
-// the worktree (a non-git container whose git walk-up can't reach the
-// monorepo root), so the symlinks are required for project-scoped artifacts
-// to be visible. identityRoot must be the SAME root `bough evolve` deploys
-// into (resolveIdentityRoot, not necessarily monorepoRoot — see #60) or the
-// two commands silently disagree under a relocating monorepo_root.
-// Best-effort; a real .claude/<kind> dir already in the worktree is left
-// untouched. Called from both `bough create` and `bough backfill` (#61) so
-// pre-existing worktrees get relinked too.
-func linkWorktreeArtifacts(stderr io.Writer, identityRoot, worktreeRoot string) {
-	for _, kind := range []string{"skills", "agents", "commands"} {
-		src := filepath.Join(identityRoot, ".claude", kind)
-		if err := os.MkdirAll(src, 0o755); err != nil {
-			logf(stderr, "[bough] .claude/%s: mkdir %s failed: %v", kind, src, err)
-			continue
-		}
-		dst := filepath.Join(worktreeRoot, ".claude", kind)
-		if err := ensureSymlink(src, dst); err != nil {
-			logf(stderr, "[bough] .claude/%s: %v", kind, err)
-			continue
-		}
-		logf(stderr, "[bough] .claude/%s → %s", kind, src)
-	}
 }
 
 // renderEnvLocals walks repositories that declare env_local templates

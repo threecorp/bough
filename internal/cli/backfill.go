@@ -30,11 +30,7 @@ written registry.`,
 			if err != nil {
 				return err
 			}
-			identityRoot, err := resolveIdentityRoot("")
-			if err != nil {
-				return err
-			}
-			return runBackfill(cmd.ErrOrStderr(), cfg, monorepoRoot, identityRoot)
+			return runBackfill(cmd.ErrOrStderr(), cfg, monorepoRoot)
 		},
 	}
 	return cmd
@@ -53,7 +49,7 @@ written registry.`,
 // until now). The relink runs for every worktree dir, not just
 // newly-registered ones, since ensureSymlink is idempotent and a no-op on an
 // already-correct link.
-func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot, identityRoot string) error {
+func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) error {
 	root := worktreesDir(monorepoRoot)
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -80,7 +76,6 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot, identityRoo
 		name := e.Name()
 		wtRoot := filepath.Join(root, name)
 		linkWorktreeClaudeMd(stderr, monorepoRoot, wtRoot)
-		linkWorktreeArtifacts(stderr, identityRoot, wtRoot)
 		relinked++
 		if _, exists := reg[name]; exists {
 			continue
