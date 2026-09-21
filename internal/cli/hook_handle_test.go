@@ -74,23 +74,3 @@ func TestResolveMonorepoRoot(t *testing.T) {
 		t.Errorf("fallback: got %q want %q", got, bare)
 	}
 }
-
-// TestExtractSessionID is the regression guard for the wave-4 review
-// finding: the SessionEnd hook dispatch always called runSessionEnd
-// with a hardcoded "", so eval/scores.jsonl's session_id field was
-// dead in normal operation even though Claude Code's real hook
-// payload carries it.
-func TestExtractSessionID(t *testing.T) {
-	if got := extractSessionID([]byte(`{"session_id":"sess-abc123","cwd":"/x"}`)); got != "sess-abc123" {
-		t.Errorf("got %q, want %q", got, "sess-abc123")
-	}
-	if got := extractSessionID([]byte(`{"cwd":"/x"}`)); got != "" {
-		t.Errorf("missing field: got %q, want empty", got)
-	}
-	if got := extractSessionID(nil); got != "" {
-		t.Errorf("nil payload: got %q, want empty", got)
-	}
-	if got := extractSessionID([]byte(`not json`)); got != "" {
-		t.Errorf("malformed payload: got %q, want empty", got)
-	}
-}

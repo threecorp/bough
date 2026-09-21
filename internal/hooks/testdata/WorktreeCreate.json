@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "WorktreeCreate",
+  "name": "F-Example",
+  "cwd": "/tmp/bough-replay-fixture"
+}

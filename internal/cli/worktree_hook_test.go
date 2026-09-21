@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ikeikeikeike/bough/internal/hooks"
 )
 
 // gitInitMain materialises a minimal git repo with a `main` branch and
@@ -67,7 +65,7 @@ func TestHookHandle_WorktreeCreateEmitsPath(t *testing.T) {
 	writeMinimalBoughYAML(t, root)
 
 	cmd := newHookHandleCmd()
-	cmd.SetArgs([]string{"--event", "WorktreeCreate", "--out", filepath.Join(root, "obs.jsonl")})
+	cmd.SetArgs([]string{"--event", "WorktreeCreate"})
 	cmd.SetIn(strings.NewReader(fmt.Sprintf(`{"name":"F-Test","cwd":%q}`, root)))
 	var out, errBuf bytes.Buffer
 	cmd.SetOut(&out)
@@ -94,56 +92,13 @@ func TestHookHandle_WorktreeCreateEmitsPath(t *testing.T) {
 // empty-stdout success.
 func TestHookHandle_WorktreeCreateMissingName(t *testing.T) {
 	cmd := newHookHandleCmd()
-	cmd.SetArgs([]string{"--event", "WorktreeCreate", "--out", filepath.Join(t.TempDir(), "obs.jsonl")})
+	cmd.SetArgs([]string{"--event", "WorktreeCreate"})
 	cmd.SetIn(strings.NewReader(`{"cwd":"/tmp"}`))
 	var out, errBuf bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errBuf)
 	if err := cmd.Execute(); err == nil {
 		t.Errorf("expected error for WorktreeCreate payload with no name, got nil (stdout=%q)", out.String())
-	}
-}
-
-// TestHookHandle_AllEventsRecordObservation is the whole-surface check:
-// every event `bough hook install` wires must append exactly one
-// observation tagged with the event name and exit cleanly. WorktreeCreate
-// / WorktreeRemove are exercised separately below (they need a repo);
-// the remaining six carry no repo-mutating dispatch, so a bare .bough.yaml-
-// less run is safe.
-func TestHookHandle_AllEventsRecordObservation(t *testing.T) {
-	// SessionEnd/PreCompact dispatch (runSessionEnd/runPreserveInstincts)
-	// resolves the homunculus from the process cwd; redirect it to a temp
-	// dir so the test never appends synthetic scores into the developer's
-	// or CI's real ~/.local/share/bough-homunculus corpus (git status does
-	// not surface that dir, which is how the pollution slipped through).
-	t.Setenv("BOUGH_HOMUNCULUS_DIR", t.TempDir())
-	for _, ev := range []hooks.HookEvent{
-		hooks.EventPreToolUse,
-		hooks.EventPostToolUse,
-		hooks.EventUserPromptSubmit,
-		hooks.EventStop,
-		hooks.EventSessionEnd,
-		hooks.EventPreCompact,
-	} {
-		t.Run(string(ev), func(t *testing.T) {
-			obs := filepath.Join(t.TempDir(), "obs.jsonl")
-			cmd := newHookHandleCmd()
-			cmd.SetArgs([]string{"--event", string(ev), "--out", obs})
-			cmd.SetIn(strings.NewReader(`{"prompt":"x","tool_name":"Bash","session_id":"s"}`))
-			var out, errBuf bytes.Buffer
-			cmd.SetOut(&out)
-			cmd.SetErr(&errBuf)
-			if err := cmd.Execute(); err != nil {
-				t.Fatalf("hook handle %s: %v\n%s", ev, err, errBuf.String())
-			}
-			data, err := os.ReadFile(obs)
-			if err != nil {
-				t.Fatalf("read obs: %v", err)
-			}
-			if !bytes.Contains(data, []byte(fmt.Sprintf(`"event":%q`, string(ev)))) {
-				t.Errorf("%s: no observation tagged with the event was recorded:\n%s", ev, data)
-			}
-		})
 	}
 }
 
@@ -154,12 +109,11 @@ func TestHookHandle_WorktreeRemoveTearsDown(t *testing.T) {
 	root := t.TempDir()
 	gitInitMain(t, filepath.Join(root, "demo"))
 	writeMinimalBoughYAML(t, root)
-	obs := filepath.Join(root, "obs.jsonl")
 
 	handle := func(event, payload string) {
 		t.Helper()
 		cmd := newHookHandleCmd()
-		cmd.SetArgs([]string{"--event", event, "--out", obs})
+		cmd.SetArgs([]string{"--event", event})
 		cmd.SetIn(strings.NewReader(payload))
 		var out, errBuf bytes.Buffer
 		cmd.SetOut(&out)

@@ -1,7 +1,0 @@
-{
-  "hook_event_name": "SessionEnd",
-  "session_id": "fixture-session-001",
-  "transcript_path": "/tmp/transcripts/fixture.jsonl",
-  "cwd": "/home/op/projects/demo",
-  "reason": "logout"
-}

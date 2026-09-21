@@ -20,7 +20,7 @@ import (
 func worktreeCreateHook(t *testing.T, root, name string) string {
 	t.Helper()
 	cmd := newHookHandleCmd()
-	cmd.SetArgs([]string{"--event", "WorktreeCreate", "--out", filepath.Join(root, "obs.jsonl")})
+	cmd.SetArgs([]string{"--event", "WorktreeCreate"})
 	cmd.SetIn(strings.NewReader(fmt.Sprintf(`{"name":%q,"cwd":%q}`, name, root)))
 	var out, errBuf bytes.Buffer
 	cmd.SetOut(&out)
@@ -145,7 +145,7 @@ func TestRemoveLeavesNoWorktreeRecord(t *testing.T) {
 	wt := worktreeCreateHook(t, root, "F-Gone")
 
 	cmd := newHookHandleCmd()
-	cmd.SetArgs([]string{"--event", "WorktreeRemove", "--out", filepath.Join(root, "obs.jsonl")})
+	cmd.SetArgs([]string{"--event", "WorktreeRemove"})
 	cmd.SetIn(strings.NewReader(fmt.Sprintf(`{"worktree_path":%q}`, wt)))
 	var out, errBuf bytes.Buffer
 	cmd.SetOut(&out)

@@ -220,15 +220,15 @@ type SymlinkSpec struct {
 // the four sections as additive fields and migrateLegacy passes them
 // straight through to Config.
 type LegacyConfig struct {
-	SchemaVersion  int                  `yaml:"schema_version"`
-	MonorepoRoot   string               `yaml:"monorepo_root"`
-	Repositories   []Repository         `yaml:"repositories"`
-	Databases      []LegacyDatabase     `yaml:"databases"`
-	Engines        []Engine             `yaml:"engines"`
-	Ports          map[string]PortRange `yaml:"ports"`
-	Registry       RegistryConfig       `yaml:"registry"`
-	Teardown       TeardownConfig       `yaml:"teardown"`
-	MCP            MCPConfig            `yaml:"mcp"`
+	SchemaVersion int                  `yaml:"schema_version"`
+	MonorepoRoot  string               `yaml:"monorepo_root"`
+	Repositories  []Repository         `yaml:"repositories"`
+	Databases     []LegacyDatabase     `yaml:"databases"`
+	Engines       []Engine             `yaml:"engines"`
+	Ports         map[string]PortRange `yaml:"ports"`
+	Registry      RegistryConfig       `yaml:"registry"`
+	Teardown      TeardownConfig       `yaml:"teardown"`
+	MCP           MCPConfig            `yaml:"mcp"`
 
 	// Sections that configured the continuous-learning loop bough
 	// carried until v0.26.0. Decoded as opaque nodes and never read:
@@ -326,14 +326,14 @@ func LoadFromBytes(raw []byte, pathHint string) (*Config, error) {
 func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 	var warnings []string
 	c := &Config{
-		SchemaVersion:  lc.SchemaVersion,
-		MonorepoRoot:   lc.MonorepoRoot,
-		Repositories:   lc.Repositories,
-		Engines:        lc.Engines,
-		Ports:          lc.Ports,
-		Registry:       lc.Registry,
-		Teardown:       lc.Teardown,
-		MCP:            lc.MCP,
+		SchemaVersion: lc.SchemaVersion,
+		MonorepoRoot:  lc.MonorepoRoot,
+		Repositories:  lc.Repositories,
+		Engines:       lc.Engines,
+		Ports:         lc.Ports,
+		Registry:      lc.Registry,
+		Teardown:      lc.Teardown,
+		MCP:           lc.MCP,
 	}
 	// One line per retired section the file still carries. Written here
 	// rather than in deprecationWarnings() because only the legacy decode
