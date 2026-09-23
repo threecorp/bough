@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -284,6 +285,50 @@ func TestManager_Uninstall_PreservesOtherFields(t *testing.T) {
 	}
 	if _, ok := raw["hooks"]; ok {
 		t.Errorf("hooks key should be removed after Uninstall when no hand-edited groups remain: %v", raw)
+	}
+}
+
+// TestManager_InstallUninstall_PreservesHandEditedEntryFields runs Install +
+// Uninstall against hand-edited entries that carry fields bough does not model
+// (timeout, statusMessage, async) and a group key it does not model. They must
+// come back unchanged: Claude Code honours them, and dropping a timeout
+// silently changes how long a hook may run.
+func TestManager_InstallUninstall_PreservesHandEditedEntryFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stop := `[{"matcher":"*","futureGroupKey":true,"hooks":[` +
+		`{"type":"command","command":"guard.py","timeout":10,"statusMessage":"checking"},` +
+		`{"type":"command","command":"slow.py","timeout":180,"async":true}]}]`
+	seed := `{"hooks":{"Stop":` + stop + `}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := m.Uninstall(context.Background()); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var got struct {
+		Hooks map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var want any
+	if err := json.Unmarshal([]byte(stop), &want); err != nil {
+		t.Fatalf("parse want: %v", err)
+	}
+	if !reflect.DeepEqual(got.Hooks["Stop"], want) {
+		t.Errorf("hand-edited Stop group changed:\n got: %v\nwant: %v", got.Hooks["Stop"], want)
 	}
 }
 
