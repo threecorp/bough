@@ -46,6 +46,12 @@ func (c *Config) deprecationWarnings() []string {
 // All semantic errors are accumulated and returned as a single joined
 // error so a config-file author sees every problem at once instead of
 // fixing them one-by-one across multiple runs.
+// bundledKinds are the engine kinds whose plugins ship with bough and
+// register only the docker backend.
+var bundledKinds = map[string]bool{
+	"mysql": true, "postgres": true, "redis": true, "elasticsearch": true, "compose": true,
+}
+
 func (c *Config) validateSemantic() error {
 	var errs []error
 
@@ -88,10 +94,12 @@ func (c *Config) validateSemantic() error {
 		if eng.Kind == "compose" && eng.Compose == nil {
 			errs = append(errs, fmt.Errorf("config: engines[%d].kind=compose requires a compose: block (file, service, target_port)", i))
 		}
-		// extras.backend reaches the plugin verbatim, so the rule the
-		// `backend:` tag enforces has to be repeated here; otherwise a stale
-		// token fails only at Up, after earlier engines are already running.
-		if b := eng.Extras["backend"]; b != "" && b != "docker" {
+		// extras.backend reaches the plugin verbatim when `backend:` is empty
+		// (the field wins otherwise), so for the bundled plugins the rule the
+		// `backend:` tag enforces is repeated here; otherwise a stale token
+		// fails only at Up, after earlier engines are already running. A
+		// third-party plugin may register other backends, so it is left to it.
+		if b := eng.Extras["backend"]; eng.Backend == "" && bundledKinds[eng.Kind] && b != "" && b != "docker" {
 			errs = append(errs, fmt.Errorf("config: engines[%d].extras.backend=%q is not a backend the bundled plugins provide (docker); delete the key", i, b))
 		}
 	}
