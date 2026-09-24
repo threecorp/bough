@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/config"
@@ -221,12 +223,15 @@ const portReleaseWait = 5 * time.Second
 // every port the registry holds for the worktree except those allocated
 // for the non-engine `ports:` section.
 func guardedPorts(entry map[string]int, cfg *config.Config) []int {
+	engineKinds := make(map[string]bool, len(cfg.Engines))
+	for _, eng := range cfg.Engines {
+		engineKinds[eng.Kind] = true
+	}
 	var out []int
 	for key, port := range entry {
-		if kind, _, _ := strings.Cut(key, "."); cfg.Ports != nil {
-			if _, isAppPort := cfg.Ports[kind]; isAppPort {
-				continue
-			}
+		kind, _, _ := strings.Cut(key, ".")
+		if _, isAppPort := cfg.Ports[kind]; isAppPort && !engineKinds[kind] {
+			continue
 		}
 		if port > 0 {
 			out = append(out, port)
@@ -262,14 +267,23 @@ func portsStillServing(ctx context.Context, ports []int, wait time.Duration) ([]
 	}
 }
 
+// answers reports whether host:port may still be served. Only a refused
+// connection, or a loopback the machine does not have, counts as closed; a
+// timeout or any other failure could hide a live engine, so it counts as
+// serving and remove waits, then refuses.
 func answers(ctx context.Context, host string, port int) bool {
 	var d net.Dialer
 	dctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
 	conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-	if err != nil {
-		return false
+	if err == nil {
+		_ = conn.Close()
+		return true
 	}
-	_ = conn.Close()
+	for _, closed := range []error{syscall.ECONNREFUSED, syscall.EADDRNOTAVAIL, syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.EAFNOSUPPORT} {
+		if errors.Is(err, closed) {
+			return false
+		}
+	}
 	return true
 }

@@ -139,3 +139,110 @@ func TestGuardedPorts(t *testing.T) {
 		t.Fatalf("guardedPorts = %v, want %v", got, want)
 	}
 }
+
+// guardFixture seeds a worktree with a datadir file and a registry entry
+// for port, and returns the worktree path, the data file and the store.
+func guardFixture(t *testing.T, root string, port int) (string, string, *registry.Store) {
+	t.Helper()
+	wt := filepath.Join(root, "worktrees", "F-G")
+	data := filepath.Join(wt, ".local", "zzlive-data", "ibdata1")
+	if err := os.MkdirAll(filepath.Dir(data), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wt, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(data, []byte("live"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := registry.NewStore(filepath.Join(root, ".bough-ports.json"), "")
+	reg, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Set(reg, "F-G", "zzlive.main", port)
+	if err := store.Save(reg, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	return wt, data, store
+}
+
+// TestRunRemove_PreRemoveCanStopTheEngine: pre_remove is where an operator
+// stops an engine bough does not manage, so it must run before the check.
+func TestRunRemove_PreRemoveCanStopTheEngine(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	root := t.TempDir()
+	wt, _, store := guardFixture(t, root, port)
+	marker := filepath.Join(root, "stop-requested")
+	go func() {
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				_ = ln.Close()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	cfg := &config.Config{
+		Repositories: []config.Repository{{Name: "app", PreRemove: []string{"touch " + marker}}},
+		Engines:      []config.Engine{{Kind: "zzlive"}},
+		Registry:     config.RegistryConfig{Path: filepath.Join(root, ".bough-ports.json")},
+		Teardown:     config.TeardownConfig{RemoveDatadir: true},
+	}
+	if err := runRemove(context.Background(), io.Discard, cfg, root, "F-G", wt, 0); err != nil {
+		t.Fatalf("remove refused although pre_remove stopped the engine: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree still present: %v", err)
+	}
+	reg, _ := store.Load()
+	if _, ok := registry.Get(reg, "F-G", "zzlive.main"); ok {
+		t.Error("registry entry kept after a successful remove")
+	}
+}
+
+// TestRunRemove_CancelDuringTheWaitKeepsEverything: Ctrl-C while the port
+// is still served must leave the datadir, worktree and registry alone.
+func TestRunRemove_CancelDuringTheWaitKeepsEverything(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+	root := t.TempDir()
+	wt, data, store := guardFixture(t, root, port)
+	cfg := &config.Config{
+		Engines:  []config.Engine{{Kind: "zzlive"}},
+		Registry: config.RegistryConfig{Path: filepath.Join(root, ".bough-ports.json")},
+		Teardown: config.TeardownConfig{RemoveDatadir: true},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	if err := runRemove(ctx, io.Discard, cfg, root, "F-G", wt, 0); err == nil {
+		t.Fatal("cancelled remove reported success")
+	}
+	if b, err := os.ReadFile(data); err != nil || string(b) != "live" {
+		t.Errorf("datadir touched: %q, %v", b, err)
+	}
+	reg, _ := store.Load()
+	if got, _ := registry.Get(reg, "F-G", "zzlive.main"); got != port {
+		t.Errorf("registry entry dropped: got %d want %d", got, port)
+	}
+}
+
+// TestGuardedPorts_EngineWinsOverSameNamedAppPort: `ports:` reusing an
+// engine's name must not hide that engine from the check.
+func TestGuardedPorts_EngineWinsOverSameNamedAppPort(t *testing.T) {
+	cfg := &config.Config{
+		Engines: []config.Engine{{Kind: "redis"}},
+		Ports:   map[string]config.PortRange{"redis": {Range: [2]int{53000, 53999}}},
+	}
+	if got := guardedPorts(map[string]int{"redis.main": 53001}, cfg); len(got) != 1 || got[0] != 53001 {
+		t.Fatalf("guardedPorts = %v, want [53001]", got)
+	}
+}

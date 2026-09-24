@@ -334,8 +334,9 @@ After that, `claude --worktree F-FeatureName` deterministically:
 5. Runs any per-repo `post_create` hooks (migrations, seed-force, etc.)
 
 `bough remove` (or the WorktreeRemove hook) reverses all of the above:
-graceful plugin Down → lsof PID kill fallback → `git worktree remove`
-per sub-repo → registry cleanup → datadir teardown.
+graceful plugin Down → `pre_remove` hooks → a check that no engine port
+still answers (if one does, remove stops and deletes nothing) → datadir
+teardown → `git worktree remove` per sub-repo → registry cleanup.
 
 ## Workspace layout & resumable worktree sessions
 
