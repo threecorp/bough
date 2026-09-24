@@ -149,6 +149,10 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		"POSTGRES_PASSWORD=" + password,
 		"POSTGRES_USER=" + user,
 		"POSTGRES_DB=" + initDB,
+		// 18+ images default PGDATA to a versioned subdirectory and refuse to
+		// start when the bind mount sits at the old path; pinning it keeps
+		// every major on the one mount this plugin creates.
+		"PGDATA=" + dockerDataDir,
 	}
 
 	hostPort := fmt.Sprintf("%d", port)
@@ -187,7 +191,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	return nil
 }
 
-// dockerReadyCheck polls a TCP dial against the host-side port until it
+// ReadyCheck polls a TCP dial against the host-side port until it
 // succeeds, then runs `pg_isready` inside the container against the
 // internal socket to confirm postgres has finished initdb + the
 // automatic restart and is accepting query connections.

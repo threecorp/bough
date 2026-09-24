@@ -23,8 +23,8 @@ func TestComputeEngineBackends_ExplicitBackendFieldWins(t *testing.T) {
 // regression guard for the wave-3 review finding: computeEngineBackends
 // only checked eng.Backend, never eng.Extras["backend"] — the override
 // path create.go's buildEngineExtras treats as equally authoritative
-// (eng.Backend > extras["backend"] > auto-detect). An engine pinned via
-// extras.backend used to be silently treated as auto-detect by status.
+// (eng.Backend > extras["backend"] > default). An engine pinned via
+// extras.backend used to be silently treated as unset by status.
 func TestComputeEngineBackends_ExtrasBackendOverrideIsHonored(t *testing.T) {
 	cfg := &config.Config{Engines: []config.Engine{
 		{Kind: "redis", Extras: map[string]string{"backend": "docker"}},

@@ -421,6 +421,20 @@ registry: {path: .bough-ports.json}
 `,
 			wantInErr: "Backend",
 		},
+		{
+			// The same token through extras is copied to the plugin
+			// verbatim, so it has to be refused at load as well.
+			name: "extras.backend: nix is refused",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", extras: {backend: nix}, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "extras.backend",
+		},
 	}
 
 	for _, tc := range cases {

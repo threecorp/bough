@@ -21,7 +21,8 @@
   WorktreeCreate/Remove hooks all exit 1 with `Key:
   'Config.Engines[N].Backend' Error:Field validation for 'Backend'
   failed on the 'oneof' tag` — `remove` included, which is the one
-  needed to back a worktree out. Delete the line (or write
+  needed to back a worktree out. `extras: {backend: nix}` is refused
+  the same way, with an `engines[N].extras.backend` error. Delete the line (or write
   `backend: docker`) and they work again.
 
   **Stop any Nix-backed worktree before upgrading.** The new `Down`
@@ -67,7 +68,9 @@
   README itself suggested — became a ref Elastic has never published,
   and surfaced as "manifest unknown" naming neither the YAML key nor
   the escape hatch. The same release retired the Nix backend (see
-  Removed), which had never read the field at all.
+  Removed), which had never read the field at all. Postgres 18 and later
+  start too: their images move `PGDATA` under a versioned subdirectory
+  and refuse the old mount, so the plugin now pins `PGDATA` to it.
 
 ### Changed
 

@@ -96,7 +96,6 @@ databases:
   - kind: mysql
     version: "8.4"
     port_range: [42000, 42999]
-    socket_dir: "/tmp"
     initial_databases: ["bough"]
 registry:
   path: ".bough-ports.json"

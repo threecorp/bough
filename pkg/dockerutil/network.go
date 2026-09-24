@@ -9,7 +9,7 @@ import (
 
 // IsPortFree probes whether the host's loopback port is currently free
 // by attempting a short-lived `net.Listen`. A taken port short-circuits
-// the per-plugin dockerUp before the daemon's generic "port is already
+// each plugin's docker Up before the daemon's generic "port is already
 // allocated" error, so the operator sees an actionable message instead
 // of having to grep `docker ps` for the conflict.
 //

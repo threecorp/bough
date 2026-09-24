@@ -88,6 +88,12 @@ func (c *Config) validateSemantic() error {
 		if eng.Kind == "compose" && eng.Compose == nil {
 			errs = append(errs, fmt.Errorf("config: engines[%d].kind=compose requires a compose: block (file, service, target_port)", i))
 		}
+		// extras.backend reaches the plugin verbatim, so the rule the
+		// `backend:` tag enforces has to be repeated here; otherwise a stale
+		// token fails only at Up, after earlier engines are already running.
+		if b := eng.Extras["backend"]; b != "" && b != "docker" {
+			errs = append(errs, fmt.Errorf("config: engines[%d].extras.backend=%q is not a backend the bundled plugins provide (docker); delete the key", i, b))
+		}
 	}
 
 	for kind, pr := range c.Ports {

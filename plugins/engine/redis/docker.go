@@ -176,7 +176,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	return nil
 }
 
-// dockerReadyCheck polls a TCP dial against the host-side port, then
+// ReadyCheck polls a TCP dial against the host-side port, then
 // runs `redis-cli ping` inside the container to confirm the server has
 // finished AOF loading and replies `PONG`.
 func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {

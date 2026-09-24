@@ -38,7 +38,7 @@ func LookupByName(ctx context.Context, cli *client.Client, name string) (string,
 	return "", nil
 }
 
-// RemoveIfExists is the idempotency helper for the per-plugin dockerUp:
+// RemoveIfExists is the idempotency helper for each plugin's docker Up:
 // if a previous run left a stopped (or running) container with the same
 // name we tear it down so ContainerCreate does not collide. Returns nil
 // when nothing is there to remove — the no-op makes the call safe in

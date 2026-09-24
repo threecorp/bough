@@ -14,7 +14,8 @@ together via Hashicorp go-plugin (gRPC over Unix socket). Each of the
 first four provisions a bough-managed container through the Docker SDK.
 The lifecycle (`up` / `ready check` / `down`) sits behind a per-plugin
 backend seam, so a second runtime is an implementation a plugin
-registers rather than a change to the host. `compose` is different by
+registers rather than a change to the host — once `Down` and `ReadyCheck`
+carry the backend token on the wire, which they do not yet. `compose` is different by
 design — instead of provisioning its own engine, it wraps an EXISTING
 `docker-compose.yml`/service an operator already has, giving it only
 worktree-scoped port isolation (see [Compose-wrapped
@@ -647,7 +648,7 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 | v0.10.0-v0.20.3 | Iteration on that loop — see [CHANGELOG](CHANGELOG.md) for the per-release detail |
 | v0.21.0   | The loop stops trusting configuration and starts trusting measurement: a completion gate that decides on pull telemetry (and withdraws its own PASS when its reader cannot parse a row), `bough ops`, lifetime selector-health checks, and ECC-conformant selection — per-channel depth, a relevance floor scaled to the prompt, a restatement skip, a per-family cap whose stamped POPULATION is printed by `bough claude doctor` so an inert cap cannot hide, and the published byte budgets |
 | v0.22.0   | `claude --worktree` works against a git monorepo again: the worktree container is a work tree of its own (checked out at an empty tree, so it still starts empty), `bough doctor` names any container a host would refuse, and the release pipeline runs the published archive through the real WorktreeCreate/Remove hook contract before the release is called good |
-| v0.27.0   | Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch |
+| v0.27.0   | Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch (it also needs the backend token on `Down` / `ReadyCheck`) |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres

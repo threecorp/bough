@@ -158,9 +158,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 }
 
 // writeOverrideFile renders and persists the override fragment under
-// the engine-provider repo's own .local/ scratch dir, matching the
-// convention the other four plugins already use there (flake dirs,
-// startup logs).
+// the engine-provider repo's own .local/ scratch dir.
 func writeOverrideFile(worktreeRoot string, port int, spec overrideSpec) (string, error) {
 	data, err := renderOverride(spec)
 	if err != nil {
