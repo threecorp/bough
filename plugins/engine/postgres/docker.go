@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -150,12 +151,16 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		"POSTGRES_USER=" + user,
 		"POSTGRES_DB=" + initDB,
 	}
-	// 18+ official images default PGDATA to a versioned subdirectory and
-	// refuse to start when the bind mount sits at the old path; pinning it
-	// keeps every major on the one mount this plugin creates. A custom
-	// extras.docker.image owns its own layout, so it is left alone.
-	if req.Extras["docker.image"] == "" {
-		env = append(env, "PGDATA="+dockerDataDir)
+	img, err := cli.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return fmt.Errorf("postgres docker: inspect %s: %w", imageRef, err)
+	}
+	var imageEnv []string
+	if img.Config != nil {
+		imageEnv = img.Config.Env
+	}
+	if pin := pgdataPin(imageEnv); pin != "" {
+		env = append(env, pin)
 	}
 
 	hostPort := fmt.Sprintf("%d", port)
@@ -292,4 +297,21 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+}
+
+// pgdataPin returns the PGDATA override an image needs so its data lands
+// in the bind mount, or "" when the image already keeps it there. 18+
+// official images default PGDATA to a versioned directory outside the
+// mount and refuse to start; an image whose PGDATA is the mount or a
+// subdirectory of it (a common custom layout) is left alone.
+func pgdataPin(imageEnv []string) string {
+	for _, kv := range imageEnv {
+		if v, ok := strings.CutPrefix(kv, "PGDATA="); ok {
+			if v == dockerDataDir || strings.HasPrefix(v, dockerDataDir+"/") {
+				return ""
+			}
+			break
+		}
+	}
+	return "PGDATA=" + dockerDataDir
 }

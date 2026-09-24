@@ -123,3 +123,23 @@ func TestProvider_Up_UnknownBackendIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestPgdataPin pins which images get PGDATA overridden: only those whose
+// own PGDATA would put the data outside the bind mount.
+func TestPgdataPin(t *testing.T) {
+	cases := map[string]struct {
+		env  []string
+		want string
+	}{
+		"official 17 keeps its default":       {[]string{"PGDATA=/var/lib/postgresql/data"}, ""},
+		"official 18 is moved into the mount": {[]string{"PGDATA=/var/lib/postgresql/18/docker"}, "PGDATA=/var/lib/postgresql/data"},
+		"custom subdir of the mount is kept":  {[]string{"PGDATA=/var/lib/postgresql/data/pgdata"}, ""},
+		"no PGDATA at all gets the mount":     {[]string{"PATH=/usr/bin"}, "PGDATA=/var/lib/postgresql/data"},
+		"a sibling prefix is not the mount":   {[]string{"PGDATA=/var/lib/postgresql/data2"}, "PGDATA=/var/lib/postgresql/data"},
+	}
+	for name, tc := range cases {
+		if got := pgdataPin(tc.env); got != tc.want {
+			t.Errorf("%s: pgdataPin(%v) = %q, want %q", name, tc.env, got, tc.want)
+		}
+	}
+}
