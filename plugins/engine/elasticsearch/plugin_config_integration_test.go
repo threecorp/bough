@@ -74,7 +74,7 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 	datadir := filepath.Join(engineProviderWorktree, ".local", "elasticsearch-data")
 	containerName := dockerContainerName(port)
 
-	p := &Provider{}
+	p := dockerBackend{}
 	ctx := context.Background()
 	upReq := &api.UpReq{
 		Ports:        []api.PortSpec{{Role: "main", Port: port}},
@@ -91,16 +91,16 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 		},
 	}
 
-	if err := p.dockerUp(ctx, upReq); err != nil {
-		t.Fatalf("dockerUp: %v", err)
+	if err := p.Up(ctx, upReq); err != nil {
+		t.Fatalf("Up: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = p.dockerDown(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 10})
+		_ = p.Down(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 10})
 	})
 
-	ready, err := p.dockerReadyCheck(ctx, port, 300)
+	ready, err := p.ReadyCheck(ctx, port, 300)
 	if err != nil || !ready {
-		t.Fatalf("dockerReadyCheck: ready=%v err=%v", ready, err)
+		t.Fatalf("ReadyCheck: ready=%v err=%v", ready, err)
 	}
 
 	// 1. elasticsearch-plugins.yml landed in the container's config dir
@@ -123,8 +123,8 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 		t.Errorf("config_mount marker.txt = %q, want %q", strings.TrimSpace(marker), markerContent)
 	}
 
-	if err := p.dockerDown(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 10}); err != nil {
-		t.Fatalf("dockerDown: %v", err)
+	if err := p.Down(ctx, &api.DownReq{Ports: []int{port}, GracefulTimeoutSec: 10}); err != nil {
+		t.Fatalf("Down: %v", err)
 	}
 	if err := exec.Command("docker", "inspect", containerName).Run(); err == nil {
 		t.Errorf("container %s should have been removed by Down but still exists", containerName)

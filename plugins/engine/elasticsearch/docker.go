@@ -134,7 +134,7 @@ const minHeadroomBytes = 1 << 30
 // `--memory` equivalent) to enforce alongside the JVM heap.
 //
 //   - An explicit `extras["es.mem_limit"]` wins, but must be >= the heap
-//     (a cap below -Xmx OOM-kills the JVM at startup, then dockerReadyCheck
+//     (a cap below -Xmx OOM-kills the JVM at startup, then ReadyCheck
 //     just times out with a misleading "not ready").
 //   - Otherwise the default is max(2x heap, heap + minHeadroomBytes), so
 //     even a small heap keeps Elastic's recommended above-heap budget.
@@ -191,15 +191,14 @@ type pluginsYAMLEntry struct {
 }
 
 // writePluginsYAML renders req.Plugins into elasticsearch-plugins.yml
-// next to datadir (the same per-worktree .local/ scratch dir the other
-// engine plugins already use for flake dirs / startup logs). Returns
+// next to datadir (the per-worktree .local/ scratch dir). Returns
 // "" when there is nothing to declare, so an engine with no `plugins:`
 // in its YAML behaves exactly as it did before this feature existed —
-// dockerUp skips the bind-mount entirely rather than mounting an empty
+// Up skips the bind-mount entirely rather than mounting an empty
 // file over the image's own config dir.
 //
 // Like every other container-shaping input (image, env, ulimits), this
-// only takes effect on a FRESH Up: dockerUp's up-or-reuse short-circuit
+// only takes effect on a FRESH Up: Up's up-or-reuse short-circuit
 // returns before this is called, so a plugin newly added to `plugins:`
 // installs on the next Down+Up, not into an already-running container.
 func writePluginsYAML(datadir string, plugins []api.PluginSpec) (string, error) {
@@ -265,7 +264,7 @@ func resolveConfigMount(req *api.UpReq) (string, error) {
 }
 
 // buildDockerEnv assembles the env slice passed to the elasticsearch
-// container. Extracted from dockerUp so the regression-guard tests can
+// container. Extracted from Up so the regression-guard tests can
 // assert the publish_host / publish_port lines are present without
 // having to start a real Docker daemon.
 //
@@ -531,7 +530,7 @@ func datadirOwnedBy(datadir string, uid uint32) bool {
 	return ok && st.Uid == uid
 }
 
-// dockerReadyCheck polls TCP listen on the host-side HTTP port, then
+// ReadyCheck polls TCP listen on the host-side HTTP port, then
 // issues an HTTP GET against http://127.0.0.1:<port>/ until 200. ES
 // returns 200 on `/` once the cluster is yellow-or-better — single-
 // node ES is always yellow because there is no replica to assign, so

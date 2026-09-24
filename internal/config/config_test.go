@@ -395,6 +395,51 @@ registry: {path: .bough-ports.json}
 `,
 			wantInErr: "Backend",
 		},
+		{
+			// The same token through extras is copied to the plugin
+			// verbatim, so it has to be refused at load as well.
+			name: "extras.backend: nix is refused",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", extras: {backend: nix}, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "extras.backend",
+		},
+	}
+
+	// Neither of these may be refused by the extras.backend rule: the field
+	// wins over extras, and a third-party plugin may register other backends.
+	for name, yaml := range map[string]string{
+		"backend field wins over extras": `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", backend: docker, extras: {backend: nix}, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+		"third-party kind keeps its own backend": `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: rabbitmq, version: "3", extras: {backend: podman}, port_ranges: {main: [43000, 43999]}}
+registry: {path: .bough-ports.json}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := writeFile(t, path, yaml); err != nil {
+				t.Fatalf("writeFile: %v", err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Errorf("valid config refused: %v", err)
+			}
+		})
 	}
 
 	for _, tc := range cases {

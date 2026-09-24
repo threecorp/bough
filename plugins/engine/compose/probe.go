@@ -170,7 +170,7 @@ const mysqlHandshakeProtocolVersion = 0x0a
 // Docker host port's forwarding accepts the TCP handshake from the
 // moment the container starts regardless of whether mysqld is
 // listening yet (see plugins/engine/mysql/docker.go's
-// dockerReadyCheck doc for the identical race already fixed there,
+// dockerBackend.ReadyCheck doc for the identical race already fixed there,
 // and its TestDockerReadyCheck_NoRaceWithTemporaryServer regression
 // test). A dial-only probe would report a compose-wrapped mysql
 // service ready during that window, in time for a post-Up caller

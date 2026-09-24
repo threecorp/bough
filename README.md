@@ -14,7 +14,8 @@ together via Hashicorp go-plugin (gRPC over Unix socket). Each of the
 first four provisions a bough-managed container through the Docker SDK.
 The lifecycle (`up` / `ready check` / `down`) sits behind a per-plugin
 backend seam, so a second runtime is an implementation a plugin
-registers rather than a change to the host. `compose` is different by
+registers rather than a change to the host — once `Down` and `ReadyCheck`
+carry the backend token on the wire, which they do not yet. `compose` is different by
 design — instead of provisioning its own engine, it wraps an EXISTING
 `docker-compose.yml`/service an operator already has, giving it only
 worktree-scoped port isolation (see [Compose-wrapped
@@ -484,7 +485,7 @@ bough/
 | v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning — only the plugin gRPC handshake (`DBProvider`/`BOUGH_DB_PLUGIN`) was removed in v0.5.0, the YAML-level fallback (old file name / section / field names) is still read today, see [docs/MIGRATION-v0.3-to-v0.4.md](docs/MIGRATION-v0.3-to-v0.4.md) |
 | v0.22.0   | `claude --worktree` works against a git monorepo again: the worktree container is a work tree of its own (checked out at an empty tree, so it still starts empty), `bough doctor` names any container a host would refuse, and the release pipeline runs the published archive through the real WorktreeCreate/Remove hook contract before the release is called good |
 | v0.9.0-v0.26.0 | (retired) A continuous-learning loop layered on top of the isolation core: an on-disk instinct corpus, `claude --print` clustering into skills / agents / commands, and six extra Claude Code hook events. (v0.5.0-v0.8.0 carried a different, superseded memory-orchestration surface — see [docs/attic/](docs/attic/).) Removed wholesale in v0.27.0 — pin v0.26.0 if you depend on it, and see [docs/MIGRATION-v0.26-to-v0.27.md](docs/MIGRATION-v0.26-to-v0.27.md) |
-| v0.27.0   | bough is an isolation tool and nothing else: the continuous-learning loop above is gone, two hook events are wired instead of eight, and the retired `.bough.yaml` sections are read with a warning for one minor series. Also: Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch |
+| v0.27.0   | bough is an isolation tool and nothing else: the continuous-learning loop above is gone, two hook events are wired instead of eight, and the retired `.bough.yaml` sections are read with a warning for one minor series. Also: Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch (it also needs the backend token on `Down` / `ReadyCheck`) |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
