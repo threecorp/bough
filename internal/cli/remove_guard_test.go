@@ -23,7 +23,7 @@ func TestRunRemove_RefusesWhileAPortStillServes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	root := t.TempDir()
@@ -58,8 +58,8 @@ func TestRunRemove_RefusesWhileAPortStillServes(t *testing.T) {
 	if err == nil {
 		t.Fatal("remove succeeded while the engine port still served")
 	}
-	if !strings.Contains(err.Error(), "nothing was deleted") {
-		t.Errorf("error should say nothing was deleted: %v", err)
+	if !strings.Contains(err.Error(), "no datadir, worktree or registry entry was deleted") {
+		t.Errorf("error should say what was kept: %v", err)
 	}
 	if time.Since(start) < portReleaseWait {
 		t.Errorf("refused after %v, before giving the port %v to close", time.Since(start), portReleaseWait)
@@ -84,10 +84,58 @@ func TestPortsStillServing_ReturnsAtOnceWhenClosed(t *testing.T) {
 	_ = ln.Close()
 
 	start := time.Now()
-	if busy := portsStillServing(context.Background(), []int{port}, time.Minute); len(busy) != 0 {
-		t.Fatalf("closed port reported busy: %v", busy)
+	if busy, err := portsStillServing(context.Background(), []int{port}, time.Minute); err != nil || len(busy) != 0 {
+		t.Fatalf("closed port reported busy: %v, %v", busy, err)
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("took %v on a closed port", d)
+	}
+}
+
+// TestPortsStillServing_CancelIsNotAllClear: a Ctrl-C during the wait must
+// stop remove, not let the next pass read every dial failure as "closed".
+func TestPortsStillServing_CancelIsNotAllClear(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	busy, err := portsStillServing(ctx, []int{port}, time.Minute)
+	if err == nil {
+		t.Fatalf("cancelled check returned no error (busy=%v)", busy)
+	}
+}
+
+// TestPortsStillServing_SeesIPv6OnlyListener: an engine bound to ::1 alone
+// is still serving its datadir.
+func TestPortsStillServing_SeesIPv6OnlyListener(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback here: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+	busy, err := portsStillServing(context.Background(), []int{port}, 300*time.Millisecond)
+	if err != nil || len(busy) != 1 {
+		t.Fatalf("IPv6-only listener not seen: busy=%v err=%v", busy, err)
+	}
+}
+
+// TestGuardedPorts covers which registry entries the guard checks: every
+// engine port, one dropped from .bough.yaml included, but not the `ports:`
+// section an app server may still hold.
+func TestGuardedPorts(t *testing.T) {
+	cfg := &config.Config{
+		Engines: []config.Engine{{Kind: "mysql"}},
+		Ports:   map[string]config.PortRange{"api": {Range: [2]int{45000, 45999}}},
+	}
+	entry := map[string]int{"mysql.main": 42001, "redis.main": 53001, "api.main": 45001}
+	got := guardedPorts(entry, cfg)
+	want := []int{42001, 53001}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("guardedPorts = %v, want %v", got, want)
 	}
 }

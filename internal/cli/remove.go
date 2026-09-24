@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/config"
@@ -88,14 +90,12 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		kill func()
 	}
 	var downed []stopped
-	var ports []int
 	for _, eng := range cfg.Engines {
 		port, _ := registry.Get(reg, name, eng.Kind+".main")
 		if port <= 0 {
 			logf(stderr, "[bough] %s: no registry entry, skipping plugin", eng.Kind)
 			continue
 		}
-		ports = append(ports, port)
 		prov, kill, err := pluginhost.Discover(eng.Kind)
 		if err != nil {
 			logf(stderr, "[bough] %s discover: %v", eng.Kind, err)
@@ -110,18 +110,48 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		}
 		downed = append(downed, stopped{eng.Kind, port, prov, kill})
 	}
-
-	// Down succeeds when the plugin finds nothing of its own to stop, so a
-	// process bough did not start (a Nix-backed engine from v0.26.0 or
-	// earlier, say) can still be serving the datadir. Deleting it then
-	// destroys live data, so nothing is removed while any port still answers.
-	if busy := portsStillServing(ctx, ports, portReleaseWait); len(busy) > 0 {
+	killAll := func() {
 		for _, d := range downed {
 			d.kill()
 		}
+	}
+
+	// Raw fd for hook children — see runPostCreateHooks: an exec.Cmd
+	// handed the SyncWriter gets a pipe + copy goroutine whose EOF a
+	// backgrounded grandchild can hold open forever.
+	hookOut := termio.ExecWriter(stderr)
+	// pre_remove runs before the port check below, because it is where an
+	// operator stops an engine bough does not manage.
+	for _, repo := range cfg.Repositories {
+		repoDst := filepath.Join(worktreePath, repo.Name)
+		for _, line := range repo.PreRemove {
+			logf(stderr, "[bough] %s pre_remove: %s", repo.Name, line)
+			c := exec.CommandContext(ctx, "bash", "-c", line)
+			c.Dir = repoDst
+			c.Stdout = hookOut
+			c.Stderr = hookOut
+			if err := c.Run(); err != nil {
+				logf(stderr, "[bough] %s pre_remove: %v", repo.Name, err)
+			}
+		}
+	}
+
+	// Down succeeds when the plugin finds nothing of its own to stop, so a
+	// process bough did not start (a Nix-backed engine from v0.26.0 or
+	// earlier, say) can still be serving the datadir. Every port the
+	// registry holds for this worktree is checked — an engine since dropped
+	// from .bough.yaml included — except the non-engine `ports:` ones, which
+	// an app server may legitimately still hold.
+	busy, err := portsStillServing(ctx, guardedPorts(reg[name], cfg), portReleaseWait)
+	if err != nil || len(busy) > 0 {
+		killAll()
+		if err != nil {
+			return fmt.Errorf("remove %s: could not confirm the engine ports are free (%w); "+
+				"no datadir, worktree or registry entry was deleted", name, err)
+		}
 		return fmt.Errorf("remove %s: port(s) %v still accept connections after the engines were stopped; "+
 			"a process bough did not start still owns them (find it with `lsof -nP -iTCP:%d -sTCP:LISTEN`). "+
-			"Stop it and run remove again; nothing was deleted", name, busy, busy[0])
+			"Stop it and run remove again; no datadir, worktree or registry entry was deleted", name, busy, busy[0])
 	}
 
 	for _, d := range downed {
@@ -131,13 +161,9 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 				logf(stderr, "[bough] %s Cleanup: %v", d.kind, err)
 			}
 		}
-		d.kill()
 	}
+	killAll()
 
-	// Raw fd for hook children — see runPostCreateHooks: an exec.Cmd
-	// handed the SyncWriter gets a pipe + copy goroutine whose EOF a
-	// backgrounded grandchild can hold open forever.
-	hookOut := termio.ExecWriter(stderr)
 	runner := gitwt.NewRunner()
 	for _, repo := range cfg.Repositories {
 		repoDst := filepath.Join(worktreePath, repo.Name)
@@ -149,16 +175,6 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		repoSrc, ok := worktreeSourceRepo(repoDst)
 		if !ok {
 			repoSrc = resolveRepoSrc(monorepoRoot, repo.Name)
-		}
-		for _, line := range repo.PreRemove {
-			logf(stderr, "[bough] %s pre_remove: %s", repo.Name, line)
-			c := exec.CommandContext(ctx, "bash", "-c", line)
-			c.Dir = repoDst
-			c.Stdout = hookOut
-			c.Stderr = hookOut
-			if err := c.Run(); err != nil {
-				logf(stderr, "[bough] %s pre_remove: %v", repo.Name, err)
-			}
 		}
 		if _, err := os.Stat(repoSrc); err != nil {
 			continue
@@ -201,26 +217,59 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 // port before treating the port as owned by something else.
 const portReleaseWait = 5 * time.Second
 
-// portsStillServing returns the ports that still accept a TCP connection
-// once wait has passed. A connect is used rather than a trial bind: on
-// macOS a bind to 127.0.0.1 succeeds beside a wildcard listener.
-func portsStillServing(ctx context.Context, ports []int, wait time.Duration) []int {
+// guardedPorts lists the ports remove must find closed before deleting:
+// every port the registry holds for the worktree except those allocated
+// for the non-engine `ports:` section.
+func guardedPorts(entry map[string]int, cfg *config.Config) []int {
+	var out []int
+	for key, port := range entry {
+		if kind, _, _ := strings.Cut(key, "."); cfg.Ports != nil {
+			if _, isAppPort := cfg.Ports[kind]; isAppPort {
+				continue
+			}
+		}
+		if port > 0 {
+			out = append(out, port)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// portsStillServing returns the ports that still accept a TCP connection on
+// either loopback once wait has passed. A connect is used rather than a
+// trial bind: on macOS a bind to 127.0.0.1 succeeds beside a wildcard
+// listener. A cancelled context is an error, never "all clear".
+func portsStillServing(ctx context.Context, ports []int, wait time.Duration) ([]int, error) {
 	deadline := time.Now().Add(wait)
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var busy []int
 		for _, port := range ports {
-			var d net.Dialer
-			dctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-			conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-			cancel()
-			if err == nil {
-				_ = conn.Close()
+			if answers(ctx, "127.0.0.1", port) || answers(ctx, "::1", port) {
 				busy = append(busy, port)
 			}
 		}
-		if len(busy) == 0 || time.Now().After(deadline) || ctx.Err() != nil {
-			return busy
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(busy) == 0 || time.Now().After(deadline) {
+			return busy, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func answers(ctx context.Context, host string, port int) bool {
+	var d net.Dialer
+	dctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }

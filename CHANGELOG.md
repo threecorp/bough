@@ -30,8 +30,10 @@
   now notices: if an engine port still accepts connections after
   `Down`, it stops with the port and an `lsof` line to find the owner,
   and deletes nothing — not the datadir, the worktree or the registry
-  entry. Run `bough remove` on the old binary, or stop the process, and
-  remove again.
+  entry. Every engine port the registry holds is checked, on both
+  loopbacks, and `pre_remove` hooks run first so a hook that stops such
+  an engine still works. Run `bough remove` on the old binary, or stop
+  the process, and remove again.
 
   With it went:
   - `internal/backend/` and the nix-with-flakes / docker-daemon race on
