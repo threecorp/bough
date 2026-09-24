@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/ikeikeikeike/bough/internal/gitwt"
@@ -78,12 +81,21 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	if provider != nil {
 		engineProviderWorktree = filepath.Join(worktreePath, provider.Name)
 	}
+	type stopped struct {
+		kind string
+		port int
+		prov engineapi.EngineProvider
+		kill func()
+	}
+	var downed []stopped
+	var ports []int
 	for _, eng := range cfg.Engines {
 		port, _ := registry.Get(reg, name, eng.Kind+".main")
 		if port <= 0 {
 			logf(stderr, "[bough] %s: no registry entry, skipping plugin", eng.Kind)
 			continue
 		}
+		ports = append(ports, port)
 		prov, kill, err := pluginhost.Discover(eng.Kind)
 		if err != nil {
 			logf(stderr, "[bough] %s discover: %v", eng.Kind, err)
@@ -96,13 +108,30 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		}); err != nil {
 			logf(stderr, "[bough] %s Down: %v", eng.Kind, err)
 		}
+		downed = append(downed, stopped{eng.Kind, port, prov, kill})
+	}
+
+	// Down succeeds when the plugin finds nothing of its own to stop, so a
+	// process bough did not start (a Nix-backed engine from v0.26.0 or
+	// earlier, say) can still be serving the datadir. Deleting it then
+	// destroys live data, so nothing is removed while any port still answers.
+	if busy := portsStillServing(ctx, ports, portReleaseWait); len(busy) > 0 {
+		for _, d := range downed {
+			d.kill()
+		}
+		return fmt.Errorf("remove %s: port(s) %v still accept connections after the engines were stopped; "+
+			"a process bough did not start still owns them (find it with `lsof -nP -iTCP:%d -sTCP:LISTEN`). "+
+			"Stop it and run remove again; nothing was deleted", name, busy, busy[0])
+	}
+
+	for _, d := range downed {
 		if cfg.Teardown.RemoveDatadir {
-			dataDir := filepath.Join(worktreePath, fmt.Sprintf(".local/%s-data", eng.Kind))
-			if err := prov.Cleanup(ctx, dataDir, []int{port}); err != nil {
-				logf(stderr, "[bough] %s Cleanup: %v", eng.Kind, err)
+			dataDir := filepath.Join(worktreePath, fmt.Sprintf(".local/%s-data", d.kind))
+			if err := d.prov.Cleanup(ctx, dataDir, []int{d.port}); err != nil {
+				logf(stderr, "[bough] %s Cleanup: %v", d.kind, err)
 			}
 		}
-		kill()
+		d.kill()
 	}
 
 	// Raw fd for hook children — see runPostCreateHooks: an exec.Cmd
@@ -166,4 +195,32 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	}
 	logf(stderr, "[bough] remove %s: complete", name)
 	return nil
+}
+
+// portReleaseWait is how long remove lets a stopped engine release its
+// port before treating the port as owned by something else.
+const portReleaseWait = 5 * time.Second
+
+// portsStillServing returns the ports that still accept a TCP connection
+// once wait has passed. A connect is used rather than a trial bind: on
+// macOS a bind to 127.0.0.1 succeeds beside a wildcard listener.
+func portsStillServing(ctx context.Context, ports []int, wait time.Duration) []int {
+	deadline := time.Now().Add(wait)
+	for {
+		var busy []int
+		for _, port := range ports {
+			var d net.Dialer
+			dctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			conn, err := d.DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			cancel()
+			if err == nil {
+				_ = conn.Close()
+				busy = append(busy, port)
+			}
+		}
+		if len(busy) == 0 || time.Now().After(deadline) || ctx.Err() != nil {
+			return busy
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

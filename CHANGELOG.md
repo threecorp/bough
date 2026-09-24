@@ -26,9 +26,12 @@
   `backend: docker`) and they work again.
 
   **Stop any Nix-backed worktree before upgrading.** The new `Down`
-  finds no container and returns nil, and `remove` then deletes the
-  datadir under a still-running engine. Run `bough remove` on the old
-  binary first.
+  finds no container to stop, so the engine keeps running. `remove`
+  now notices: if an engine port still accepts connections after
+  `Down`, it stops with the port and an `lsof` line to find the owner,
+  and deletes nothing — not the datadir, the worktree or the registry
+  entry. Run `bough remove` on the old binary, or stop the process, and
+  remove again.
 
   With it went:
   - `internal/backend/` and the nix-with-flakes / docker-daemon race on
