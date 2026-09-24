@@ -859,7 +859,8 @@ func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
 	seed := `{
   "hooks": {
     "PostToolUse": [
-      {"matcher": "Write", "hooks": [{"type": "command", "command": "prettier --write", "timeout": 300}]}
+      {"hooks": [{"type": "command", "command": "bough hook handle --event PostToolUse", "timeout": 999}]},
+      {"matcher": "Write", "note": "keep", "hooks": [{"type": "command", "command": "prettier --write", "timeout": 300, "async": true}]}
     ]
   }
 }
@@ -880,8 +881,11 @@ func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
 		t.Fatalf("the operator's own group must survive, got %+v", groups)
 	}
 	got := groups[0].Hooks[0]
-	if string(got.Extra["timeout"]) != "300" {
-		t.Errorf("timeout dropped from a hand-written entry: %+v", got)
+	if got.Command != "prettier --write" || string(got.Extra["timeout"]) != "300" || string(got.Extra["async"]) != "true" {
+		t.Errorf("hand-written entry changed: %+v", got)
+	}
+	if string(groups[0].Extra["note"]) != `"keep"` {
+		t.Errorf("group key dropped from a hand-written group: %+v", groups[0])
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
