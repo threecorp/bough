@@ -712,3 +712,72 @@ func TestDoctorRender_SectionRollup(t *testing.T) {
 		t.Errorf("a live double-fire should roll up to [✗]:\n%s", conflict.String())
 	}
 }
+
+// TestManager_Install_KeepsKeysOnBoughEntry covers bough's own entry: Install
+// rebuilds it, and a timeout the operator raised on it must survive that.
+func TestManager_Install_KeepsKeysOnBoughEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	seed := `{"hooks":{"WorktreeCreate":[{"note":"mine","hooks":[` +
+		`{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	for i := 0; i < 2; i++ {
+		if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+			t.Fatalf("Install #%d: %v", i+1, err)
+		}
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	groups := set[EventWorktreeCreate]
+	if len(groups) != 1 {
+		t.Fatalf("want one bough group, got %d: %+v", len(groups), groups)
+	}
+	if got := string(groups[0].Hooks[0].Extra["timeout"]); got != "1800" {
+		t.Errorf("timeout on bough's entry: got %q want 1800", got)
+	}
+	if got := string(groups[0].Extra["note"]); got != `"mine"` {
+		t.Errorf("group key on bough's group: got %q want \"mine\"", got)
+	}
+}
+
+// TestManager_Install_KeepsKeysFromLaterBoughGroup: a duplicated bough group
+// whose first copy carries no extra keys must not hide the second copy's.
+func TestManager_Install_KeepsKeysFromLaterBoughGroup(t *testing.T) {
+	for name, seed := range map[string]string{
+		"second group": `{"hooks":{"WorktreeCreate":[` +
+			`{"hooks":[{"type":"command","command":"bough hook handle --event WorktreeCreate"}]},` +
+			`{"note":"mine","hooks":[{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`,
+		"second entry": `{"hooks":{"WorktreeCreate":[{"note":"mine","hooks":[` +
+			`{"type":"command","command":"bough hook handle --event WorktreeCreate"},` +
+			`{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatalf("write seed: %v", err)
+			}
+			m := New(path)
+			if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+				t.Fatalf("Install: %v", err)
+			}
+			set, err := m.List(context.Background())
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			groups := set[EventWorktreeCreate]
+			if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+				t.Fatalf("want one bough group with one entry, got %+v", groups)
+			}
+			if got := string(groups[0].Hooks[0].Extra["timeout"]); got != "1800" {
+				t.Errorf("timeout: got %q want 1800", got)
+			}
+			if got := string(groups[0].Extra["note"]); got != `"mine"` {
+				t.Errorf("note: got %q want \"mine\"", got)
+			}
+		})
+	}
+}

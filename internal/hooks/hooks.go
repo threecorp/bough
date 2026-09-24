@@ -271,18 +271,26 @@ func (m *Manager) Install(_ context.Context, _ string) error {
 	for _, event := range AllEvents() {
 		groups := set[event]
 		filtered := groups[:0]
+		// Keys an operator added to bough's own entry (a longer timeout on
+		// WorktreeCreate) survive the rewrite, like any hand-written key.
+		// A duplicated bough group or entry contributes its keys only when an
+		// earlier one had none, so the first operator value found wins.
+		fresh := HookGroup{Hooks: []HookEntry{{Type: "command", Command: CanonicalCommand(event)}}}
 		for _, g := range groups {
 			if !isBoughGroup(g) {
 				filtered = append(filtered, g)
+				continue
+			}
+			if fresh.Extra == nil {
+				fresh.Extra = g.Extra
+			}
+			for _, e := range g.Hooks {
+				if fresh.Hooks[0].Extra == nil {
+					fresh.Hooks[0].Extra = e.Extra
+				}
 			}
 		}
-		filtered = append(filtered, HookGroup{
-			Hooks: []HookEntry{{
-				Type:    "command",
-				Command: CanonicalCommand(event),
-			}},
-		})
-		set[event] = filtered
+		set[event] = append(filtered, fresh)
 	}
 	encoded, err := encodeHookSet(set)
 	if err != nil {
