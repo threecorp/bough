@@ -137,11 +137,29 @@ func WiredEventNames() string {
 type HookEntry struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
-	// Timeout is Claude Code's per-entry second budget. bough never
-	// writes it, but Install / Uninstall re-encode EVERY event in the
-	// file — including ones bough never wired — so a field that is not
-	// modelled here is deleted from the operator's settings.json.
-	Timeout *int `json:"timeout,omitempty"`
+	// Extra keeps every other key the entry carries (timeout, statusMessage,
+	// async, ...) so rewriting settings.json does not drop them.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (e *HookEntry) UnmarshalJSON(b []byte) error {
+	type plain HookEntry
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	extra, err := unknownKeys(b, "type", "command")
+	if err != nil {
+		return err
+	}
+	*e = HookEntry(p)
+	e.Extra = extra
+	return nil
+}
+
+func (e HookEntry) MarshalJSON() ([]byte, error) {
+	type plain HookEntry
+	return marshalWithExtra(plain(e), e.Extra)
 }
 
 // HookGroup mirrors one matcher group inside an event's hook list.
@@ -152,6 +170,64 @@ type HookEntry struct {
 type HookGroup struct {
 	Matcher string      `json:"matcher,omitempty"`
 	Hooks   []HookEntry `json:"hooks"`
+	// Extra keeps group keys bough does not model, for the same reason as
+	// HookEntry.Extra.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (g *HookGroup) UnmarshalJSON(b []byte) error {
+	type plain HookGroup
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	extra, err := unknownKeys(b, "matcher", "hooks")
+	if err != nil {
+		return err
+	}
+	*g = HookGroup(p)
+	g.Extra = extra
+	return nil
+}
+
+func (g HookGroup) MarshalJSON() ([]byte, error) {
+	type plain HookGroup
+	return marshalWithExtra(plain(g), g.Extra)
+}
+
+// unknownKeys returns the keys of the JSON object b other than known, or nil
+// when there are none.
+func unknownKeys(b []byte, known ...string) (map[string]json.RawMessage, error) {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, err
+	}
+	for _, k := range known {
+		delete(all, k)
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+	return all, nil
+}
+
+// marshalWithExtra marshals v and adds the extra keys back. A modelled field
+// wins over an extra key of the same name.
+func marshalWithExtra(v any, extra map[string]json.RawMessage) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil || len(extra) == 0 {
+		return b, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, err
+	}
+	for k, raw := range extra {
+		if _, ok := all[k]; !ok {
+			all[k] = raw
+		}
+	}
+	return json.Marshal(all)
 }
 
 // HookSet maps each event to its ordered slice of matcher groups.
@@ -245,18 +321,26 @@ func (m *Manager) Install(_ context.Context, _ string) error {
 	for _, event := range AllEvents() {
 		groups := set[event]
 		filtered := groups[:0]
+		// Keys an operator added to bough's own entry (a longer timeout on
+		// WorktreeCreate) survive the rewrite, like any hand-written key.
+		// A duplicated bough group or entry contributes its keys only when an
+		// earlier one had none, so the first operator value found wins.
+		fresh := HookGroup{Hooks: []HookEntry{{Type: "command", Command: CanonicalCommand(event)}}}
 		for _, g := range groups {
 			if !isBoughGroup(g) {
 				filtered = append(filtered, g)
+				continue
+			}
+			if fresh.Extra == nil {
+				fresh.Extra = g.Extra
+			}
+			for _, e := range g.Hooks {
+				if fresh.Hooks[0].Extra == nil {
+					fresh.Hooks[0].Extra = e.Extra
+				}
 			}
 		}
-		filtered = append(filtered, HookGroup{
-			Hooks: []HookEntry{{
-				Type:    "command",
-				Command: CanonicalCommand(event),
-			}},
-		})
-		set[event] = filtered
+		set[event] = append(filtered, fresh)
 	}
 	// Prune what a previous version wired. Install is the only command an
 	// operator is told to re-run, so it has to be what cleans up: looping

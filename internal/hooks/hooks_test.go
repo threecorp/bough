@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -279,6 +280,50 @@ func TestManager_Uninstall_PreservesOtherFields(t *testing.T) {
 	}
 	if _, ok := raw["hooks"]; ok {
 		t.Errorf("hooks key should be removed after Uninstall when no hand-edited groups remain: %v", raw)
+	}
+}
+
+// TestManager_InstallUninstall_PreservesHandEditedEntryFields runs Install +
+// Uninstall against hand-edited entries that carry fields bough does not model
+// (timeout, statusMessage, async) and a group key it does not model. They must
+// come back unchanged: Claude Code honours them, and dropping a timeout
+// silently changes how long a hook may run.
+func TestManager_InstallUninstall_PreservesHandEditedEntryFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stop := `[{"matcher":"*","futureGroupKey":true,"hooks":[` +
+		`{"type":"command","command":"guard.py","timeout":10,"statusMessage":"checking"},` +
+		`{"type":"command","command":"slow.py","timeout":180,"async":true}]}]`
+	seed := `{"hooks":{"Stop":` + stop + `}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := m.Uninstall(context.Background()); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var got struct {
+		Hooks map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var want any
+	if err := json.Unmarshal([]byte(stop), &want); err != nil {
+		t.Fatalf("parse want: %v", err)
+	}
+	if !reflect.DeepEqual(got.Hooks["Stop"], want) {
+		t.Errorf("hand-edited Stop group changed:\n got: %v\nwant: %v", got.Hooks["Stop"], want)
 	}
 }
 
@@ -803,11 +848,9 @@ func TestManager_Doctor_ReportsRetiredWiring(t *testing.T) {
 	}
 }
 
-// TestManager_Install_PreservesEntryTimeout pins the settings.json
-// round-trip. Install re-encodes the whole "hooks" key, including
-// events bough never wired, so any field HookEntry does not model is
-// deleted from the operator's file — silently reverting a deliberate
-// `"timeout": 300` to Claude Code's default on the next install.
+// TestManager_Install_PreservesEntryTimeout pins the round-trip on a
+// retired event: Install prunes bough's groups there, and the operator's
+// own group must come back with its `"timeout": 300` intact.
 func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -837,7 +880,7 @@ func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
 		t.Fatalf("the operator's own group must survive, got %+v", groups)
 	}
 	got := groups[0].Hooks[0]
-	if got.Timeout == nil || *got.Timeout != 300 {
+	if string(got.Extra["timeout"]) != "300" {
 		t.Errorf("timeout dropped from a hand-written entry: %+v", got)
 	}
 	data, err := os.ReadFile(path)
@@ -847,8 +890,8 @@ func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
 	if !strings.Contains(string(data), `"timeout": 300`) {
 		t.Errorf("timeout is gone from the file bough wrote:\n%s", data)
 	}
-	// bough's own entries carry no timeout, so the field must not
-	// appear on them just because the struct now models it.
+	// bough's own entries carry no timeout, so preserving the operator's
+	// must not copy it onto them.
 	if strings.Count(string(data), "timeout") != 1 {
 		t.Errorf("timeout leaked onto an entry bough wrote:\n%s", data)
 	}
@@ -900,5 +943,74 @@ func TestManager_Doctor_ReportsRetiredWiringInMixedGroup(t *testing.T) {
 	}
 	if !strings.Contains(out, "Stop") {
 		t.Errorf("the render must name the event that keeps firing:\n%s", out)
+	}
+}
+
+// TestManager_Install_KeepsKeysOnBoughEntry covers bough's own entry: Install
+// rebuilds it, and a timeout the operator raised on it must survive that.
+func TestManager_Install_KeepsKeysOnBoughEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	seed := `{"hooks":{"WorktreeCreate":[{"note":"mine","hooks":[` +
+		`{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	for i := 0; i < 2; i++ {
+		if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+			t.Fatalf("Install #%d: %v", i+1, err)
+		}
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	groups := set[EventWorktreeCreate]
+	if len(groups) != 1 {
+		t.Fatalf("want one bough group, got %d: %+v", len(groups), groups)
+	}
+	if got := string(groups[0].Hooks[0].Extra["timeout"]); got != "1800" {
+		t.Errorf("timeout on bough's entry: got %q want 1800", got)
+	}
+	if got := string(groups[0].Extra["note"]); got != `"mine"` {
+		t.Errorf("group key on bough's group: got %q want \"mine\"", got)
+	}
+}
+
+// TestManager_Install_KeepsKeysFromLaterBoughGroup: a duplicated bough group
+// whose first copy carries no extra keys must not hide the second copy's.
+func TestManager_Install_KeepsKeysFromLaterBoughGroup(t *testing.T) {
+	for name, seed := range map[string]string{
+		"second group": `{"hooks":{"WorktreeCreate":[` +
+			`{"hooks":[{"type":"command","command":"bough hook handle --event WorktreeCreate"}]},` +
+			`{"note":"mine","hooks":[{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`,
+		"second entry": `{"hooks":{"WorktreeCreate":[{"note":"mine","hooks":[` +
+			`{"type":"command","command":"bough hook handle --event WorktreeCreate"},` +
+			`{"type":"command","command":"bough hook handle --event WorktreeCreate","timeout":1800}]}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatalf("write seed: %v", err)
+			}
+			m := New(path)
+			if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+				t.Fatalf("Install: %v", err)
+			}
+			set, err := m.List(context.Background())
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			groups := set[EventWorktreeCreate]
+			if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+				t.Fatalf("want one bough group with one entry, got %+v", groups)
+			}
+			if got := string(groups[0].Hooks[0].Extra["timeout"]); got != "1800" {
+				t.Errorf("timeout: got %q want 1800", got)
+			}
+			if got := string(groups[0].Extra["note"]); got != `"mine"` {
+				t.Errorf("note: got %q want \"mine\"", got)
+			}
+		})
 	}
 }

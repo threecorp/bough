@@ -158,6 +158,18 @@
   another version. The location is now a template over the engine's own
   version, rendered before `Up`.
 
+## v0.26.1
+
+### Fixed
+
+- **`bough claude hook install` / `uninstall` no longer strip keys bough does
+  not model.** Rewriting `settings.json` kept only `type` and `command` on every
+  hook entry, so a hand-written `timeout`, `statusMessage` or `async` vanished
+  — on one real `~/.claude/settings.json`, 28 values across 7 events. Unknown
+  entry and group keys are now carried through unchanged, including keys an
+  operator added to bough's own entry (a longer `timeout` on `WorktreeCreate`),
+  which `install` rebuilds on every run.
+
 ## v0.26.0
 
 ### Fixed
