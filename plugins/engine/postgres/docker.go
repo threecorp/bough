@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -307,6 +308,7 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 func pgdataPin(imageEnv []string) string {
 	for _, kv := range imageEnv {
 		if v, ok := strings.CutPrefix(kv, "PGDATA="); ok {
+			v = path.Clean(v) // container paths are slash-separated on every host
 			if v == dockerDataDir || strings.HasPrefix(v, dockerDataDir+"/") {
 				return ""
 			}
