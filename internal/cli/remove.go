@@ -280,7 +280,7 @@ func answers(ctx context.Context, host string, port int) bool {
 		_ = conn.Close()
 		return true
 	}
-	for _, closed := range []error{syscall.ECONNREFUSED, syscall.EADDRNOTAVAIL, syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.EAFNOSUPPORT} {
+	for _, closed := range []error{syscall.ECONNREFUSED, syscall.EADDRNOTAVAIL, syscall.ENETUNREACH, syscall.ENETDOWN, syscall.EHOSTUNREACH, syscall.EAFNOSUPPORT} {
 		if errors.Is(err, closed) {
 			return false
 		}
