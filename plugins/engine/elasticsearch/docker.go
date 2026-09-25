@@ -18,9 +18,10 @@
 //
 // Engine-specific choices:
 //
-//   - Default image is `docker.elastic.co/elasticsearch/elasticsearch:
-//     7.17.29` — the last 7-line LTS patch with first-class linux/arm64
-//     support. Override via `extras["docker.image"]`.
+//   - Any published `x.y.z` line runs here; the default is the current
+//     9.x patch. Elastic publishes no floating major tag, so
+//     `engines[].version` must name a full patch — see dockerImage.
+//     `extras["docker.image"]` overrides both.
 //   - `ES_JAVA_OPTS=-Xms1g -Xmx1g` deliberately undersized for laptops
 //     running 5-15 parallel worktrees. Override via
 //     `extras["es.heap"]="2g"` if a single-worktree workflow can afford
@@ -67,6 +68,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -82,7 +84,6 @@ import (
 
 const (
 	dockerEngine         = "elasticsearch"
-	dockerDefaultImage   = "docker.elastic.co/elasticsearch/elasticsearch:7.17.29"
 	dockerInternalHTTP   = "9200/tcp"
 	dockerInternalTrans  = "9300/tcp"
 	dockerDataDir        = "/usr/share/elasticsearch/data"
@@ -91,22 +92,22 @@ const (
 	dockerReadyPollMS    = 1000
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return "docker.elastic.co/elasticsearch/elasticsearch:" + v
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. docker.elastic.co publishes
+// only full patch tags — 7, 9 and 9.4 have never existed there — so a
+// major-only version is refused rather than turned into a ref no pull
+// can resolve.
+var dockerImage = api.DockerImage{
+	Image:      "docker.elastic.co/elasticsearch/elasticsearch:%s",
+	Default:    "9.5.3",
+	TagPattern: regexp.MustCompile(`^\d+\.\d+\.\d+$`),
+	TagHint:    "a full x.y.z tag, e.g. 9.5.3",
 }
 
 func pickHeap(req *api.UpReq) string {
-	// "es.heap" is this file's own documented key; "heap" is what the
-	// nix backend (elasticsearch.go's Up()) has always read for the
-	// identical setting. Accept both so a value that works on one
-	// backend doesn't silently stop mattering after switching to the
-	// other.
+	// "es.heap" is this file's documented key; "heap" is the spelling
+	// the pre-docker backend read for the identical setting, kept so an
+	// existing .bough.yaml does not silently stop being honoured.
 	if v := req.Extras["es.heap"]; v != "" {
 		return v
 	}
@@ -133,7 +134,7 @@ const minHeadroomBytes = 1 << 30
 // `--memory` equivalent) to enforce alongside the JVM heap.
 //
 //   - An explicit `extras["es.mem_limit"]` wins, but must be >= the heap
-//     (a cap below -Xmx OOM-kills the JVM at startup, then dockerReadyCheck
+//     (a cap below -Xmx OOM-kills the JVM at startup, then ReadyCheck
 //     just times out with a misleading "not ready").
 //   - Otherwise the default is max(2x heap, heap + minHeadroomBytes), so
 //     even a small heap keeps Elastic's recommended above-heap budget.
@@ -173,7 +174,7 @@ func pickMemoryLimitBytes(req *api.UpReq, heap string) (int64, error) {
 
 // pluginsYAMLFilename is the name Elastic's own Docker entrypoint looks
 // for inside the config directory. See
-// https://www.elastic.co/guide/en/elasticsearch/plugins/7.17/manage-plugins-using-configuration-file.html
+// https://www.elastic.co/docs/reference/elasticsearch/plugins/manage-plugins-using-configuration-file
 const pluginsYAMLFilename = "elasticsearch-plugins.yml"
 
 // pluginsYAMLDoc mirrors elasticsearch-plugins.yml's own shape 1:1 so
@@ -190,15 +191,14 @@ type pluginsYAMLEntry struct {
 }
 
 // writePluginsYAML renders req.Plugins into elasticsearch-plugins.yml
-// next to datadir (the same per-worktree .local/ scratch dir the other
-// engine plugins already use for flake dirs / startup logs). Returns
+// next to datadir (the per-worktree .local/ scratch dir). Returns
 // "" when there is nothing to declare, so an engine with no `plugins:`
 // in its YAML behaves exactly as it did before this feature existed —
-// dockerUp skips the bind-mount entirely rather than mounting an empty
+// Up skips the bind-mount entirely rather than mounting an empty
 // file over the image's own config dir.
 //
 // Like every other container-shaping input (image, env, ulimits), this
-// only takes effect on a FRESH Up: dockerUp's up-or-reuse short-circuit
+// only takes effect on a FRESH Up: Up's up-or-reuse short-circuit
 // returns before this is called, so a plugin newly added to `plugins:`
 // installs on the next Down+Up, not into an already-running container.
 func writePluginsYAML(datadir string, plugins []api.PluginSpec) (string, error) {
@@ -264,7 +264,7 @@ func resolveConfigMount(req *api.UpReq) (string, error) {
 }
 
 // buildDockerEnv assembles the env slice passed to the elasticsearch
-// container. Extracted from dockerUp so the regression-guard tests can
+// container. Extracted from Up so the regression-guard tests can
 // assert the publish_host / publish_port lines are present without
 // having to start a real Docker daemon.
 //
@@ -301,11 +301,16 @@ func dockerContainerName(port int) string {
 	return fmt.Sprintf("bough-elasticsearch-%d", port)
 }
 
-// usingDockerBackend is the cheap self-detection used by Down /
-// ReadyCheck when neither RPC carries an explicit backend hint. See
-// dockerutil.IsBackendRunning for the shared stale-container-
-// detection logic all four engine plugins share.
-func usingDockerBackend(ctx context.Context, port int) bool {
+// dockerBackend runs Elasticsearch in a container. Stateless: the
+// tunables are the consts above and the image comes from dockerImage.
+type dockerBackend struct{}
+
+var _ api.Backend = dockerBackend{}
+
+// Running answers ForPort's disambiguation question. See
+// dockerutil.IsBackendRunning for the stale-container rule all four
+// engine plugins share.
+func (dockerBackend) Running(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
@@ -317,7 +322,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return dockerutil.IsBackendRunning(ctx, cli, dockerContainerName(port))
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("elasticsearch docker: invalid port %d (Ports=%v)", port, req.Ports)
@@ -326,13 +331,27 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("elasticsearch docker: datadir is required")
 	}
 
+	// Every pure check runs before the first daemon call, so a bad image
+	// tag or heap value is refused without creating a datadir or pulling.
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+	heap := pickHeap(req)
+	if err := validateHeap(heap); err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+	memLimitBytes, err := pickMemoryLimitBytes(req, heap)
+	if err != nil {
+		return fmt.Errorf("elasticsearch docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
@@ -363,14 +382,6 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return err
 	}
 
-	heap := pickHeap(req)
-	if err := validateHeap(heap); err != nil {
-		return fmt.Errorf("elasticsearch docker: %w", err)
-	}
-	memLimitBytes, err := pickMemoryLimitBytes(req, heap)
-	if err != nil {
-		return fmt.Errorf("elasticsearch docker: %w", err)
-	}
 	pluginsYAMLPath, err := writePluginsYAML(req.Datadir, req.Plugins)
 	if err != nil {
 		return fmt.Errorf("elasticsearch docker: %w", err)
@@ -415,7 +426,7 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 			Ulimits: []*units.Ulimit{
 				// memlock unlimited so bootstrap.memory_lock can succeed.
 				{Name: "memlock", Hard: -1, Soft: -1},
-				// nofile per Elastic 7.17 docs.
+				// nofile per Elastic's docs.
 				{Name: "nofile", Hard: 65535, Soft: 65535},
 			},
 		},
@@ -519,12 +530,12 @@ func datadirOwnedBy(datadir string, uid uint32) bool {
 	return ok && st.Uid == uid
 }
 
-// dockerReadyCheck polls TCP listen on the host-side HTTP port, then
+// ReadyCheck polls TCP listen on the host-side HTTP port, then
 // issues an HTTP GET against http://127.0.0.1:<port>/ until 200. ES
 // returns 200 on `/` once the cluster is yellow-or-better — single-
 // node ES is always yellow because there is no replica to assign, so
 // this is the canonical "ready for queries" signal.
-func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 600
 	}
@@ -559,7 +570,7 @@ func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (
 	return false, fmt.Errorf("elasticsearch docker: not ready on port %d within %ds", port, timeoutSec)
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {

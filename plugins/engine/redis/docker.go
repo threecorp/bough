@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -49,32 +50,36 @@ import (
 
 const (
 	dockerEngine         = "redis"
-	dockerDefaultImage   = "redis:7-alpine"
 	dockerInternalPort   = "6379/tcp"
 	dockerDataDir        = "/data"
 	dockerStopTimeoutSec = 5
 	dockerReadyPollMS    = 300
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		return fmt.Sprintf("redis:%s-alpine", v)
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. The alpine variant is the
+// default (~5 MB); a glibc build needs extras["docker.image"]="redis:7".
+var dockerImage = api.DockerImage{
+	Image:      "redis:%s-alpine",
+	Default:    "7",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+){0,2}$`),
+	TagHint:    "a version tag such as 7 or 8",
 }
 
 func dockerContainerName(port int) string {
 	return fmt.Sprintf("bough-redis-%d", port)
 }
 
-// usingDockerBackend is the cheap self-detection used by Down /
-// ReadyCheck when neither RPC carries an explicit backend hint. See
-// dockerutil.IsBackendRunning for the shared stale-container-
-// detection logic all four engine plugins share.
-func usingDockerBackend(ctx context.Context, port int) bool {
+// dockerBackend runs redis in a container. Stateless: the tunables are
+// the consts above and the image comes from dockerImage.
+type dockerBackend struct{}
+
+var _ api.Backend = dockerBackend{}
+
+// Running answers ForPort's disambiguation question. See
+// dockerutil.IsBackendRunning for the stale-container rule all four
+// engine plugins share.
+func (dockerBackend) Running(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
@@ -86,7 +91,7 @@ func usingDockerBackend(ctx context.Context, port int) bool {
 	return dockerutil.IsBackendRunning(ctx, cli, dockerContainerName(port))
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("redis docker: invalid port %d (Ports=%v)", port, req.Ports)
@@ -95,13 +100,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("redis docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("redis docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
@@ -167,10 +176,10 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	return nil
 }
 
-// dockerReadyCheck polls a TCP dial against the host-side port, then
+// ReadyCheck polls a TCP dial against the host-side port, then
 // runs `redis-cli ping` inside the container to confirm the server has
 // finished AOF loading and replies `PONG`.
-func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 600
 	}
@@ -240,7 +249,7 @@ func redisPing(ctx context.Context, cli *client.Client, name string) error {
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {

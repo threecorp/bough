@@ -36,6 +36,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path"
+	"regexp"
+	"strings"
 	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
@@ -49,34 +52,36 @@ import (
 
 const (
 	dockerEngine         = "postgres"
-	dockerDefaultImage   = "postgres:16-alpine"
 	dockerInternalPort   = "5432/tcp"
 	dockerDataDir        = "/var/lib/postgresql/data"
 	dockerStopTimeoutSec = 15
 	dockerReadyPollMS    = 500
 )
 
-func pickDockerImage(req *api.UpReq) string {
-	if v := req.Extras["docker.image"]; v != "" {
-		return v
-	}
-	if v := req.Extras["version"]; v != "" {
-		// Default to the alpine variant for v0.2; users who need glibc
-		// can override via extras["docker.image"]="postgres:16".
-		return fmt.Sprintf("postgres:%s-alpine", v)
-	}
-	return dockerDefaultImage
+// dockerImage turns `extras["version"]` into the image to run, honouring
+// `extras["docker.image"]` verbatim first. The alpine variant is the
+// default; a glibc build needs extras["docker.image"]="postgres:16".
+var dockerImage = api.DockerImage{
+	Image:      "postgres:%s-alpine",
+	Default:    "16",
+	TagPattern: regexp.MustCompile(`^\d+(\.\d+)?$`),
+	TagHint:    "a major or major.minor tag such as 16 or 17",
 }
 
 func dockerContainerName(port int) string {
 	return fmt.Sprintf("bough-postgres-%d", port)
 }
 
-// usingDockerBackend is the cheap self-detection used by Down /
-// ReadyCheck when neither RPC carries an explicit backend hint. See
-// dockerutil.IsBackendRunning for the shared stale-container-
-// detection logic all four engine plugins share.
-func usingDockerBackend(ctx context.Context, port int) bool {
+// dockerBackend runs postgres in a container. Stateless: the tunables
+// are the consts above and the image comes from dockerImage.
+type dockerBackend struct{}
+
+var _ api.Backend = dockerBackend{}
+
+// Running answers ForPort's disambiguation question. See
+// dockerutil.IsBackendRunning for the stale-container rule all four
+// engine plugins share.
+func (dockerBackend) Running(ctx context.Context, port int) bool {
 	if port <= 0 {
 		return false
 	}
@@ -95,7 +100,7 @@ func pickInitDB(req *api.UpReq) string {
 	return "bough"
 }
 
-func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
+func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	port := api.PickMainPort(req.Ports)
 	if port <= 0 {
 		return fmt.Errorf("postgres docker: invalid port %d (Ports=%v)", port, req.Ports)
@@ -104,13 +109,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		return errors.New("postgres docker: datadir is required")
 	}
 
+	imageRef, err := dockerImage.Resolve(req.Extras)
+	if err != nil {
+		return fmt.Errorf("postgres docker: %w", err)
+	}
+
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 
-	imageRef := pickDockerImage(req)
 	name := dockerContainerName(port)
 
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
@@ -142,6 +151,17 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 		"POSTGRES_PASSWORD=" + password,
 		"POSTGRES_USER=" + user,
 		"POSTGRES_DB=" + initDB,
+	}
+	img, err := cli.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return fmt.Errorf("postgres docker: inspect %s: %w", imageRef, err)
+	}
+	var imageEnv []string
+	if img.Config != nil {
+		imageEnv = img.Config.Env
+	}
+	if pin := pgdataPin(imageEnv); pin != "" {
+		env = append(env, pin)
 	}
 
 	hostPort := fmt.Sprintf("%d", port)
@@ -180,11 +200,11 @@ func (p *Provider) dockerUp(ctx context.Context, req *api.UpReq) error {
 	return nil
 }
 
-// dockerReadyCheck polls a TCP dial against the host-side port until it
+// ReadyCheck polls a TCP dial against the host-side port until it
 // succeeds, then runs `pg_isready` inside the container against the
 // internal socket to confirm postgres has finished initdb + the
 // automatic restart and is accepting query connections.
-func (p *Provider) dockerReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
+func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool, error) {
 	if timeoutSec <= 0 {
 		timeoutSec = 600
 	}
@@ -257,7 +277,7 @@ func pgIsReady(ctx context.Context, cli *client.Client, name string) error {
 	return nil
 }
 
-func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
+func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	port := firstListenPort(req.Ports)
 	cli, err := dockerutil.NewClient()
 	if err != nil {
@@ -278,4 +298,22 @@ func (p *Provider) dockerDown(ctx context.Context, req *api.DownReq) error {
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
 	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+}
+
+// pgdataPin returns the PGDATA override an image needs so its data lands
+// in the bind mount, or "" when the image already keeps it there. 18+
+// official images default PGDATA to a versioned directory outside the
+// mount and refuse to start; an image whose PGDATA is the mount or a
+// subdirectory of it (a common custom layout) is left alone.
+func pgdataPin(imageEnv []string) string {
+	for _, kv := range imageEnv {
+		if v, ok := strings.CutPrefix(kv, "PGDATA="); ok {
+			v = path.Clean(v) // container paths are slash-separated on every host
+			if v == dockerDataDir || strings.HasPrefix(v, dockerDataDir+"/") {
+				return ""
+			}
+			break
+		}
+	}
+	return "PGDATA=" + dockerDataDir
 }

@@ -66,9 +66,21 @@ func TestToPluginSpecs(t *testing.T) {
 				{ID: "analysis-sudachi", Location: "https://example.com/sudachi.zip"},
 			},
 		},
+		{
+			"{{ .Version }} expands to the engine's version",
+			[]config.EnginePlugin{
+				{ID: "analysis-sudachi", Location: "https://example.com/es-{{ .Version }}-sudachi.zip"},
+			},
+			[]engineapi.PluginSpec{
+				{ID: "analysis-sudachi", Location: "https://example.com/es-9.4.1-sudachi.zip"},
+			},
+		},
 	}
 	for _, c := range cases {
-		got := toPluginSpecs(c.in)
+		got, err := toPluginSpecs(c.in, "9.4.1")
+		if err != nil {
+			t.Fatalf("%s: toPluginSpecs(%v) returned %v", c.name, c.in, err)
+		}
 		if len(got) != len(c.want) {
 			t.Fatalf("%s: toPluginSpecs(%v) = %v, want %v", c.name, c.in, got, c.want)
 		}
@@ -77,6 +89,22 @@ func TestToPluginSpecs(t *testing.T) {
 				t.Errorf("%s: toPluginSpecs(%v)[%d] = %+v, want %+v", c.name, c.in, i, got[i], c.want[i])
 			}
 		}
+	}
+}
+
+// TestToPluginSpecs_RejectsBrokenTemplate keeps a malformed location
+// from reaching Up: the engine would install a plugin archive whose URL
+// still carries template syntax, and the failure would surface as an
+// engine that refuses to boot rather than as a config error.
+func TestToPluginSpecs_RejectsBrokenTemplate(t *testing.T) {
+	_, err := toPluginSpecs([]config.EnginePlugin{
+		{ID: "analysis-sudachi", Location: "https://example.com/es-{{ .Version -sudachi.zip"},
+	}, "9.4.1")
+	if err == nil {
+		t.Fatal("toPluginSpecs accepted an unparseable location")
+	}
+	if !strings.Contains(err.Error(), "analysis-sudachi") {
+		t.Errorf("error %q does not name the offending plugin", err)
 	}
 }
 
@@ -96,7 +124,7 @@ func TestBuildEngineExtras_FlattensCompose(t *testing.T) {
 			TargetPort: 6379,
 		},
 	}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	want := map[string]string{
 		"compose.file":        "auba-api/compose.yml",
 		"compose.service":     "redis",
@@ -126,7 +154,7 @@ func TestBuildEngineExtras_ComposeOptionalFields(t *testing.T) {
 			Project: "my-project", EnvPrefix: "CACHE",
 		},
 	}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	if got := extras["compose.project"]; got != "my-project" {
 		t.Errorf("compose.project = %q, want %q", got, "my-project")
 	}
@@ -140,7 +168,7 @@ func TestBuildEngineExtras_ComposeOptionalFields(t *testing.T) {
 // engine kinds, which never set Engine.Compose.
 func TestBuildEngineExtras_NonComposeEngineUnaffected(t *testing.T) {
 	eng := config.Engine{Kind: "mysql", Backend: "docker"}
-	extras := buildEngineExtras(eng, "")
+	extras := buildEngineExtras(eng)
 	for k := range extras {
 		if strings.HasPrefix(k, "compose.") {
 			t.Errorf("non-compose engine got a compose.* extras key: %q", k)
@@ -148,9 +176,44 @@ func TestBuildEngineExtras_NonComposeEngineUnaffected(t *testing.T) {
 	}
 }
 
+// TestBuildEngineExtras_CarriesVersion pins the one place the typed
+// engines[].version field is consumed: it reaches the plugin as
+// extras["version"] and nowhere else, so a dropped copy would leave
+// every plugin resolving its own default in silence.
+func TestBuildEngineExtras_CarriesVersion(t *testing.T) {
+	got := buildEngineExtras(config.Engine{Kind: "elasticsearch", Version: "9.4.1"})
+	if got["version"] != "9.4.1" {
+		t.Errorf(`extras["version"] = %q, want "9.4.1"`, got["version"])
+	}
+	if _, ok := buildEngineExtras(config.Engine{Kind: "elasticsearch"})["version"]; ok {
+		t.Error(`extras carries a "version" key for an engine that declares none`)
+	}
+}
+
+// TestBuildEngineExtras_BackendPrecedence pins what an engine runs on:
+// the dedicated field beats extras.backend, extras.backend is never
+// clobbered, and an engine that names neither still gets a backend —
+// a .bough.yaml without `backend:` must run on the default rather than
+// reach the plugin with an empty token.
+func TestBuildEngineExtras_BackendPrecedence(t *testing.T) {
+	cases := []struct {
+		name string
+		eng  config.Engine
+		want string
+	}{
+		{"omitted → default", config.Engine{Kind: "mysql"}, engineapi.DefaultBackend},
+		{"explicit field wins", config.Engine{Kind: "mysql", Backend: "podman", Extras: map[string]string{"backend": "docker"}}, "podman"},
+		{"extras value survives", config.Engine{Kind: "mysql", Extras: map[string]string{"backend": "podman"}}, "podman"},
+	}
+	for _, c := range cases {
+		if got := buildEngineExtras(c.eng)["backend"]; got != c.want {
+			t.Errorf(`%s: extras["backend"] = %q, want %q`, c.name, got, c.want)
+		}
+	}
+}
+
 // engineTestConfig declares one mysql engine with an explicit backend
-// (so detectBackendIfNeeded never probes the real host) and a fixed
-// ready timeout the timeout-message assertion can pin.
+// and a fixed ready timeout the timeout-message assertion can pin.
 func engineTestConfig() *config.Config {
 	return &config.Config{
 		Engines: []config.Engine{{

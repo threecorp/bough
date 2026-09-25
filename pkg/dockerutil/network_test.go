@@ -27,7 +27,7 @@ func TestIsPortFree_FreePort(t *testing.T) {
 
 // TestIsPortFree_OccupiedPort opens a listener on a kernel-assigned
 // port, leaves it open, and verifies IsPortFree reports the port as
-// taken. This is the dockerUp pre-flight contract, and it doubles as
+// taken. This is the docker backend Up pre-flight contract, and it doubles as
 // the dual-stack regression guard: IsPortFree binds "127.0.0.1:<port>"
 // specifically, not "localhost:<port>" (which can resolve to ::1 on a
 // dual-stack host and miss an IPv4-only conflict like the one this

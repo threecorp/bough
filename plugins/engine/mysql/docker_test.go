@@ -50,3 +50,33 @@ func TestBuildDockerEnv_DockerVersionBackendExtrasExcluded(t *testing.T) {
 		t.Errorf("buildDockerEnv: got %d env entries, want %d (docker./version/backend must not leak into MYSQL_* env)\nfull env:\n%s", n, want, strings.Join(got, "\n  "))
 	}
 }
+
+// TestDockerImageTable pins this plugin's version→image mapping, which
+// no test covered while it lived in pickDockerImage: a typo in the
+// repository name or a lost default would have stayed green until
+// someone ran a real create.
+func TestDockerImageTable(t *testing.T) {
+	cases := []struct {
+		name    string
+		extras  map[string]string
+		want    string
+		wantErr bool
+	}{
+		{"version fills the template", map[string]string{"version": "9"}, "mysql:9", false},
+		{"patch level is accepted", map[string]string{"version": "8.4.5"}, "mysql:8.4.5", false},
+		{"docker.image wins", map[string]string{"docker.image": "mysql:8.4-oracle", "version": "9"}, "mysql:8.4-oracle", false},
+		{"nil extras falls back to the default", nil, "mysql:8.4", false},
+		{"a variant tag needs docker.image", map[string]string{"version": "8.4-oracle"}, "", true},
+	}
+	for _, c := range cases {
+		got, err := dockerImage.Resolve(c.extras)
+		switch {
+		case c.wantErr && err == nil:
+			t.Errorf("%s: Resolve = %q, want an error", c.name, got)
+		case !c.wantErr && err != nil:
+			t.Errorf("%s: Resolve returned %v, want %q", c.name, err, c.want)
+		case !c.wantErr && got != c.want:
+			t.Errorf("%s: Resolve = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

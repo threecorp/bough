@@ -37,7 +37,7 @@
 //     protocol-level check — this matters most for "mysql": a bare
 //     dial goes ready during the mysql image's --skip-networking
 //     "temporary server" bootstrap phase, the exact race
-//     plugins/engine/mysql/docker.go's dockerReadyCheck already had to
+//     plugins/engine/mysql/docker.go's dockerBackend.ReadyCheck already had to
 //     fix for the bundled Docker backend (a host port's forwarding
 //     accepts the TCP handshake from container start, regardless of
 //     whether mysqld is listening yet).

@@ -1,5 +1,5 @@
 // Command bough-plugin-redis is the Hashicorp go-plugin gRPC server
-// for the Redis 7 engine.
+// for the Redis engine.
 package main
 
 import (

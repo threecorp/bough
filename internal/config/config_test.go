@@ -178,6 +178,26 @@ func TestLoad_validExample(t *testing.T) {
 	}
 }
 
+// TestDeprecationWarnings_SocketDir guards the only signal an operator
+// gets for a key that still parses but no longer does anything: the
+// bundled engines expose TCP only, so a socket_dir line silently did
+// nothing until this warning existed.
+func TestDeprecationWarnings_SocketDir(t *testing.T) {
+	withDir := &Config{Engines: []Engine{{Kind: "redis"}, {Kind: "mysql", SocketDir: "/tmp"}}}
+	got := withDir.deprecationWarnings()
+	if len(got) != 1 {
+		t.Fatalf("deprecationWarnings = %v, want exactly one entry", got)
+	}
+	if !strings.Contains(got[0], "engines[1].socket_dir") {
+		t.Errorf("warning %q does not name the offending engine index", got[0])
+	}
+
+	clean := &Config{Engines: []Engine{{Kind: "redis"}}}
+	if got := clean.deprecationWarnings(); len(got) != 0 {
+		t.Errorf("deprecationWarnings on a clean config = %v, want none", got)
+	}
+}
+
 // TestLoad_ComposeEngine_roundTrip is the positive-path companion to
 // the "compose kind" cases in TestLoad_rejectsInvalid: a well-formed
 // compose: block must load and populate Engine.Compose verbatim.
@@ -374,6 +394,78 @@ registry: {path: .bough-ports.json}
 `,
 			wantInErr: "File",
 		},
+		{
+			// The nix backend is gone: a .bough.yaml still naming it
+			// must fail at load, so `bough remove` reports it too rather
+			// than the operator discovering it at Up.
+			name: "backend: nix is refused",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", backend: nix, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "Backend",
+		},
+		{
+			name: "backend: nix is refused in the v0.3 shape too",
+			yaml: `schema_version: 1
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: db-provider}
+databases:
+  - {kind: mysql, version: "8.4", backend: nix, port_range: [42000, 42999]}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "Backend",
+		},
+		{
+			// The same token through extras is copied to the plugin
+			// verbatim, so it has to be refused at load as well.
+			name: "extras.backend: nix is refused",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", extras: {backend: nix}, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "extras.backend",
+		},
+	}
+
+	// Neither of these may be refused by the extras.backend rule: the field
+	// wins over extras, and a third-party plugin may register other backends.
+	for name, yaml := range map[string]string{
+		"backend field wins over extras": `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", backend: docker, extras: {backend: nix}, port_ranges: {main: [42000, 42999]}}
+registry: {path: .bough-ports.json}
+`,
+		"third-party kind keeps its own backend": `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: rabbitmq, version: "3", extras: {backend: podman}, port_ranges: {main: [43000, 43999]}}
+registry: {path: .bough-ports.json}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := writeFile(t, path, yaml); err != nil {
+				t.Fatalf("writeFile: %v", err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Errorf("valid config refused: %v", err)
+			}
+		})
 	}
 
 	for _, tc := range cases {

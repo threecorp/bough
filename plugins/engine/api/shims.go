@@ -6,7 +6,7 @@ package api
 //
 // Used by single-port engine plugins (mysql / postgres / redis /
 // elasticsearch) during the v0.4.x transition so their existing
-// `dockerUp(ctx, port int, ...)` internals can be wrapped without
+// single-port Up internals can be wrapped without
 // rewriting. Removed alongside the legacy YAML/handshake fallbacks
 // in v0.5.0 if no plugin still needs it; until then it doubles as
 // the canonical "extract main port" helper for any plugin author
