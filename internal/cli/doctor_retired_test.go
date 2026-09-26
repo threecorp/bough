@@ -158,6 +158,22 @@ func TestRenderRetiredConfig(t *testing.T) {
 	}
 }
 
+// TestRenderRetiredConfig_DanglingDefault: a .bough.yaml symlink whose target
+// is gone is a broken config, not an absent one.
+func TestRenderRetiredConfig_DanglingDefault(t *testing.T) {
+	t.Setenv("BOUGH_HOMUNCULUS_DIR", filepath.Join(t.TempDir(), "absent"))
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Symlink(filepath.Join(dir, "gone.yaml"), filepath.Join(dir, ".bough.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	renderRetiredConfig(&cobra.Command{}, &out)
+	if !strings.Contains(out.String(), "could not check for retired sections") || strings.Contains(out.String(), "none —") {
+		t.Errorf("a dangling .bough.yaml symlink must be reported:\n%s", out.String())
+	}
+}
+
 // TestRenderRetiredConfig_CleanState: no config, no corpus reads as none.
 func TestRenderRetiredConfig_CleanState(t *testing.T) {
 	t.Setenv("BOUGH_HOMUNCULUS_DIR", filepath.Join(t.TempDir(), "absent"))
