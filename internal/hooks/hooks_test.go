@@ -716,7 +716,7 @@ func TestRetiredEvents_DisjointFromWired(t *testing.T) {
 }
 
 // TestManager_Install_PrunesRetiredWiring is the upgrade path. An
-// operator arriving from v0.26.0 has all eight events in settings.json;
+// operator arriving from v0.27.0 has all eight events in settings.json;
 // one `bough claude hook install` must leave exactly the two that do
 // something, with the retired keys gone rather than emptied.
 func TestManager_Install_PrunesRetiredWiring(t *testing.T) {

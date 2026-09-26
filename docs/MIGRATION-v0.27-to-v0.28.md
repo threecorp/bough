@@ -1,6 +1,6 @@
-# bough v0.26.0 → v0.27.0 migration guide
+# bough v0.27.0 → v0.28.0 migration guide
 
-v0.27.0 removes the continuous-learning loop. bough is a per-worktree
+v0.28.0 removes the continuous-learning loop. bough is a per-worktree
 isolation tool again: git worktrees, deterministic ports, per-worktree
 engines, a rendered `.env.local`, and the two `claude --worktree`
 hooks. Learning belongs to a Claude Code plugin, and bough has no
@@ -15,21 +15,21 @@ bough claude hook install     # prunes the six retired hook events
 
 ## TL;DR
 
-| You have | What happens on v0.27.0 | What to do |
+| You have | What happens on v0.28.0 | What to do |
 |---|---|---|
 | Six retired events in `settings.json` | Each fires, prints one stderr line, exits 0 | `bough claude hook install` |
-| `instinct:` / `quality_gates:` / `memory_backends:` / `export:` in `.bough.yaml` | Read, warned about once per load, otherwise ignored | Delete the section before v0.28.0 |
+| `instinct:` / `quality_gates:` / `memory_backends:` / `export:` in `.bough.yaml` | Read, warned about once per load, otherwise ignored | Delete the section before v0.29.0 |
 | `~/.local/share/bough-homunculus/` | Never read, never written | Yours to keep or delete |
-| Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.26.0, or drop the call |
+| Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.27.0, or drop the call |
 | The `bough-hooks` / `bough-all` Claude Code plugin | Updates to two events when you update the plugin | `/plugin update`, or nothing |
 
-The compatibility shims above last one minor series. **v0.28.0 makes a
+The compatibility shims above last one minor series. **v0.29.0 makes a
 retired `.bough.yaml` key a hard validation error and drops the hook
 shim**, so a retired event would then exit non-zero.
 
 ## Hook wiring
 
-v0.26.0 wired eight Claude Code events. v0.27.0 wires two:
+v0.27.0 wired eight Claude Code events. v0.28.0 wires two:
 `WorktreeCreate` and `WorktreeRemove`.
 
 `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd`
@@ -38,7 +38,7 @@ still runs — the host fires it on every tool call — and each run exits
 0 with one line on stderr:
 
 ```text
-[bough] hook event PreToolUse is retired since v0.27.0 and does nothing; run `bough claude hook install` to prune the stale wiring
+[bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune the stale wiring
 ```
 
 Claude Code does not show a successful hook's stderr, so this is
@@ -60,7 +60,7 @@ An **unknown** event is now an error rather than a silent success:
 unknown hook event "PreToolUsee" (wired: WorktreeCreate, WorktreeRemove)
 ```
 
-In v0.26.0 a typo exited 0 with empty stdout, which the host reports as
+In v0.27.0 a typo exited 0 with empty stdout, which the host reports as
 "hook succeeded but returned no worktree path" — a failure two steps
 away from its cause.
 
@@ -71,7 +71,7 @@ Four top-level sections are retired: `instinct:`, `quality_gates:`,
 one present prints one line per load:
 
 ```text
-bough: WARNING YAML section 'instinct:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.27.0; delete the section (the key stops parsing in v0.28.0)
+bough: WARNING YAML section 'instinct:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)
 ```
 
 Delete the sections. Everything else in the file is unchanged, and an
@@ -90,7 +90,7 @@ gets a top-level key of its own.
 
 ## Commands that are gone
 
-| v0.26.0 | v0.27.0 |
+| v0.27.0 | v0.28.0 |
 |---|---|
 | `bough instinct status` / `list` / `show` / `promote` | gone |
 | `bough instinct observer run-once` / `start` / `stop` / `status` | gone |
@@ -114,12 +114,12 @@ Everything else keeps its name and its flags: `create`, `remove`,
 ## On-disk state
 
 `~/.local/share/bough-homunculus/` (or wherever
-`BOUGH_HOMUNCULUS_DIR` pointed) is left exactly as it is. v0.27.0 never
+`BOUGH_HOMUNCULUS_DIR` pointed) is left exactly as it is. v0.28.0 never
 reads or writes it. `bough claude doctor` mentions it once so it does
 not sit there unexplained; deleting it is your call, and nothing in
 bough will do it for you.
 
-Evolved artifacts that v0.26.0 wrote into `.claude/skills`,
+Evolved artifacts that v0.27.0 wrote into `.claude/skills`,
 `.claude/agents` and `.claude/commands` are ordinary files that Claude
 Code still loads. bough no longer writes or links them, and `bough
 create` no longer symlinks a worktree's `.claude/{skills,agents,commands}`
@@ -128,11 +128,11 @@ loop.
 
 ## Staying on the loop
 
-Pin **v0.26.0**. It is the last release that carries it:
+Pin **v0.27.0**. It is the last release that carries it:
 
 ```bash
-go install github.com/ikeikeikeike/bough/cmd/bough@v0.26.0
-# or: nix profile install github:threecorp/bough/v0.26.0
+go install github.com/ikeikeikeike/bough/cmd/bough@v0.27.0
+# or: nix profile install github:threecorp/bough/v0.27.0
 ```
 
 The design notes live in [attic/](./attic/) — [EVOLVE.md](./attic/EVOLVE.md)

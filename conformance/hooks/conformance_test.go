@@ -25,7 +25,7 @@ import (
 // TestHooks_EndToEnd_InstallHandleDoctorUninstall walks the canonical
 // user flow: install the wiring, drive retired and unknown events
 // through `bough hook handle`, render the doctor report, prune a
-// v0.26.0 settings.json, then uninstall. The two worktree events need a
+// v0.27.0 settings.json, then uninstall. The two worktree events need a
 // monorepo to act on, so they are driven where one exists:
 // internal/cli/worktree_hook_test.go and scripts/entrypoint-smoke.sh.
 func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
@@ -101,7 +101,7 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	}
 
 	// The upgrade path an operator actually walks: a settings.json left
-	// over from v0.26.0 wires all eight events. One install must leave
+	// over from v0.27.0 wires all eight events. One install must leave
 	// exactly the two that do something. Seeded with the full set rather
 	// than a sample, so a retired event that stops being pruned cannot
 	// hide in the half the fixture skipped.

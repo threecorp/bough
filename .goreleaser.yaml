@@ -124,8 +124,8 @@ builds:
 
   # The six binaries above are the whole release. Everything else the
   # repo ever shipped — the v0.5-v0.8 memory plugins, bough-mcp-server,
-  # and the v0.9-v0.26 learning loop — is retired; pin v0.8.1 or
-  # v0.26.0 respectively to keep one.
+  # and the v0.9-v0.27 learning loop — is retired; pin v0.8.1 or
+  # v0.27.0 respectively to keep one.
 
 archives:
   - id: default

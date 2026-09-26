@@ -98,7 +98,7 @@ Both events map to `bough hook handle --event <E>`:
 | WorktreeRemove | run `bough remove` — stop the engines, drop the datadirs, remove the worktree |
 
 Nothing else is wired, so a session that never uses `claude --worktree` never
-runs bough. Versions up to v0.26.0 also wired `PreToolUse`, `PostToolUse`,
+runs bough. Versions up to v0.27.0 also wired `PreToolUse`, `PostToolUse`,
 `UserPromptSubmit`, `Stop`, `SessionEnd` and `PreCompact` for a continuous-learning
 loop that no longer exists; they now do nothing, and one
 `bough claude hook install` prunes them out of `settings.json`.
@@ -124,7 +124,7 @@ Two notes on the CLI path:
 - Commands installed this way are **flat** (`/create`, not `/bough:create`) —
   filesystem commands are not namespaced, only plugin ones are.
 - Project scope lands at the monorepo root's own `.claude/<kind>`. As of
-  v0.27.0 `bough create` symlinks only `CLAUDE.md` into a worktree, so a
+  v0.28.0 `bough create` symlinks only `CLAUDE.md` into a worktree, so a
   worktree session does NOT pick these up — install them user-scoped, or wire
   your own symlink, if you want them there.
 

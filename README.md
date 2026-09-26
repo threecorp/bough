@@ -504,10 +504,10 @@ that production monorepo. Multi-port engines (rabbitmq / kafka / NATS) are
 first-class in the contract — reference plugins are not yet bundled.
 
 The worktree-isolation core has been stable since v0.4.0. v0.9.0 through
-v0.26.0 also carried a continuous-learning loop on top of it; v0.27.0
+v0.27.0 also carried a continuous-learning loop on top of it; v0.28.0
 removed that wholesale and bough is an isolation tool again. Pin
-**v0.26.0** to keep the loop, or see
-[docs/MIGRATION-v0.26-to-v0.27.md](docs/MIGRATION-v0.26-to-v0.27.md).
+**v0.27.0** to keep the loop, or see
+[docs/MIGRATION-v0.27-to-v0.28.md](docs/MIGRATION-v0.27-to-v0.28.md).
 
 ## Plugin conformance
 

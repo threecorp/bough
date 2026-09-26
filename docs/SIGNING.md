@@ -31,7 +31,7 @@ authors should mention which scheme they ship in their own
 ## Configuration
 
 None yet, deliberately. The schema sketched here used to sit under the
-`instinct:` section and was removed with it in v0.27.0; no command path
+`instinct:` section and was removed with it in v0.28.0; no command path
 called `internal/pluginsign`, so the keys parsed and did nothing. A
 config surface lands in the same change that wires the enforce gate
 below — a key that configures nothing is worse than no key, because it

@@ -20,9 +20,9 @@ const v03FallbackCaption = "v0.3 .worktree-isolation.yaml accepted on fallback"
 // surfaced through `bough --version`; main.go fills it in from the
 // linker-injected build tag.
 //
-// v0.27.0 narrowed the surface back to what the name says: per-worktree
+// v0.28.0 narrowed the surface back to what the name says: per-worktree
 // isolation. The continuous-learning port (observe → instinct → evolve →
-// inject, v0.9.0–v0.26.0) is gone; that job belongs to the upstream
+// inject, v0.9.0–v0.27.0) is gone; that job belongs to the upstream
 // Claude Code plugins built for it. What remains is the worktree
 // lifecycle plus the two hook events Claude Code calls to drive it.
 func NewRootCmd(version string) *cobra.Command {

@@ -554,7 +554,7 @@ registry: {path: .worktree-ports.json}
 }
 
 // TestLoad_retiredSectionsToleratedWithWarning is the compatibility
-// contract for the v0.27.x line. A `.bough.yaml` still carrying any of
+// contract for the v0.28.x line. A `.bough.yaml` still carrying any of
 // the four sections that configured the removed continuous-learning
 // loop must keep loading: the decoder is strict, so a rejected key here
 // would take `claude --worktree` down for anyone who has not yet edited

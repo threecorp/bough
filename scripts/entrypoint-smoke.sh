@@ -70,7 +70,7 @@ repositories:
     branch_strategy: main
 registry:
   path: ".bough-ports.json"
-# Retired in v0.27.0: read, warned about, and otherwise ignored. Kept in
+# Retired in v0.28.0: read, warned about, and otherwise ignored. Kept in
 # the fixture so the smoke proves a not-yet-upgraded .bough.yaml still
 # satisfies the WorktreeCreate stdout contract.
 instinct:

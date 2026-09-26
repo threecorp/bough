@@ -5,7 +5,7 @@
 ### Removed
 
 - **BREAKING: the continuous-learning loop is gone; bough is a
-  per-worktree isolation tool again.** v0.9.0 through v0.26.0 layered
+  per-worktree isolation tool again.** v0.9.0 through v0.27.0 layered
   an agent-memory subsystem on top of the isolation core — session
   observations, confidence-scored instincts minted through
   `claude --print`, a five-gate clustering pipeline that emitted
@@ -21,7 +21,7 @@
   printing one line on stderr:
 
   ```text
-  [bough] hook event PreToolUse is retired since v0.27.0 and does nothing; run `bough claude hook install` to prune the stale wiring
+  [bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune the stale wiring
   ```
 
   One `bough claude hook install` deletes bough's
@@ -39,7 +39,7 @@
   `quality_gates:`, `memory_backends:` and `export:`. They parse, are
   discarded, and each prints `bough: WARNING YAML section 'instinct:'
   is retired and does nothing …` once per load. **They stop parsing in
-  v0.28.0.** The strict decode is otherwise unchanged: a misspelled
+  v0.29.0.** The strict decode is otherwise unchanged: a misspelled
   key is still a hard error.
 
   Gone with it: `bough instinct` (`status` / `list` / `show` /
@@ -59,8 +59,8 @@
   is still on disk. That directory is never read or written again, and
   bough will not delete it.
 
-  Pin **v0.26.0** to keep the loop. `docs/attic/` keeps the design
-  notes; `docs/MIGRATION-v0.26-to-v0.27.md` has the upgrade steps.
+  Pin **v0.27.0** to keep the loop. `docs/attic/` keeps the design
+  notes; `docs/MIGRATION-v0.27-to-v0.28.md` has the upgrade steps.
 
 ## v0.27.0
 

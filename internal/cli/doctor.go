@@ -29,7 +29,7 @@ func newDoctorCmd() *cobra.Command {
 
 // renderRetiredConfig names the `.bough.yaml` sections and on-disk
 // state left over from the continuous-learning loop bough carried
-// until v0.26.0. Neither is read any more, and neither is bough's to
+// until v0.27.0. Neither is read any more, and neither is bough's to
 // delete, so the doctor is where an operator finds out they are there.
 //
 // The config half re-reads the file rather than taking the loaded
@@ -47,7 +47,7 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 			if keys := retiredConfigKeys(path); len(keys) > 0 {
 				for _, k := range keys {
 					notes = append(notes, fmt.Sprintf(
-						"%s: section '%s:' is retired and does nothing (delete it; the key stops parsing in v0.28.0)",
+						"%s: section '%s:' is retired and does nothing (delete it; the key stops parsing in v0.29.0)",
 						path, k))
 				}
 			}
@@ -55,7 +55,7 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 	}
 	if dir := retiredCorpusDir(); dir != "" {
 		notes = append(notes, fmt.Sprintf(
-			"%s holds the instinct corpus from v0.26.0 and earlier; bough no longer reads or writes it", dir))
+			"%s holds the instinct corpus from v0.27.0 and earlier; bough no longer reads or writes it", dir))
 	}
 
 	if len(notes) == 0 {

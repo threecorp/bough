@@ -54,13 +54,13 @@ const (
 )
 
 // The six events bough wired for the continuous-learning loop it
-// carried from v0.9.0 to v0.26.0. They are named — not deleted —
+// carried from v0.9.0 to v0.27.0. They are named — not deleted —
 // because the wiring outlives the binary: an operator's settings.json
 // holds them until the next `bough claude hook install`, and a
 // bough-hooks plugin installed from the marketplace carries its own
 // cached copy until the operator updates it. Install prunes them and
-// `hook handle` accepts-and-ignores them for the v0.27.x line; both go
-// away in v0.28.0.
+// `hook handle` accepts-and-ignores them for the v0.28.x line; both go
+// away in v0.29.0.
 const (
 	RetiredEventPreToolUse       HookEvent = "PreToolUse"
 	RetiredEventPostToolUse      HookEvent = "PostToolUse"

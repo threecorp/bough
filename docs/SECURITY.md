@@ -18,7 +18,7 @@ Run only plugins you trust. See [SIGNING.md](SIGNING.md) for the (currently unen
 
 There is none today. The signature-verification design in
 [SIGNING.md](SIGNING.md) has no config surface: the schema it used to
-carry lived under the `instinct:` section, which was removed in v0.27.0
+carry lived under the `instinct:` section, which was removed in v0.28.0
 along with the rest of the continuous-learning loop. Nothing read it —
 no NOTICE, no allowlist check, no enforce gate — so it went with the
 section rather than being rehomed to a key that would also do nothing.

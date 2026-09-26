@@ -65,7 +65,7 @@ handlers are wired separately, scoped to the repo the user actually wants
 If the user asks to "make `claude --worktree` work here", point them at
 `bough claude hook install --scope project`.
 
-## Upgrading from v0.26.0 or earlier
+## Upgrading from v0.27.0 or earlier
 
 Those versions also wired six events for a continuous-learning loop that no
 longer exists. They now do nothing, and `bough claude doctor` names any that

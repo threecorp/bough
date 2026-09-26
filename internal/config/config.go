@@ -217,7 +217,7 @@ type SymlinkSpec struct {
 // first-pass decode rejected every v0.5+ `.bough.yaml`. Every other
 // subcommand decoded the file fine through a separate entry point, but
 // `bough config validate` reported a false-negative. Three of those four
-// sections are retired as of v0.27.0 and are held below as opaque
+// sections are retired as of v0.28.0 and are held below as opaque
 // yaml.Node fields — still accepted, warned about once, and NOT copied
 // into Config, which has no field for them.
 type LegacyConfig struct {
@@ -232,13 +232,13 @@ type LegacyConfig struct {
 	MCP           MCPConfig            `yaml:"mcp"`
 
 	// Sections that configured the continuous-learning loop bough
-	// carried until v0.26.0. Decoded as opaque nodes and never read:
+	// carried until v0.27.0. Decoded as opaque nodes and never read:
 	// the decoder is strict, so without a field here a `.bough.yaml`
 	// that merely still carries one of these lines would fail to parse
 	// and take `claude --worktree` down with it. yaml.Node accepts both
 	// shapes that occur (a mapping for three of them, a sequence for
 	// quality_gates), and !IsZero() is what migrateLegacy warns on.
-	// Removed in v0.28.0.
+	// Removed in v0.29.0.
 	RetiredInstinct       yaml.Node `yaml:"instinct"`
 	RetiredMemoryBackends yaml.Node `yaml:"memory_backends"`
 	RetiredExport         yaml.Node `yaml:"export"`
@@ -350,7 +350,7 @@ func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 	} {
 		if !r.node.IsZero() {
 			warnings = append(warnings, fmt.Sprintf(
-				"YAML section '%s:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.27.0; delete the section (the key stops parsing in v0.28.0)", r.key))
+				"YAML section '%s:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)", r.key))
 		}
 	}
 	if lc.SchemaVersion == 1 {

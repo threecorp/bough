@@ -33,7 +33,7 @@ the operator added by mouse stay put; only bough's canonical
 entries get reconciled.
 
 install also prunes the six events bough wired for the
-continuous-learning loop it carried until v0.26.0. Until it is re-run,
+continuous-learning loop it carried until v0.27.0. Until it is re-run,
 those keep firing a no-op shim (see ` + "`bough claude doctor`" + `).`,
 	}
 	cmd.AddCommand(
@@ -224,7 +224,7 @@ func runDoctor(c *cobra.Command) error {
 // `bough hook replay` reuse the same payload format for golden
 // tests without colliding with operator workflows.
 //
-// Since v0.27.0 the only events with a body are WorktreeCreate and
+// Since v0.28.0 the only events with a body are WorktreeCreate and
 // WorktreeRemove. The six events the continuous-learning loop used to
 // drive are accepted and ignored (see hooks.RetiredEvents) so wiring
 // left in an operator's settings.json — or cached inside an
@@ -256,7 +256,7 @@ func newHookHandleCmd() *cobra.Command {
 				// nothing and the notice would otherwise repeat on every
 				// tool call with no way out.
 				fmt.Fprintf(c.ErrOrStderr(),
-					"[bough] hook event %s is retired since v0.27.0 and does nothing; "+
+					"[bough] hook event %s is retired since v0.28.0 and does nothing; "+
 						"run `bough claude hook install` to prune it from settings.json, "+
 						"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
 						"comes from the plugin\n", event)
