@@ -8,42 +8,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ikeikeikeike/bough/internal/config"
-	"github.com/ikeikeikeike/bough/internal/homunculus"
 	"github.com/ikeikeikeike/bough/internal/hooks"
-	"github.com/ikeikeikeike/bough/internal/inject"
-	"github.com/ikeikeikeike/bough/internal/observe"
-	"github.com/ikeikeikeike/bough/internal/qualitygate"
 )
 
 // newHookCmd wires `bough hook install / uninstall / list / replay
-// / doctor`. The v0.7.0 Bootstrap safety floor plan calls for hook
-// auto-wire to ship alongside a replay harness on day one (= round
-// 5 review insistence), so the cobra surface lands in the first
-// v0.7.0 commit even though most subcommands return
-// hooks.ErrNotYetWired until the body work catches up. Surfacing
-// the CLI shape early lets fixture data, docs, and integration
-// scripts develop in parallel rather than block on each other.
+// / doctor / handle`. The replay harness ships alongside install by
+// design (= round 5 review insistence): hook auto-wire without a way
+// to exercise the wiring against a fixture is how regressions reach a
+// live session.
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Manage Claude Code hook handlers bough writes into .claude/settings.json",
 		Long: `bough hook manages the handlers an operator wires into
-Claude Code's .claude/settings.json so bough's observer / bootstrap
-loop fires on session lifecycle events.
+Claude Code's .claude/settings.json so ` + "`claude --worktree`" + ` reaches
+bough: WorktreeCreate builds the isolated environment, WorktreeRemove
+tears it down.
 
 The subcommands keep the JSON round-trip safe — hand-edited entries
 the operator added by mouse stay put; only bough's canonical
 entries get reconciled.
 
-v0.7.0 first commit lands the cobra surface plus the
-internal/hooks/ package skeleton. The Manager bodies (install /
-uninstall / list / replay / doctor) wire in across the rest of the
-v0.7.0 sprint per docs/ROADMAP.md.`,
+install also prunes the six events bough wired for the
+continuous-learning loop it carried until v0.27.0. Until it is re-run,
+those keep firing a no-op shim (see ` + "`bough claude doctor`" + `).`,
 	}
 	cmd.AddCommand(
 		newHookInstallCmd(),
@@ -111,7 +102,9 @@ func newHookListCmd() *cobra.Command {
 				fmt.Fprintf(c.OutOrStdout(), "(no hooks wired in %s)\n", settingsPath)
 				return nil
 			}
-			for _, event := range hooks.AllEvents() {
+			// Retired events are listed too: until install prunes them they
+			// still fire, and a list that hid them would disagree with doctor.
+			for _, event := range append(hooks.AllEvents(), hooks.RetiredEvents()...) {
 				groups, ok := set[event]
 				if !ok {
 					continue
@@ -145,12 +138,12 @@ func newHookReplayCmd() *cobra.Command {
 		Long: `bough hook replay drives a recorded hook-event payload
 through the bough handler so an operator can sanity-check the
 wiring against a fixture file without touching a live Claude Code
-session. v0.7.0 ships canonical fixtures under
-internal/hooks/testdata/ that golden-test the install / handler
+session. Canonical fixtures for both wired events live under
+internal/hooks/testdata/ and golden-test the install / handler
 pair end-to-end.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if event == "" {
-				return fmt.Errorf("--event is required (e.g. --event PreToolUse)")
+				return fmt.Errorf("--event is required (e.g. --event WorktreeCreate)")
 			}
 			if fixture == "" {
 				return fmt.Errorf("--fixture is required (= '-' for stdin, or path to a JSON payload file)")
@@ -180,7 +173,7 @@ pair end-to-end.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&event, "event", "", "hook event name (e.g. PreToolUse, PostToolUse, SessionEnd)")
+	cmd.Flags().StringVar(&event, "event", "", "hook event name (WorktreeCreate | WorktreeRemove)")
 	cmd.Flags().StringVar(&fixture, "fixture", "", "path to a JSON fixture file (or '-' to read from stdin)")
 	return cmd
 }
@@ -188,12 +181,12 @@ pair end-to-end.`,
 func newHookDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Report bough's hook wiring + observer + cost posture in one place",
-		Long: `bough hook doctor is the v0.7.0 transparency surface.
-Round 5 review front-loaded this from v0.7.1 to v0.7.0 because
-silent billing / silent observer / silent Haiku regressions are
-exactly what ECC has historically struggled with and bough should
-visibly avoid. Same body as the top-level "bough doctor" alias.`,
+		Short: "Report bough's hook wiring and engine-plugin posture in one place",
+		Long: `bough hook doctor is the transparency surface: which events are
+wired and by whom, whether any stale wiring from a retired event is
+still in settings.json, whether the worktree containers a host would
+refuse exist, and whether the engine plugins are reachable. Same body
+as the top-level "bough doctor" alias.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			return runDoctor(c)
 		},
@@ -212,11 +205,7 @@ func runDoctor(c *cobra.Command) error {
 		return err
 	}
 	m := hooks.New(settingsPath)
-	// The same resolver the capture path uses, so doctor probes the file
-	// the hook actually writes to (since v0.9.10) rather than the dead
-	// working-tree .bough/observations.jsonl. It is read-only now that
-	// naming a path no longer creates anything, so a diagnostic can share it.
-	report, err := m.Doctor(commandCtx(c), resolveHomunculusObsPath())
+	report, err := m.Doctor(commandCtx(c))
 	if err != nil {
 		return err
 	}
@@ -224,146 +213,77 @@ func runDoctor(c *cobra.Command) error {
 	report.Render(w)
 	renderWorktreeIsolation(commandCtx(c), w)
 	renderEnginePlugins(commandCtx(c), w)
-	renderContinuousLearningPosture(w)
+	renderRetiredConfig(c, w)
 	return nil
 }
 
-// newHookHandleCmd wires `bough hook handle`, the v0.7.0 O-1.6
-// raw-event capture dispatcher. Claude Code invokes this command
-// (one per registered hook entry, per the install layout) with
-// the event name on the --event flag and the JSON payload on
-// stdin; the dispatcher appends one JSONL record to the central
-// homunculus observations.jsonl and exits cleanly.
+// newHookHandleCmd wires `bough hook handle`, the dispatcher Claude
+// Code invokes for every wired hook entry: the event name on the
+// --event flag, the JSON payload on stdin.
 //
 // Hidden from the human surface because Claude Code is the only
 // expected caller — wrapping it in a `bough hook` namespace lets
 // `bough hook replay` reuse the same payload format for golden
 // tests without colliding with operator workflows.
 //
-// The dispatcher intentionally does no parsing of the payload
-// beyond decoding it once to validate the bytes are valid JSON;
-// the observer + Bootstrap Agent (= v0.7.1) own the semantic
-// analysis of what each event means. Keeping the dispatcher
-// dumb means a Claude Code spec drift adds a new field without
-// breaking the bough side until the analysis layer is ready to
-// consume it.
+// Since v0.28.0 the only events with a body are WorktreeCreate and
+// WorktreeRemove. The six events the continuous-learning loop used to
+// drive are accepted and ignored (see hooks.RetiredEvents) so wiring
+// left in an operator's settings.json — or cached inside an
+// already-installed bough-hooks plugin — keeps exiting 0 until they
+// re-run `bough claude hook install`. An event that is neither wired
+// nor retired is an error: a typo'd --event used to exit 0 with empty
+// stdout, which a host reports as "hook succeeded but returned no
+// worktree path" with nothing naming the cause.
 func newHookHandleCmd() *cobra.Command {
-	var (
-		event   string
-		outPath string
-	)
+	var event string
 	cmd := &cobra.Command{
 		Use:    "handle",
 		Hidden: true,
-		Short:  "Receive a Claude Code hook event payload via stdin and append to the central homunculus observations.jsonl",
+		Short:  "Receive a Claude Code hook event payload via stdin and run the matching worktree action",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if event == "" {
-				return fmt.Errorf("--event is required (= called by Claude Code's settings.json wiring; see `bough hook install`)")
+				return fmt.Errorf("--event is required (= called by Claude Code's settings.json wiring; see `bough claude hook install`)")
 			}
-			// A session bough itself spawned (`claude --print` for the
-			// observer mint / gate judge / CLAUDE.md proposal) inherits
-			// this marker, and its events are bough talking to itself —
-			// recording them poisons the corpus: the judge prompt's own
-			// correction vocabulary ("a wrong \"true\" ...") was captured
-			// as an operator prompt and demoted every exercised instinct,
-			// session after session.
-			//
-			// It suppresses the LEARNING side only — capture, gates,
-			// injection, session-end evaluation. The worktree verbs below
-			// are the host's create/remove contract and must keep working:
-			// returning early for those would make `claude --worktree`
-			// hand back nothing, and the session would run unisolated with
-			// no error at all — the exact failure v0.22.0 exists to stop.
-			selfInvoked := os.Getenv(observe.SelfInvocationEnv) != ""
+			// Answered before reading stdin or touching the config: a
+			// stale plugin sends six of these per tool call, and they must
+			// cost nothing. stderr, never stdout — UserPromptSubmit stdout
+			// is folded into the model's next turn, so a notice written
+			// there would be read as context every single turn.
+			if hooks.IsRetired(event) {
+				// Both remediations are named because `hook install` only
+				// edits settings.json. When the stale wiring comes from a
+				// cached bough-hooks / bough-all plugin manifest — the other
+				// half of the case this shim exists for — install changes
+				// nothing and the notice would otherwise repeat on every
+				// tool call with no way out.
+				fmt.Fprintf(c.ErrOrStderr(),
+					"[bough] hook event %s is retired since v0.28.0 and does nothing; "+
+						"run `bough claude hook install` to prune it from settings.json, "+
+						"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
+						"comes from the plugin\n", event)
+				return nil
+			}
+			if !hooks.IsWired(event) {
+				return fmt.Errorf("unknown hook event %q (wired: %s)", event, hooks.WiredEventNames())
+			}
 			payload, err := io.ReadAll(c.InOrStdin())
 			if err != nil {
 				return fmt.Errorf("read stdin: %w", err)
 			}
-			// Validate the payload is JSON so a malformed Claude
-			// Code event surfaces as a hook failure instead of
-			// silently appending garbage to the log. We hold the
-			// raw bytes through so downstream tooling can decode
-			// fields bough does not yet know about.
+			// Validate the payload is JSON so a malformed Claude Code
+			// event surfaces as a hook failure instead of being acted on
+			// half-decoded. The raw bytes are held through so the
+			// dispatchers can read fields bough does not yet model.
 			if len(payload) > 0 {
 				var probe map[string]any
 				if err := json.Unmarshal(payload, &probe); err != nil {
 					return fmt.Errorf("payload is not valid JSON: %w", err)
 				}
 			}
-			// ECC model (v0.9.10): observations live in the central
-			// homunculus (~/.local/share/bough-homunculus/projects/<id>/),
-			// NEVER in the repo working tree, and every sub-repo / worktree
-			// session pools into the one monorepo project — mirroring
-			// threecorp's observe-wrapper.sh, which rewrites the hook cwd to
-			// the monorepo root. An explicit --out still wins (replay /
-			// conformance). Capture is best-effort: a write failure must
-			// never fail the operator's tool call.
-			if outPath == "" {
-				outPath = resolveHomunculusObsPath()
-			}
-			if selfInvoked {
-				outPath = "" // record nothing from bough's own subprocess
-			}
-			if outPath != "" {
-				rotateIfLarge(outPath)
-				// #7: sanitize only the persisted copy — redact secrets +
-				// bound per-field length. The raw `payload` below still
-				// feeds quality-gate matching with the real command.
-				record := struct {
-					TS      string          `json:"ts"`
-					Event   string          `json:"event"`
-					Payload json.RawMessage `json:"payload"`
-				}{
-					TS:      time.Now().UTC().Format(time.RFC3339Nano),
-					Event:   event,
-					Payload: json.RawMessage(sanitizeObservation(payload)),
-				}
-				if len(record.Payload) == 0 {
-					record.Payload = json.RawMessage(`null`)
-				}
-				if line, merr := json.Marshal(record); merr == nil {
-					if mkerr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkerr == nil {
-						if f, oerr := os.OpenFile(outPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); oerr == nil {
-							_, _ = f.Write(append(line, '\n'))
-							_ = f.Close()
-						}
-					}
-				}
-			}
-			// v0.7.2 wires quality-gate dispatch onto the
-			// observation path: if .bough.yaml declares any gates
-			// that match (event, tool, file_path, repo) we run them
-			// here and surface pass/fail to stderr so Claude Code's
-			// next turn can see it. The runner ships its own
-			// per-gate TimeoutSeconds cap (= default 60s) so a
-			// hanging gate cannot block the hook.
-			if !selfInvoked {
-				dispatchQualityGates(c, event, payload)
-			}
-
-			// v0.9.2: UserPromptSubmit also injects the confidence-
-			// ranked instinct block to stdout so Claude Code folds
-			// it into the next turn's context. The single
-			// `bough hook handle --event UserPromptSubmit` wiring
-			// therefore both records the observation AND injects —
-			// no separate hook entry needed. Pure filesystem; no
-			// claude --print call on the prompt-submit hot path.
-			// v0.9.11: the single `hook handle` wiring fans out to the
-			// per-event ECC actions internally (rather than wiring N
-			// separate scripts in settings.json): UserPromptSubmit
-			// injects the instinct block, SessionEnd evaluates instinct
-			// confidence, PreCompact preserves the top instincts to
-			// stdout + MEMORY.md. All pure filesystem; LLM extraction
-			// stays opt-in via the observer daemon.
-			// The worktree verbs are the HOST's create/remove contract, not
-			// part of the learning loop, so they run whatever the session
-			// is. Dispatching them first also keeps the self-invocation
-			// guard below from ever reaching them: an early return there
-			// would make `claude --worktree` hand back no path and the
-			// session would run unisolated with no error.
 			switch event {
 			case string(hooks.EventWorktreeCreate):
-				// The unified wiring `bough hook install` writes routes
+				// The wiring `bough claude hook install` writes routes
 				// WorktreeCreate here; run the create pipeline and emit the
 				// worktree path to stdout (the hook contract Claude Code
 				// reads to cd into the new tree). Returning the error makes a
@@ -372,52 +292,22 @@ func newHookHandleCmd() *cobra.Command {
 			case string(hooks.EventWorktreeRemove):
 				return dispatchWorktreeRemove(c, payload)
 			}
-			// Everything below is the learning loop, and a session bough
-			// itself spawned must not drive it: injecting into bough's own
-			// judge prompt, or evaluating that session at the end, feeds the
-			// loop its own text.
-			if selfInvoked {
-				return nil
-			}
-			switch event {
-			case string(hooks.EventPostToolUse):
-				// A skill load arrives here as an ordinary tool use. It is
-				// the only signal that the PULL delivery path fired, and the
-				// completion gate is built on it.
-				dispatchSkillPull(c, payload)
-			case string(hooks.EventUserPromptSubmit):
-				dispatchInjectContext(c, extractPrompt(payload), extractTranscriptPath(payload))
-				dispatchObserverAutostart(c)
-			case string(hooks.EventSessionEnd):
-				_ = runSessionEnd(c.OutOrStdout(), "", extractSessionID(payload), sessionEndDefaultWindow)
-				dispatchEvolveClaudeMD(c)
-			case string(hooks.EventPreCompact):
-				_ = runPreserveInstincts(c.OutOrStdout(), "")
-			}
-			return nil
+			// Unreachable while IsWired and this switch agree; a new event
+			// added to one and not the other lands here rather than exiting
+			// 0 with nothing done.
+			return fmt.Errorf("hook event %q is wired but has no handler", event)
 		},
 	}
-	cmd.Flags().StringVar(&event, "event", "", "Claude Code hook event name (e.g. PreToolUse)")
-	cmd.Flags().StringVar(&outPath, "out", "", "observation log path (default: the resolved monorepo project's homunculus observations.jsonl)")
+	cmd.Flags().StringVar(&event, "event", "", "Claude Code hook event name (e.g. WorktreeCreate)")
 	return cmd
 }
 
-// resolveHomunculusObsPath returns the central homunculus observations
-// file for the current monorepo project, or "" if no project identity
-// can be resolved — in which case capture is silently skipped rather
-// than polluting the working tree. This is the ECC model: observations
-// never touch the repo working tree (cf. observe.sh writing to
-// PROJECT_DIR under ~/.local/share, never the repo).
-func resolveHomunculusObsPath() string {
-	return resolveHomunculusFile(homunculus.Layout.ObservationsFile)
-}
-
-// resolveMonorepoRoot mirrors threecorp's detect-project-wrapper.sh so
-// every sub-repo / worktree session pools into the one monorepo project:
-// a session inside a worktree resolves to the monorepo parent (the path
-// before the worktrees/ segment); otherwise it walks up to the nearest
-// ancestor holding the monorepo marker (.bough.yaml); else it falls back
-// to cwd.
+// resolveMonorepoRoot answers "which directory is the monorepo root
+// for this cwd?" — the anchor every worktree verb keys on. A session
+// inside a worktree resolves to the monorepo parent (the path before
+// the worktrees/ segment); otherwise it walks up to the nearest
+// ancestor holding the monorepo marker (.bough.yaml); else it falls
+// back to cwd.
 func resolveMonorepoRoot(cwd string) string {
 	// Prefer the prefix before the worktrees segment — but only when it
 	// actually holds the .bough.yaml marker, so a path that legitimately
@@ -453,333 +343,8 @@ func hasMonorepoMarker(dir string) bool {
 	return err == nil
 }
 
-// maxObsBytes bounds the live observations file before it is archived,
-// matching ECC observe.sh's 10 MiB threshold.
-const maxObsBytes = 10 << 20
-
-// rotateIfLarge archives the observations file when it exceeds
-// maxObsBytes (ECC observe.sh:236-243): the live file the observer
-// tails stays bounded, and older observations move to
-// observations.archive/ rather than growing one file without limit.
-// Best-effort — any error just means the file keeps growing a little.
-func rotateIfLarge(obsPath string) {
-	fi, err := os.Stat(obsPath)
-	if err != nil || fi.Size() < maxObsBytes {
-		return
-	}
-	archiveDir := filepath.Join(filepath.Dir(obsPath), "observations.archive")
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-		return
-	}
-	dst := filepath.Join(archiveDir, fmt.Sprintf("observations-%d.jsonl", time.Now().UTC().UnixNano()))
-	_ = os.Rename(obsPath, dst)
-}
-
-// dispatchInjectContext prints the confidence-ranked instinct block
-// to the hook's stdout for the UserPromptSubmit event. Resolution +
-// selection errors are swallowed (= a non-git directory or empty
-// corpus must not break the operator's prompt); the block is only
-// emitted when there is something worth injecting.
-func dispatchInjectContext(c *cobra.Command, prompt, transcript string) {
-	// runInjectContext (internal/cli/inject.go) is shared with `bough
-	// inject-context`'s RunE so the hook path and the manual preview
-	// command cannot silently diverge.
-	//
-	// The prompt is what makes the selection a RANKING rather than an
-	// arbitrary order: it is the only relevance signal available, and
-	// before it was plumbed through, selection ignored what the operator
-	// had actually asked about.
-	//
-	// The transcript adds what the prompt usually leaves out: "why is this
-	// failing?" names no subsystem, while the files the session just opened
-	// name it exactly.
-	_ = runInjectContext(c, c.OutOrStdout(), "", inject.Options{
-		Prompt:         prompt,
-		TranscriptPath: transcript,
-	})
-}
-
-// extractTranscriptPath pulls the session transcript's path out of a hook
-// payload. Same contract as extractPrompt: a payload that does not parse
-// is not an error for a hook, it just means one less retrieval signal.
-func extractTranscriptPath(payload []byte) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	var probe struct {
-		TranscriptPath string `json:"transcript_path"`
-	}
-	if err := json.Unmarshal(payload, &probe); err != nil {
-		return ""
-	}
-	return probe.TranscriptPath
-}
-
-// extractPrompt pulls the user's submitted text out of a
-// UserPromptSubmit payload. Mirrors extractSessionID: a payload that
-// does not parse is not an error for a hook — it just means no prompt
-// signal, and selection falls back to the confidence order.
-func extractPrompt(payload []byte) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	var probe struct {
-		Prompt string `json:"prompt"`
-	}
-	if err := json.Unmarshal(payload, &probe); err != nil {
-		return ""
-	}
-	return probe.Prompt
-}
-
-// dispatchEvolveClaudeMD runs the CLAUDE.md proposer in write mode on
-// SessionEnd, but ONLY when the monorepo's .bough.yaml sets
-// instinct.evolve_claudemd_on_session_end: true. This is the single hook
-// action that writes into the repo working tree
-// (<monorepoRoot>/.claude/claudemd-proposals.md), so it is opt-in: every
-// other bough hook action writes only to the homunculus, and that
-// no-contamination default is preserved unless the operator turns it on
-// (= threecorp ECC's automatic evolve-claudemd.sh, made explicit). The
-// config is read from the resolved monorepo root so a sub-repo / worktree
-// session still finds it. Best-effort + pure filesystem: missing config /
-// flag off / resolution errors are silently skipped so SessionEnd never
-// fails the operator's session.
-func dispatchEvolveClaudeMD(c *cobra.Command) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return
-	}
-	root := resolveMonorepoRoot(cwd)
-	cfgPath := filepath.Join(root, ".bough.yaml")
-	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
-		cfgPath = v
-	}
-	cfg, err := loadConfigQuiet(cfgPath)
-	if err != nil || !cfg.Instinct.EvolveClaudeMDOnSessionEnd {
-		return
-	}
-	_ = runEvolveClaudeMD(c.OutOrStdout(), root, "", true, time.Now())
-}
-
-// resolveObserverConfig loads .bough.yaml for the monorepo resolved from
-// the current working directory via the same resolveConfigPath every
-// other bough command uses (--config flag, then .bough.yaml, then the
-// legacy .worktree-isolation.yaml fallback) — instead of an independent
-// ad hoc path computation. Shared by dispatchObserverAutostart and
-// doctor's autostart-posture line so both agree on which config file
-// answers "is autostart on"; a resolution mismatch between what the hook
-// actually does and what doctor reports would otherwise be easy to
-// reintroduce by hand in either place.
-func resolveObserverConfig(c *cobra.Command) (cfg *config.Config, root string, err error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, "", err
-	}
-	root = resolveMonorepoRoot(cwd)
-	cfg, err = loadConfigQuiet(resolveConfigPath(c, root))
-	return cfg, root, err
-}
-
-// dispatchObserverAutostart ensures the continuous-learning observer
-// daemon is running when the monorepo's .bough.yaml sets
-// instinct.observer.autostart: true. It is wired on UserPromptSubmit
-// (once per turn, not per tool call) so the check is cheap and the daemon
-// starts early in the session. Best-effort + SILENT ON STDOUT:
-// UserPromptSubmit's stdout carries the injected instinct block, so this
-// must never print there — a spawn failure is instead logged to the
-// observer's own log file (the same place `bough observer status` /
-// `doctor` already point operators to) so it stays diagnosable instead of
-// vanishing without a trace. Gate off / config missing / already running
-// are silent no-ops; the started daemon detaches its own stdio, and
-// `bough doctor` surfaces its posture — minting itself is never silent,
-// and it stays subject to the self-DoS limiter.
-func dispatchObserverAutostart(c *cobra.Command) {
-	cfg, root, err := resolveObserverConfig(c)
-	if err != nil || !cfg.Instinct.Observer.Autostart {
-		return
-	}
-	_, _, logPath, err := startObserverDaemon(root, observerAutostartInterval(cfg))
-	if err == nil {
-		return
-	}
-	// startObserverDaemon returns "" for logPath when it fails before a
-	// project-scoped log path can even be computed (resolveObserverProject
-	// / EnsureProjectDirs erroring — e.g. a permission problem creating
-	// the homunculus project dir, plausible on a fresh opt-in machine).
-	// The doc comment above promises a spawn failure "stays diagnosable
-	// instead of vanishing without a trace", but gating the log write on
-	// logPath != "" silently drops exactly these two earliest failure
-	// modes with zero trace anywhere — the opposite of that promise, and
-	// on every UserPromptSubmit the operator would have no way to learn
-	// autostart is failing short of reading Go source. Fall back to a
-	// project-independent log next to the homunculus root so the failure
-	// is recorded even when the project-scoped path was never resolved.
-	if logPath == "" {
-		logPath = filepath.Join(homunculus.NewLayout().Root, "observer-autostart-errors.log")
-		_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	}
-	appendDaemonLog(logPath, fmt.Sprintf("autostart: %v", err))
-}
-
-// observerAutostartInterval is the autostart daemon's minting cadence:
-// the operator's instinct.observer.interval_sec, or the daemon's own
-// default when it is unset or below its 60s floor.
-func observerAutostartInterval(cfg *config.Config) int {
-	if iv := cfg.Instinct.Observer.IntervalSec; iv >= 60 {
-		return iv
-	}
-	return defaultObserverIntervalSec
-}
-
-// dispatchQualityGates loads .bough.yaml's quality_gates: section
-// (when present) and runs the entries whose matchers fit the
-// current event. Configuration absence is a hard non-error: a
-// monorepo with no gates declared sees no behaviour change.
-//
-// v0.7.2 originally resolved cfgPath as a bare cwd-relative
-// ".bough.yaml" (or $BOUGH_CONFIG), which only found the canonical
-// config when `bough hook handle` happened to run with cwd exactly at
-// the monorepo root. Per this file's own documented ECC model, every
-// sub-repo / worktree session pools into one monorepo project — so a
-// session operating inside e.g. <root>/extremo-api/ (the ordinary
-// case) silently never found <root>/.bough.yaml and no gate ever ran.
-// This is the same class of bug already fixed for
-// dispatchObserverAutostart (see resolveObserverConfig /
-// TestResolveObserverConfig_LegacyConfigFallback) but never applied to
-// this sibling dispatcher. Now resolves through resolveMonorepoRoot +
-// resolveConfigPath (the canonical/legacy/--config fallback every
-// other bough command uses), with $BOUGH_CONFIG kept as the
-// highest-priority override.
-func dispatchQualityGates(c *cobra.Command, event string, payload []byte) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return
-	}
-	root := resolveMonorepoRoot(cwd)
-	cfgPath := resolveConfigPath(c, root)
-	if v := os.Getenv("BOUGH_CONFIG"); v != "" {
-		cfgPath = v
-	}
-	cfg, err := loadConfigQuiet(cfgPath)
-	if err != nil || len(cfg.QualityGates) == 0 {
-		return
-	}
-	mc := buildMatchContext(event, payload, repoNameFromCwd(cwd, root))
-	gates := convertGates(cfg.QualityGates)
-	_ = qualitygate.RunMatching(commandCtx(c), gates, mc, c.ErrOrStderr())
-}
-
-// repoNameFromCwd derives the qualitygate on_repo matcher value: the
-// sub-repo directory name (config.Repository.Name) that cwd sits
-// inside, relative to the resolved monorepo root. Mirrors
-// resolveMonorepoRoot's worktree-segment handling — inside
-// <root>/worktrees/<branch>/<repo>/... (or the legacy hidden
-// .worktrees/), the repo is the segment AFTER the worktree name;
-// otherwise it is the first segment directly under root. Returns ""
-// when cwd does not resolve to any sub-repo (e.g. cwd == root, or cwd
-// sits outside root), so an on_repo matcher wildcards rather than
-// false-matching on garbage.
-func repoNameFromCwd(cwd, root string) string {
-	rel, err := filepath.Rel(root, cwd)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return ""
-	}
-	segs := strings.Split(filepath.ToSlash(rel), "/")
-	if segs[0] == worktreesName || segs[0] == legacyWtName {
-		if len(segs) < 3 {
-			return ""
-		}
-		return segs[2]
-	}
-	return segs[0]
-}
-
-// buildMatchContext projects the Claude Code hook payload into a
-// qualitygate.MatchContext. The payload shape varies by event;
-// PreToolUse / PostToolUse carry tool_name + tool_input. Missing
-// fields fall through as the empty string so an unmatcher matcher
-// still wildcards correctly. repo is the sub-repo directory name
-// derived from cwd (repoNameFromCwd) — left unset, every gate's
-// on_repo matcher (config.QualityGateCfg.OnRepo /
-// qualitygate.Gate.OnRepo) compared against an always-empty Repo
-// field and could never match, silently disabling any gate an
-// operator scoped to one sub-repo.
-func buildMatchContext(event string, payload []byte, repo string) qualitygate.MatchContext {
-	mc := qualitygate.MatchContext{Event: event, Repo: repo}
-	if len(payload) == 0 {
-		return mc
-	}
-	var probe struct {
-		ToolName  string          `json:"tool_name"`
-		ToolInput json.RawMessage `json:"tool_input"`
-	}
-	if err := json.Unmarshal(payload, &probe); err != nil {
-		return mc
-	}
-	mc.Tool = probe.ToolName
-	if len(probe.ToolInput) == 0 {
-		return mc
-	}
-	var ti struct {
-		FilePath string `json:"file_path"`
-		Path     string `json:"path"`
-		Command  string `json:"command"`
-	}
-	_ = json.Unmarshal(probe.ToolInput, &ti)
-	mc.FilePath = ti.FilePath
-	if mc.FilePath == "" {
-		mc.FilePath = ti.Path
-	}
-	mc.Command = ti.Command
-	return mc
-}
-
-// extractSessionID pulls the top-level session_id field out of a raw
-// Claude Code hook payload, mirroring buildMatchContext's probe-decode
-// pattern. Returns "" on any decode failure or a payload that omits
-// the field; runSessionEnd already treats "" as an acceptable (if
-// unidentifiable) session id.
-func extractSessionID(payload []byte) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	var probe struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(payload, &probe); err != nil {
-		return ""
-	}
-	return probe.SessionID
-}
-
-func convertGates(cfgs []config.QualityGateCfg) []qualitygate.Gate {
-	out := make([]qualitygate.Gate, 0, len(cfgs))
-	for _, g := range cfgs {
-		out = append(out, qualitygate.Gate{
-			Name:           g.Name,
-			Command:        g.Command,
-			OnEvent:        g.OnEvent,
-			OnTool:         g.OnTool,
-			OnMatch:        g.OnMatch,
-			OnRepo:         g.OnRepo,
-			TimeoutSeconds: g.TimeoutSeconds,
-		})
-	}
-	return out
-}
-
-// loadConfigQuiet reads .bough.yaml without raising config drift
-// warnings to stderr (= hook handle stderr is reserved for the
-// quality-gate run summary; config noise would break the
-// dispatcher's pass/fail signal).
-func loadConfigQuiet(path string) (*config.Config, error) {
-	return config.Load(path)
-}
-
 // HookScope picks which Claude Code settings.json the hook
-// subcommands target. v0.8 (= P6) adds the global scope so an
-// operator can wire bough's observer once at the user level rather
-// than per-monorepo.
+// subcommands target: the project's or the user's.
 type HookScope string
 
 const (

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,33 +108,6 @@ func TestLoad_RejectsReservedName(t *testing.T) {
 	y := "schema_version: 2\nmonorepo_root: \".\"\nrepositories:\n  - name: 'my-worktrees-tool'\n    branch_strategy: develop\nregistry:\n  path: \".bough/ports.json\"\n"
 	if _, err := LoadFromBytes([]byte(y), "t.yaml"); err != nil {
 		t.Errorf("name 'my-worktrees-tool' must be accepted: %v", err)
-	}
-}
-
-// TestLoad_EvolveClaudeMDOnSessionEnd covers the v0.9.14 opt-in flag:
-// it must default to false when absent (= bough's no-repo-contamination
-// default) and parse true when set under instinct:.
-func TestLoad_EvolveClaudeMDOnSessionEnd(t *testing.T) {
-	base, err := os.ReadFile(filepath.Join("testdata", "example.yaml"))
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	// default: field absent → false
-	cfg, err := LoadFromBytes(base, "example.yaml")
-	if err != nil {
-		t.Fatalf("load base: %v", err)
-	}
-	if cfg.Instinct.EvolveClaudeMDOnSessionEnd {
-		t.Errorf("default should be false when the field is absent")
-	}
-	// opt-in: field true → true
-	withFlag := string(base) + "\ninstinct:\n  enabled: true\n  evolve_claudemd_on_session_end: true\n"
-	cfg2, err := LoadFromBytes([]byte(withFlag), "example+flag.yaml")
-	if err != nil {
-		t.Fatalf("load with flag: %v", err)
-	}
-	if !cfg2.Instinct.EvolveClaudeMDOnSessionEnd {
-		t.Errorf("evolve_claudemd_on_session_end: true did not parse into the struct")
 	}
 }
 
@@ -579,125 +553,116 @@ registry: {path: .worktree-ports.json}
 	}
 }
 
-// TestLoad_acceptsV05Sections pins the LegacyConfig superset against
-// the v0.5+ root sections (`instinct`, `engines`, `memory_backends`,
-// `export`). Post-ship dogfooding on 2026-06-22 surfaced that the
-// strict first-pass decode of `bough config validate` was rejecting
-// v0.5+ YAML with `unknown field` while every other subcommand loaded
-// the file cleanly through a separate entry point — LegacyConfig had
-// been frozen at the v0.3+v0.4 superset and the v0.5 schema bump did
-// not mirror the new sections in. Regression backstop: a YAML that
-// uses all four v0.5+ sections must parse, migrate, and validate
-// without complaint.
-func TestLoad_acceptsV05Sections(t *testing.T) {
-	yaml := `schema_version: 2
+// TestLoad_retiredSectionsToleratedWithWarning is the compatibility
+// contract for the v0.28.x line. A `.bough.yaml` still carrying any of
+// the four sections that configured the removed continuous-learning
+// loop must keep loading: the decoder is strict, so a rejected key here
+// would take `claude --worktree` down for anyone who has not yet edited
+// their config. Each present section earns exactly one warning naming
+// it, which is the only way an operator learns to delete the lines.
+func TestLoad_retiredSectionsToleratedWithWarning(t *testing.T) {
+	base := `schema_version: 2
 monorepo_root: "."
 repositories:
   - name: demo
     branch_strategy: develop
-engines: []
 registry:
   path: .bough-ports.json
-instinct:
-  enabled: true
-  default_memory_backend: sqlite
-  fallback_on_error: false
-  retrieve:
-    max_results: 12
-    max_tokens: 4000
-    min_confidence: 0.4
-  mint:
-    mode: hybrid
-    require_approval: true
-    redaction:
-      enabled: true
-  plugin_security:
-    require_signed: false
-    accepted_signature_schemes:
-      - cosign
-      - minisign
-memory_backends:
-  - kind: sqlite
-    role: reference-fallback
-    path: .bough/memory/instincts.db
-    fts: true
-    wal: true
-    busy_timeout_ms: 5000
-export:
-  formats: [agent-skill]
-  output_dir: ./skills
 `
-	c, err := LoadFromBytes([]byte(yaml), "test-v05-sections")
-	if err != nil {
-		t.Fatalf("LoadFromBytes(v0.5+ sections): %v", err)
-	}
-	if !c.Instinct.Enabled {
-		t.Errorf("Instinct.Enabled: want true")
-	}
-	if got, want := c.Instinct.DefaultMemoryBackend, "sqlite"; got != want {
-		t.Errorf("Instinct.DefaultMemoryBackend: got %q want %q", got, want)
-	}
-	if got, want := c.Instinct.Retrieve.MaxResults, 12; got != want {
-		t.Errorf("Instinct.Retrieve.MaxResults: got %d want %d", got, want)
-	}
-	if got, want := c.Instinct.Mint.Mode, "hybrid"; got != want {
-		t.Errorf("Instinct.Mint.Mode: got %q want %q", got, want)
-	}
-	if got, want := len(c.Instinct.PluginSecurity.AcceptedSignatureSchemes), 2; got != want {
-		t.Errorf("Instinct.PluginSecurity.AcceptedSignatureSchemes: got %d want %d", got, want)
-	}
-	if got, want := len(c.MemoryBackends), 1; got != want {
-		t.Fatalf("MemoryBackends: got %d want %d", got, want)
-	}
-	if got, want := c.MemoryBackends[0].Kind, "sqlite"; got != want {
-		t.Errorf("MemoryBackends[0].Kind: got %q want %q", got, want)
-	}
-	if got, want := c.MemoryBackends[0].Role, "reference-fallback"; got != want {
-		t.Errorf("MemoryBackends[0].Role: got %q want %q", got, want)
-	}
-	if got, want := len(c.Export.Formats), 1; got != want {
-		t.Errorf("Export.Formats: got %d want %d", got, want)
-	}
-	if got, want := c.Export.OutputDir, "./skills"; got != want {
-		t.Errorf("Export.OutputDir: got %q want %q", got, want)
+	for _, tc := range []struct {
+		name    string
+		section string
+		key     string
+	}{
+		{"instinct", "instinct:\n  enabled: true\n  observer:\n    autostart: true\n", "instinct"},
+		{"memory_backends", "memory_backends:\n  - kind: sqlite\n    role: reference-fallback\n", "memory_backends"},
+		{"export", "export:\n  enabled: true\n", "export"},
+		{"quality_gates", "quality_gates:\n  - name: lint\n    command: \"golangci-lint run\"\n", "quality_gates"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, warnings, err := loadForTest(t, base+tc.section)
+			if err != nil {
+				t.Fatalf("a retired %q section must not fail the load: %v", tc.key, err)
+			}
+			if c == nil {
+				t.Fatal("no config returned")
+			}
+			var found int
+			for _, w := range warnings {
+				if strings.Contains(w, "'"+tc.key+":'") && strings.Contains(w, "retired") {
+					found++
+				}
+			}
+			if found != 1 {
+				t.Errorf("warnings naming %q: got %d want 1\nall warnings: %v", tc.key, found, warnings)
+			}
+		})
 	}
 }
 
-// TestLoad_acceptsQualityGates pins the v0.7.1 quality_gates root
-// section so the LegacyConfig superset migration carries each gate
-// declaration through to the canonical Config. The Gate runner
-// (internal/qualitygate) reads from c.QualityGates, so this guard
-// is what makes `bough config validate` accept the new section.
-func TestLoad_acceptsQualityGates(t *testing.T) {
-	yaml := `schema_version: 2
+// TestLoad_noRetiredSectionNoWarning is the other half: a config that
+// carries none of them says nothing. Without this, a warning emitted
+// unconditionally would still pass the test above.
+func TestLoad_noRetiredSectionNoWarning(t *testing.T) {
+	_, warnings, err := loadForTest(t, `schema_version: 2
 monorepo_root: "."
 repositories:
   - name: demo
     branch_strategy: develop
 registry:
   path: .bough-ports.json
-quality_gates:
-  - name: typecheck
-    command: "nix develop -c make test-short"
-    on_event: PostToolUse
-    on_tool: Edit
-    on_match: ".*\\.go$"
-    timeout_seconds: 120
-  - name: lint
-    command: "golangci-lint run --new-from-rev=HEAD~1"
-    on_event: PostToolUse
-`
-	c, err := LoadFromBytes([]byte(yaml), "test-v071-quality-gates")
+`)
 	if err != nil {
-		t.Fatalf("LoadFromBytes(quality_gates): %v", err)
+		t.Fatalf("LoadFromBytes: %v", err)
 	}
-	if got, want := len(c.QualityGates), 2; got != want {
-		t.Fatalf("QualityGates length: got %d want %d", got, want)
+	for _, w := range warnings {
+		if strings.Contains(w, "retired") {
+			t.Errorf("clean config warned about a retired section: %q", w)
+		}
 	}
-	if got, want := c.QualityGates[0].Name, "typecheck"; got != want {
-		t.Errorf("QualityGates[0].Name: got %q want %q", got, want)
+}
+
+// TestLoad_unknownKeyStillRejected proves tolerating the four retired
+// keys did not turn the strict decode into a permissive one. A typo is
+// still an error — that is what makes the decoder worth having.
+func TestLoad_unknownKeyStillRejected(t *testing.T) {
+	_, _, err := loadForTest(t, `schema_version: 2
+monorepo_root: "."
+repositries:
+  - name: demo
+registry:
+  path: .bough-ports.json
+`)
+	if err == nil {
+		t.Fatal("a misspelled top-level key must still fail the load")
 	}
-	if got, want := c.QualityGates[0].TimeoutSeconds, 120; got != want {
-		t.Errorf("QualityGates[0].TimeoutSeconds: got %d want %d", got, want)
+	if !strings.Contains(err.Error(), "repositries") {
+		t.Errorf("the error should name the unknown key, got: %v", err)
 	}
+}
+
+// loadForTest runs LoadFromBytes and captures the warnings it prints to
+// stderr. The warnings are a user-visible surface with no return value,
+// so capturing the stream is the only way to assert on them.
+func loadForTest(t *testing.T, yaml string) (*Config, []string, error) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	c, loadErr := LoadFromBytes([]byte(yaml), "test-retired-sections")
+	os.Stderr = orig
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+
+	var warnings []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			warnings = append(warnings, line)
+		}
+	}
+	return c, warnings, loadErr
 }

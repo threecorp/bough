@@ -1,0 +1,4 @@
+{
+  "hook_event_name": "WorktreeRemove",
+  "worktree_path": "/tmp/bough-replay-fixture/worktrees/F-Example"
+}

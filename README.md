@@ -27,46 +27,9 @@ via a single YAML at the monorepo root. Engines are loaded as gRPC
 plugins, so adding a new engine (rabbitmq, kafka, nats, minio, …) never
 requires editing the host binary.
 
-## Cost & billing
-
-**As of 2026-06-27, with Claude Code's current subscription model, bough
-runs entirely inside your existing Claude Code subscription — it makes no
-separate Anthropic API call and incurs no separate API billing.** How
-that holds up:
-
-- **The worktree-isolation core** (`bough create`, the engine plugins,
-  `.env.local` rendering) makes **zero** LLM calls — it is pure local
-  infrastructure (git, ports, Docker).
-- **The continuous-learning feature** (observe → evolve → inject) reaches
-  an LLM **only** by spawning `claude --print` as a subprocess, which
-  reuses your operator subscription auth (`~/.claude.json` oauth token).
-  bough strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` /
-  `ANTHROPIC_BASE_URL` / Bedrock / Vertex / `CLAUDE_API_KEY` from the
-  subprocess env, so it cannot silently flip to API-key billing. There is
-  no Anthropic SDK, and no HTTP client to any model endpoint, anywhere in
-  the binary.
-- **The hooks Claude Code fires automatically** — `PreToolUse`,
-  `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreCompact` —
-  are **pure filesystem**: they append an observation line and (for
-  `UserPromptSubmit`) print a small instinct block to stdout. They make
-  **no** LLM call. The `UserPromptSubmit` block is folded into your next
-  turn as ordinary input tokens of your own session — the same as any
-  context — not a separate charge.
-- **LLM calls happen only in the explicit commands** `bough instinct observer
-  run-once` and `bough instinct evolve --generate` (and the opt-in `bough instinct observer
-  start` daemon) — each one `claude --print` under your subscription, hard
-  rate-limited (10 / session, 30 / hour, 3-failure circuit breaker).
-
-Run `bough claude doctor` to confirm the posture (it warns if an
-`ANTHROPIC_API_KEY`-style variable in your shell would override
-subscription auth).
-
-> ⚠️ This reflects Claude Code's billing model **as of 2026-06-27**. bough
-> relies on `claude --print` subprocess invocations being covered by the
-> Claude Code subscription. If Anthropic changes how Claude Code meters
-> `--print` / subscription usage, this could change — that is outside
-> bough's control, so verify against current Claude Code pricing if it
-> matters to you.
+bough makes no LLM call and has no AI feature. It is git worktrees,
+ports, containers, and rendered `.env.local` files — nothing it does
+costs anything beyond the machine it runs on.
 
 ## Prerequisites
 
@@ -141,26 +104,25 @@ Three variants share one tree — pick by what you want acting on your sessions:
 | Plugin | Ships | Install when |
 |---|---|---|
 | `bough` | commands + skill | You want `/bough:*` on hand. Inert until invoked, so it is safe at any scope. |
-| `bough-hooks` | hooks | You drive bough from the shell and only want the observe/inject loop. |
+| `bough-hooks` | hooks | You drive bough from the shell and only want `claude --worktree` wired. |
 | `bough-all` | commands + skill + hooks | You want the lot in one line. |
 
 Installing wires the user-facing surface:
 
 - **Slash commands** — type them in any session: `/bough:create <name>`,
   `/bough:remove <name>`, `/bough:list`, `/bough:status`, `/bough:verify <name>`,
-  `/bough:doctor`, `/bough:instinct-status`, `/bough:instinct-list`,
-  `/bough:instinct-promote`, `/bough:evolve`, `/bough:config-validate`. Each one
-  shells out to `bough` and summarises the result.
+  `/bough:doctor`, `/bough:config-validate`. Each one shells out to `bough` and
+  summarises the result.
 - **Skill** — `using-bough`, model-invoked guidance on which `/bough:*` fits an
   intent, with a `command -v bough` PATH preflight.
 
-Commands and the skill are inert until invoked — they observe and inject nothing
-until you type one — so the `bough` variant is side-effect-free at any scope.
+Commands and the skill are inert until invoked — nothing happens until you type
+one — so the `bough` variant is side-effect-free at any scope.
 
-**Hooks are the part to scope deliberately.** They carry the observe → instinct
-→ inject → evolve → preserve loop (plus `WorktreeCreate` / `WorktreeRemove`) and
-fire on *every* event in whatever scope they are installed at, so install a
-hook-bearing variant into the repo you actually want observed:
+**Hooks are the part to scope deliberately.** They carry `WorktreeCreate` and
+`WorktreeRemove`, and they act on whichever monorepo the session is started in,
+so install a hook-bearing variant into the repo you actually want
+`claude --worktree` to work in:
 
 ```text
 claude plugin install bough-all@bough --scope project   # this repo only  (recommended)
@@ -175,9 +137,6 @@ Prefer no plugin? The CLI installs the same artifacts from the binary's embedded
 copy — `bough claude hook|skill|command install --scope project`. Wire hooks one
 way or the other, not both: they run the same dispatcher, so keeping both fires
 every event twice (`bough claude doctor` flags it).
-
-LLM instinct minting stays opt-in on top of either route (`bough instinct observer start`,
-or `.bough.yaml` `instinct.observer.autostart`).
 
 See [`docs/PLUGIN_CLAUDE_CODE.md`](./docs/PLUGIN_CLAUDE_CODE.md) for the variant
 layout, the full command / hook reference, and the CLI equivalents.
@@ -300,8 +259,7 @@ removed with it.
 
 Then wire it into Claude Code's `WorktreeCreate` / `WorktreeRemove`
 hooks in `.claude/settings.json`. `bough claude hook install` writes
-these (and the continuous-learning hooks) for you, all routed through
-the single `bough hook handle` dispatcher:
+both for you, routed through the single `bough hook handle` dispatcher:
 
 ```json
 {
@@ -473,20 +431,13 @@ bough plugins list                      # glob $PATH for bough-plugin-*
 bough claude hook install | uninstall | list     # hook wiring in .claude/settings.json
 bough claude skill install | uninstall | list    # the using-bough skill
 bough claude command install | uninstall | list  # the /bough:* commands
-bough claude doctor                              # hook wiring + observer capture + cost posture
-
-# Continuous learning (you run these; the daemon needs instinct.observer.autostart)
-bough instinct observer run-once | start        # mint instincts via claude --print
-bough instinct list | show <id>                 # inspect the captured corpus
-bough instinct evolve --generate                # cluster instincts → skills / agents / commands
-bough instinct import                           # interop with an everything-claude-code corpus
+bough claude doctor                              # hook wiring + engine plugins + retired leftovers
 ```
 
-The hook dispatcher's own verbs (`inject-context`, `session-end`,
-`preserve-instincts`, `session-evolve-claudemd`) are fired by
-`bough hook handle`, not typed. They stay reachable for debugging but are out of
-`--help`. `bough hook` / `bough doctor` still work as deprecated aliases of
-their `bough claude ...` homes for the v0.x line.
+`claude --worktree` reaches `bough create` / `bough remove` through
+`bough hook handle --event WorktreeCreate|WorktreeRemove`, which is wired for
+you and not typed by hand. `bough hook` / `bough doctor` still work as
+deprecated aliases of their `bough claude ...` homes for the v0.x line.
 
 ## Repository layout
 
@@ -506,18 +457,9 @@ bough/
 │   ├── registry/                           .bough/ports.json atomic R/W (legacy .bough-ports.json read fallback)
 │   ├── gitwt/                              `git worktree` wrapper
 │   ├── envwriter/                          text/template + Sprig .env.local generator
-│   ├── hooks/                              post_create / pre_remove hook runner
+│   ├── hooks/                              Claude Code hook wiring in .claude/settings.json (install / list / replay / doctor)
 │   ├── pluginhost/                         go-plugin discovery + lifecycle
-│   ├── pluginsign/                         plugin binary signature verification
-│   │                                       # continuous learning (v0.9)
-│   ├── homunculus/                         instinct corpus (~/.local/share/bough-homunculus/)
-│   ├── observe/                            observations.jsonl writer + Anthropic-env scrub
-│   ├── prompts/                            //go:embed prompt templates + 3-layer override
-│   ├── provider/claudecli/                 `claude --print` subprocess + rate limiter
-│   ├── evolve/                             instinct → skill / agent / command 5-gate pipeline
-│   ├── qualitygate/                        operator-supplied lint / typecheck gates
-│   ├── inject/                             UserPromptSubmit context-block builder
-│   └── session/                            SessionEnd summary + confidence update
+│   └── pluginsign/                         plugin binary signature verification
 ├── plugins/
 │   └── engine/
 │       ├── api/                            gRPC EngineProvider contract + Go interface
@@ -533,107 +475,6 @@ bough/
 └── .github/workflows/                      ci.yml + release.yml
 ```
 
-## Continuous learning (v0.9)
-
-> **bough is not an agent memory system. bough is a per-worktree
-> memory-orchestration layer.** The continuous-learning loop is a
-> verbatim Go port of the [everything-claude-code][ecc] reference
-> architecture, so every LLM call stays inside your Claude Code
-> subscription (see [Cost & billing](#cost--billing)).
-
-[ecc]: https://github.com/affaan-m/everything-claude-code
-
-The loop is **observe → evolve → inject**, entirely opt-in and off by
-default:
-
-1. **Observe.** Claude Code hooks (`SessionEnd`, `PreCompact`,
-   `UserPromptSubmit`, …) append raw session events to
-   `observations.jsonl` and mint *instincts* — confidence-scored
-   behavioural rules — into an on-disk corpus (the "homunculus") under
-   `~/.local/share/bough-homunculus/<project-id>/` (`project-id` =
-   `sha256[:12]` of the credential-stripped git remote, else the repo
-   path). Env scrubbing strips every `ANTHROPIC_*` / Bedrock / Vertex
-   key so a spawned `claude --print` can never flip to API billing.
-2. **Evolve.** `bough instinct evolve --generate` clusters related instincts
-   through a 5-gate pipeline (the final gate is an LLM judge via
-   `claude --print --output-format json`) and emits Claude Code
-   artifacts — `SKILL.md`, agents, and commands — into the repo's
-   `.claude/` (project-scope since v0.9.20; `bough create` symlinks
-   each worktree's `.claude/skills` at the monorepo copy). Generated
-   artifacts cite a resolvable source-instinct path so a reader can
-   trace a skill back to the instincts it came from (v0.9.22).
-3. **Inject.** The `UserPromptSubmit` hook prints a RELEVANCE-ranked
-   instinct block into your next turn as ordinary input tokens — no
-   separate call. Ranking fuses three channels (exact identifier hits,
-   BM25, recency) against the prompt; confidence gates entry and is
-   deliberately not a ranking key, since a corpus where every note
-   scores 0.85 has no order to give. See
-   [Continuous learning](#continuous-learning-v09) for the budgets.
-
-```sh
-# Wire bough's hook handlers into .claude/settings.json (idempotent;
-# hand-edited rows are preserved) and inspect the posture.
-bough claude hook install
-bough claude doctor              # hook wiring + observer capture + cost meter
-
-# Mint instincts from recent observations, then review the corpus.
-bough instinct observer run-once          # one claude --print pass
-bough instinct list              # confidence-ranked corpus
-bough instinct show <id>
-
-# Cluster the corpus into skills / agents / commands.
-bough instinct evolve --generate          # 5-gate pipeline; writes <repo>/.claude/*
-
-# Interop with an existing everything-claude-code corpus.
-bough instinct import
-```
-
-Enable it per-monorepo in `.bough.yaml` (off by default):
-
-```yaml
-instinct:
-  enabled: true
-  observer:
-    autostart: true      # opt-in: auto-run the minting daemon per session
-    interval_sec: 600     # minting cadence; optional, defaults to 10 min
-  select:                 # both optional; absent leaves the feature off
-    exclusions_path: .claude/bough-exclusions.txt   # ids to stop pushing
-    alias_path: .claude/bough-alias.json            # 非英語 → English terms
-```
-
-The injected block is ranked by relevance to the prompt (exact identifier
-hits, BM25, recency — fused by rank), then trimmed: at most 12 lines and
-5000 bytes, at most 2 from one clustered family, and a line that merely
-restates one already chosen is skipped. `select.exclusions_path` is your own
-"I have heard this enough" register — a JSON object with reasons, or one id
-per line. `select.alias_path` maps a term the corpus does not contain to the
-English words it does (`{"予約": ["booking"]}`); without it a non-English
-prompt can only retrieve what it happens to name in English, because the
-lexical channel is blind across languages.
-
-`observer.autostart` is the "opt-in once, then automatic" switch: with it on,
-the `UserPromptSubmit` hook ensures the `bough instinct observer start` daemon is running
-for this monorepo, so instincts are minted automatically without a manual start
-per machine. It is **off by default** — the daemon calls `claude --print`, so
-bough never starts it silently, and `bough claude doctor` always reports whether it is
-running. Minting stays subject to the self-DoS limiter. (This auto-mints
-instincts only; turning them into skills/agents/commands is still the explicit
-`bough instinct evolve --generate`.)
-
-LLM calls happen **only** in the explicit `bough instinct observer run-once` /
-`bough instinct evolve --generate` (and the opt-in `bough instinct observer start`
-daemon) — each a `claude --print` subprocess under your subscription,
-hard rate-limited (10 / session, 30 / hour, 3-failure circuit
-breaker). Everything else — hooks, ingest, clustering gates 1-4 — is
-pure local filesystem.
-
-See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
-
-> **v0.5-v0.8 superseded.** Earlier releases explored a different
-> continuous-learning design. v0.9.0 reset to the ECC verbatim port
-> above; pin **v0.8.1** if you depend on the earlier surface. See the
-> v0.9.0 [CHANGELOG](CHANGELOG.md) entry.
-
 ## Roadmap
 
 | Milestone | Headline                                                                                    |
@@ -643,13 +484,10 @@ See [docs/EVOLVE.md](docs/EVOLVE.md) for the 5-gate evolve pipeline.
 | v0.2.0    | Docker backend, hybrid `backend:` selector — explicit `nix` / `docker` in YAML, or auto-detect (Nix-with-flakes present → Nix, else Docker daemon → Docker, else clear error) when the field is omitted (the Nix half was removed in v0.27.0) |
 | v0.3.0    | Plugin conformance suite + CI matrix on real Docker — plugin authors verify their contract end-to-end with one test func, four bough-internal plugins are gated on `ubuntu-24.04` + `ubuntu-24.04-arm` × `mysql` / `postgres` / `redis` / `elasticsearch` |
 | v0.4.0    | Generic engine plugin orchestrator (was: DB-only). `DBProvider` → `EngineProvider`, `plugins/db/` → `plugins/engine/`, YAML schema v2 (`.bough.yaml` / `engines:` / `port_ranges:` per role / `initial_resources:`). Multi-port engines (rabbitmq AMQP+Management, kafka broker+controller, NATS client+monitor+cluster) are first-class; v0.4.x reads every v0.3 surface with a deprecation warning — only the plugin gRPC handshake (`DBProvider`/`BOUGH_DB_PLUGIN`) was removed in v0.5.0, the YAML-level fallback (old file name / section / field names) is still read today, see [docs/MIGRATION-v0.3-to-v0.4.md](docs/MIGRATION-v0.3-to-v0.4.md) |
-| v0.5.0-v0.8.0 | (superseded) An earlier continuous-learning design, replaced wholesale in v0.9.0; pin v0.8.1 if you depend on it |
-| v0.9.0    | The "ECC verbatim port" reset. Deleted the v0.5-v0.8 surface and rebuilt continuous learning as a faithful Go port of [everything-claude-code](https://github.com/affaan-m/everything-claude-code): the `~/.local/share/bough-homunculus/` corpus, `observations.jsonl`, and a subscription-only `claude --print` mechanism (no Anthropic API, no separate billing) |
-| v0.9.1-v0.9.22 | The observe → evolve → inject loop: `bough instinct evolve --generate` 5-gate clustering into skills / agents / commands, `UserPromptSubmit` instinct injection, `SessionEnd` / `PreCompact` hooks, secret-scrub at capture, project-scope evolved skills (v0.9.20), resolvable source-instinct paths (v0.9.22), plus a retrospective `/review` bug-fix sweep of the merged infra PRs |
-| v0.10.0-v0.20.3 | Iteration on that loop — see [CHANGELOG](CHANGELOG.md) for the per-release detail |
-| v0.21.0   | The loop stops trusting configuration and starts trusting measurement: a completion gate that decides on pull telemetry (and withdraws its own PASS when its reader cannot parse a row), `bough ops`, lifetime selector-health checks, and ECC-conformant selection — per-channel depth, a relevance floor scaled to the prompt, a restatement skip, a per-family cap whose stamped POPULATION is printed by `bough claude doctor` so an inert cap cannot hide, and the published byte budgets |
 | v0.22.0   | `claude --worktree` works against a git monorepo again: the worktree container is a work tree of its own (checked out at an empty tree, so it still starts empty), `bough doctor` names any container a host would refuse, and the release pipeline runs the published archive through the real WorktreeCreate/Remove hook contract before the release is called good |
+| v0.9.0-v0.27.0 | (retired) A continuous-learning loop layered on top of the isolation core: an on-disk instinct corpus, `claude --print` clustering into skills / agents / commands, and six extra Claude Code hook events. (v0.5.0-v0.8.0 carried a different, superseded memory-orchestration surface — see [docs/attic/](docs/attic/).) Removed wholesale in v0.28.0 — pin v0.27.0 if you depend on it, and see [docs/MIGRATION-v0.27-to-v0.28.md](docs/MIGRATION-v0.27-to-v0.28.md) |
 | v0.27.0   | Docker is the only engine backend. The Nix / services-flake path is gone (it could not start Elasticsearch at all, gave Postgres different credentials than the container does, and no CI job had ever run it); `engines[].backend` accepts only `docker` and may be omitted. Each plugin now registers its backend in `New()`, so a second runtime is an implementation rather than another branch (it also needs the backend token on `Down` / `ReadyCheck`) |
+| v0.28.0   | bough is an isolation tool and nothing else: the continuous-learning loop above is gone, two hook events are wired instead of eight, and the retired `.bough.yaml` sections are read with a warning for one minor series |
 | next      | Reference rabbitmq / kafka / NATS / minio engine plugins, Homebrew tap |
 
 [embedded-postgres]: https://github.com/fergusstrange/embedded-postgres
@@ -665,12 +503,11 @@ since v0.27.0. The Postgres plugin
 that production monorepo. Multi-port engines (rabbitmq / kafka / NATS) are
 first-class in the contract — reference plugins are not yet bundled.
 
-The worktree-isolation core has been stable since v0.4.0. v0.5 onward
-layers on the opt-in [continuous-learning loop](#continuous-learning-v09).
-v0.9.0 reset that loop to a verbatim Go port of the
-everything-claude-code reference architecture (subscription-only, no
-API billing) and **superseded the earlier v0.5-v0.8 surface
-wholesale** — pin v0.8.1 if you depend on it.
+The worktree-isolation core has been stable since v0.4.0. v0.9.0 through
+v0.27.0 also carried a continuous-learning loop on top of it; v0.28.0
+removed that wholesale and bough is an isolation tool again. Pin
+**v0.27.0** to keep the loop, or see
+[docs/MIGRATION-v0.27-to-v0.28.md](docs/MIGRATION-v0.27-to-v0.28.md).
 
 ## Plugin conformance
 
@@ -694,7 +531,7 @@ Locally:
 ```bash
 make build
 make conformance-local PLUGIN=mysql       # one plugin
-make conformance-all                       # all four
+make conformance-all                       # all five
 ```
 
 See [`docs/PLUGIN_AUTHOR_GUIDE.md`](./docs/PLUGIN_AUTHOR_GUIDE.md)

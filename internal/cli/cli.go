@@ -20,19 +20,15 @@ const v03FallbackCaption = "v0.3 .worktree-isolation.yaml accepted on fallback"
 // surfaced through `bough --version`; main.go fills it in from the
 // linker-injected build tag.
 //
-// v0.9 sprint resets the surface to "ECC verbatim port":
-//   - per-worktree infrastructure (create / remove / verify / list /
-//     status / backfill / config / plugins) — kept
-//   - hook auto-wire (= bough hook install/uninstall/list/replay/
-//     doctor/handle) — kept
-//   - observer + inject + evolve + session-end + instinct — new in v0.9,
-//     all backed by Claude Code's `claude --print` subprocess so the
-//     LLM cost stays inside the operator's existing Claude Code
-//     subscription (= no Anthropic API key, no separate billing).
+// v0.28.0 narrowed the surface back to what the name says: per-worktree
+// isolation. The continuous-learning port (observe → instinct → evolve →
+// inject, v0.9.0–v0.27.0) is gone; that job belongs to the upstream
+// Claude Code plugins built for it. What remains is the worktree
+// lifecycle plus the two hook events Claude Code calls to drive it.
 func NewRootCmd(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "bough",
-		Short:         "Per-worktree isolation + continuous-learning toolkit for Claude Code",
+		Short:         "Per-worktree isolated dev environments for monorepos",
 		Long:          longRootDescription,
 		Version:       version,
 		SilenceUsage:  true, // RunE-returned errors print without the usage banner
@@ -47,7 +43,6 @@ func NewRootCmd(version string) *cobra.Command {
 		newVerifyCmd(),
 		newListCmd(),
 		newStatusCmd(),
-		newOpsCmd(),
 		newBackfillCmd(),
 		newRepairCmd(),
 		newConfigCmd(),
@@ -56,9 +51,6 @@ func NewRootCmd(version string) *cobra.Command {
 		// installs INTO Claude Code. Kept distinct from `plugins` above, which
 		// means bough's own engine plugin binaries.
 		newClaudeCmd(),
-		// Continuous learning (v0.9+): one namespace, mirroring the single
-		// `instinct:` block that configures all of it in .bough.yaml.
-		newInstinctCmd(),
 
 		// --- Backwards compatibility ---------------------------------------
 		// `bough hook ...` / `bough doctor` predate the `claude` namespace and
@@ -66,19 +58,6 @@ func NewRootCmd(version string) *cobra.Command {
 		// the notice points at the new path.
 		deprecatedAlias(newHookCmd(), "bough claude hook"),
 		deprecatedAlias(newDoctorCmd(), "bough claude doctor"),
-		// The learning verbs that used to sit at root, before `instinct` became
-		// the namespace for the domain. Same contract as the hook aliases: they
-		// run, they just say where they went.
-		deprecatedAlias(newObserverCmd(), "bough instinct observer"),
-		deprecatedAlias(newEvolveCmd(), "bough instinct evolve"),
-		deprecatedAlias(newEccCmd(), "bough instinct"),
-		// The hook dispatcher's internal verbs. hook.go's handle switch calls
-		// their Go functions directly, so these CLI entry points are a manual
-		// debugging escape hatch, not part of the advertised surface.
-		hiddenCmd(newInjectContextCmd()),
-		hiddenCmd(newSessionEndCmd()),
-		hiddenCmd(newPreserveInstinctsCmd()),
-		hiddenCmd(newSessionEvolveClaudeMDCmd()),
 	)
 	return root
 }
@@ -93,17 +72,4 @@ set (db / api / gateway / ...) per branch, writes the matching
 like rabbitmq / kafka / NATS are first-class in the contract but their
 reference plugins are not yet bundled)
 via a Hashicorp go-plugin gRPC plugin so adding a new engine never
-touches the host binary.
-
-v0.9 adds the continuous-learning surface ported verbatim from the
-upstream affaan-m/everything-claude-code reference implementation:
-` + "`bough observe`" + ` (PreToolUse / PostToolUse / Stop hook),
-` + "`bough inject-context`" + ` (UserPromptSubmit hook),
-` + "`bough observer start`" + ` (background daemon that calls
-` + "`claude --model haiku --print`" + ` to extract instincts from
-session observations), ` + "`bough evolve --generate`" + ` (5-gate
-cluster → SKILL.md), ` + "`bough instinct status`" + `, and the
-SessionEnd / PreCompact handlers (` + "`bough session-end`" + `,
-` + "`bough preserve-instincts`" + `). All LLM work runs through the
-operator's existing Claude Code subscription — no API key, no
-separate billing.`
+touches the host binary.`

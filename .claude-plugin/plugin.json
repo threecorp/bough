@@ -1,6 +1,6 @@
 {
   "name": "bough",
-  "description": "Per-worktree isolated dev environments + continuous-learning instincts, driven from Claude Code. Requires the `bough` binary on PATH (see the repository README for install).",
+  "description": "Per-worktree isolated dev environments for monorepos, driven from Claude Code. Requires the `bough` binary on PATH (see the repository README for install).",
   "author": {
     "name": "ikeikeikeike",
     "email": "jp.ne.co.jp@gmail.com",
@@ -12,8 +12,7 @@
     "worktree",
     "dev-environment",
     "orchestration",
-    "continuous-learning",
-    "instincts",
+    "isolation",
     "claude-code"
   ]
 }

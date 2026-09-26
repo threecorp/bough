@@ -88,9 +88,9 @@ func TestHookHandleIsNotDeprecated(t *testing.T) {
 
 	// The wiring bough installs must point at a command that is not deprecated:
 	// if CanonicalCommand ever moves, this pairing is what catches the mismatch.
-	if !strings.Contains(hooks.CanonicalCommand(hooks.EventStop), "hook handle") {
+	if !strings.Contains(hooks.CanonicalCommand(hooks.EventWorktreeCreate), "hook handle") {
 		t.Fatalf("CanonicalCommand no longer calls `hook handle` (%q); this guard needs updating",
-			hooks.CanonicalCommand(hooks.EventStop))
+			hooks.CanonicalCommand(hooks.EventWorktreeCreate))
 	}
 }
 
@@ -108,51 +108,6 @@ func TestDeprecatedAliasesStillRun(t *testing.T) {
 	}
 }
 
-// TestInstinctNamespaceIsTheCanonicalHome pins the second grouping: the
-// continuous-learning verbs that used to sit at root now live under `instinct`,
-// mirroring the single `instinct:` block that configures them in .bough.yaml.
-// The root spellings still work and name where they went.
-func TestInstinctNamespaceIsTheCanonicalHome(t *testing.T) {
-	root := NewRootCmd("0.0.0-test")
-
-	instinct := findCmd(t, root, "instinct")
-	if instinct.Deprecated != "" {
-		t.Error("`bough instinct` must not be deprecated; it is the replacement")
-	}
-	for _, path := range [][]string{
-		{"status"}, {"list"}, {"show"}, {"promote"}, // unchanged spellings
-		{"observer", "run-once"}, {"observer", "start"}, {"observer", "stop"}, {"observer", "status"},
-		{"evolve"}, {"import"},
-	} {
-		if d := findCmd(t, instinct, path...).Deprecated; d != "" {
-			t.Errorf("`bough instinct %s` is deprecated (%q); it is the canonical spelling",
-				strings.Join(path, " "), d)
-		}
-	}
-
-	// The root aliases point at those homes, naming the exact line to retype.
-	for _, tc := range []struct {
-		path []string
-		want string
-	}{
-		{[]string{"observer"}, "bough instinct observer"},
-		{[]string{"observer", "run-once"}, "bough instinct observer run-once"},
-		{[]string{"observer", "start"}, "bough instinct observer start"},
-		{[]string{"evolve"}, "bough instinct evolve"},
-		{[]string{"ecc"}, "bough instinct"},
-		{[]string{"ecc", "import"}, "bough instinct import"},
-	} {
-		d := findCmd(t, root, tc.path...).Deprecated
-		if d == "" {
-			t.Errorf("`bough %s` carries no deprecation notice", strings.Join(tc.path, " "))
-			continue
-		}
-		if !strings.Contains(d, tc.want) {
-			t.Errorf("`bough %s` notice does not name %q: %s", strings.Join(tc.path, " "), tc.want, d)
-		}
-	}
-}
-
 // TestRootSurfaceStaysSmall is the point of both groupings, stated as a number.
 // The root is what an operator reads first; every entry there costs attention,
 // so a new one should be a deliberate choice rather than the default landing
@@ -166,14 +121,14 @@ func TestRootSurfaceStaysSmall(t *testing.T) {
 			advertised = append(advertised, c.Name())
 		}
 	}
-	// 12 today: backfill claude completion config create help instinct list
-	//           plugins remove status verify
-	if len(advertised) > 12 {
-		t.Errorf("root advertises %d commands (%v); it was cut to 12 on purpose — group the new one or raise this bound deliberately",
+	// 11 today: backfill claude completion config create help list plugins
+	//           remove status verify
+	if len(advertised) > 11 {
+		t.Errorf("root advertises %d commands (%v); it was cut to 11 on purpose — group the new one or raise this bound deliberately",
 			len(advertised), advertised)
 	}
-	// The two namespaces must be among them, or the grouping did not happen.
-	for _, want := range []string{"claude", "instinct"} {
+	// The namespace must be among them, or the grouping did not happen.
+	for _, want := range []string{"claude"} {
 		if !slices.Contains(advertised, want) {
 			t.Errorf("root does not advertise %q: %v", want, advertised)
 		}

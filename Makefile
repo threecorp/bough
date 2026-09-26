@@ -45,7 +45,7 @@ fmt:  ## gofumpt + gci.
 
 
 .PHONY: build
-build:  ## Build host + all 5 engine plugins under dist/. (v0.9 reset: memory + mcp binaries removed.)
+build:  ## Build host + all 5 engine plugins under dist/.
 	mkdir -p dist
 	go build -o dist/bough ./cmd/bough
 	go build -o dist/bough-plugin-mysql ./cmd/bough-plugin-mysql

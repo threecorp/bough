@@ -49,33 +49,6 @@ type Config struct {
 	Registry      RegistryConfig       `yaml:"registry" validate:"required"`
 	Teardown      TeardownConfig       `yaml:"teardown"`
 	MCP           MCPConfig            `yaml:"mcp"`
-
-	// v0.5 instinct subsystem (opt-in; disabled by default for full
-	// v0.4 compatibility). See InstinctConfig docs below.
-	Instinct       InstinctConfig     `yaml:"instinct"`
-	MemoryBackends []MemoryBackendCfg `yaml:"memory_backends" validate:"dive"`
-	Export         ExportConfig       `yaml:"export"`
-
-	// QualityGates (v0.7.1) declares operator-supplied lint /
-	// typecheck / smoke commands the host runs from
-	// `bough hook handle` against matching events. Each entry is
-	// a Gate from internal/qualitygate — declared here as a raw
-	// shape so internal/config does not depend on the runner.
-	QualityGates []QualityGateCfg `yaml:"quality_gates" validate:"dive"`
-}
-
-// QualityGateCfg mirrors internal/qualitygate.Gate at the config
-// boundary so the YAML decoder produces a struct the runner can
-// consume without re-parsing. Validation rules pin the fields the
-// runner relies on (Name + Command non-empty).
-type QualityGateCfg struct {
-	Name           string `yaml:"name" validate:"required"`
-	Command        string `yaml:"command" validate:"required"`
-	OnEvent        string `yaml:"on_event"`
-	OnTool         string `yaml:"on_tool"`
-	OnMatch        string `yaml:"on_match"`
-	OnRepo         string `yaml:"on_repo"`
-	TimeoutSeconds int    `yaml:"timeout_seconds"`
 }
 
 // Repository declares one git sub-repo that hangs off
@@ -232,343 +205,6 @@ type SymlinkSpec struct {
 	Link   string `yaml:"link" validate:"required"`
 }
 
-// InstinctConfig is mostly the v0.5-v0.8 memory-orchestration
-// subsystem's config schema (MemoryBackend plugins, InstinctMinter, a
-// coordinator under internal/instinct/). That subsystem was
-// superseded wholesale in v0.9.0 — internal/instinct/ no longer
-// exists, and almost all of this struct's fields are unread. The one
-// live exception is EvolveClaudeMDOnSessionEnd (see its own doc
-// comment below): internal/cli/hook.go's dispatchEvolveClaudeMD still
-// reads it to gate a real v0.9.14 SessionEnd feature. Every other
-// field stays only so a `.bough.yaml` written for v0.5-v0.8 still
-// parses without an "unknown field" error, with no plan to re-wire
-// it. v0.9's continuous-learning surface (`bough observer`, `bough
-// evolve`, `bough instinct status/list/show`) is unrelated and
-// unconfigured by this struct — see the top-level README instead.
-type InstinctConfig struct {
-	Enabled               bool   `yaml:"enabled"`
-	DefaultMemoryBackend  string `yaml:"default_memory_backend"`
-	DefaultInstinctMinter string `yaml:"default_instinct_minter"`
-	// FallbackOnError tells the coordinator whether to silently
-	// degrade to the SQLite reference-fallback backend when the
-	// primary (external) backend reports an error, or to fail the
-	// operation. Production teams using mem0 / Graphiti typically
-	// want `true` so a transient network blip does not block a CI
-	// run; users debugging an external backend may want `false`.
-	FallbackOnError bool `yaml:"fallback_on_error"`
-	// EvolveClaudeMDOnSessionEnd, when true, makes the SessionEnd hook
-	// ALSO run `session-evolve-claudemd --write` so CLAUDE.md proposals
-	// land in <monorepoRoot>/.claude/claudemd-proposals.md automatically
-	// (= threecorp ECC's evolve-claudemd.sh SessionEnd behavior). It is
-	// opt-in (default false) because, unlike bough's other hook actions
-	// which write only to the homunculus, this writes into the repo
-	// working tree — so the no-contamination default is preserved unless
-	// the operator explicitly turns it on. Pure filesystem; no LLM.
-	EvolveClaudeMDOnSessionEnd bool                   `yaml:"evolve_claudemd_on_session_end"`
-	Scopes                     InstinctScopes         `yaml:"scopes"`
-	Mint                       InstinctMint           `yaml:"mint"`
-	Retrieve                   InstinctRetrieve       `yaml:"retrieve"`
-	Confidence                 InstinctConfidence     `yaml:"confidence"`
-	PoisoningGuard             InstinctPoisoningGuard `yaml:"poisoning_guard"`
-	Observer                   InstinctObserver       `yaml:"observer"`
-	PluginSecurity             InstinctPluginSecurity `yaml:"plugin_security"`
-	Gate                       InstinctGate           `yaml:"gate"`
-	// ExcludeSkillCovered asks the injector to stop pushing instincts an
-	// evolved skill already delivers. It is a REQUEST, not a switch: the
-	// readiness gate (evolve.ExclusionReadiness) decides whether it takes
-	// effect, because turning it on before the portfolio is deployed
-	// removes that knowledge from both delivery paths at once.
-	ExcludeSkillCovered bool `yaml:"exclude_skill_covered"`
-	// Select tunes the prompt-time selector's optional side inputs.
-	Select InstinctSelect `yaml:"select"`
-}
-
-// InstinctSelect points at two optional operator-owned files the
-// prompt-time selector reads. Both are paths rather than inline lists:
-// one is a judgement about individual instincts that changes as the
-// corpus does, the other is vocabulary. Neither is required, and an
-// absent file leaves its feature off rather than failing the hook.
-type InstinctSelect struct {
-	// ExclusionsPath lists instinct ids the injector must stop pushing —
-	// the operator's own "I have heard this enough" register, alongside the
-	// skill-covered set. Same consumer as that one (the injector), so there
-	// is still exactly one place that decides what is delivered.
-	//
-	// Either a JSON object ({"excluded": {"<id>": {"reason": "..."}}}) or a
-	// plain file of one id per line. Keyed by frontmatter id, never
-	// filename: the two diverge once a note is renamed.
-	ExclusionsPath string `yaml:"exclusions_path"`
-	// AliasPath maps a non-English term to the English words the corpus
-	// actually indexes ({"予約": ["booking", "reservation"]}). BM25 is blind
-	// across languages — nothing tokenizes 予約 into "booking" — so without
-	// this a Japanese prompt retrieves only what it happens to name in
-	// English. Keys starting with "_" are treated as comments.
-	AliasPath string `yaml:"alias_path"`
-}
-
-// InstinctGate configures the deterministic policy gate that screens
-// every newly minted instinct before it becomes injectable. A minted
-// instinct whose propagating surface (trigger + action) matches a
-// command-shaped forbidden action — "never merge unasked", "never
-// force-push", "never rewrite commit identity", … — is HELD: moved to a
-// reversible quarantine dir with a REPORT rather than promoted to the
-// personal corpus. The guard is deliberately narrow (command shapes
-// only); prose-shaped intent is a later LLM-judge concern, so this is a
-// backstop, not a completeness claim.
-type InstinctGate struct {
-	// Enabled is tri-state: a nil pointer (the `gate:` block absent from
-	// .bough.yaml) defaults to ON via GateEnabled(). Unlike the observer
-	// autostart (which spawns claude --print and so must default off for
-	// cost-safety), this gate is pure deterministic regex — zero cost —
-	// and reversible (quarantine is a move, nothing is deleted), so a
-	// safety-on default is the honest posture. Set `enabled: false` to
-	// turn it off explicitly.
-	Enabled *bool `yaml:"enabled"`
-	// AllowIDs exempts instincts whose OWN action IS the rule that forbids
-	// a command (an instinct teaching "never run `git push --force`" names
-	// the command it forbids; quarantining it would be backwards).
-	// Exemption is by id because a false hold is reversible, whereas a
-	// negation heuristic that guessed wrong would silently pass a real
-	// forbidden action.
-	AllowIDs []string `yaml:"allow_ids"`
-	// DenylistPath points at an UNTRACKED sidecar listing terms that must
-	// never propagate out of a session (client names, internal hostnames,
-	// unreleased codenames). It is a path rather than an inline list
-	// because committing those strings would publish exactly what the
-	// guard exists to contain. Empty falls back to the conventional
-	// location; a missing file leaves the layer inert.
-	DenylistPath string `yaml:"denylist_path"`
-	// GovernancePaths are the project's rule documents. Nothing enforces
-	// against them today: the deterministic gate stopped reading them
-	// (sounding like governance is not a violation, and holding on that
-	// shape quarantined honest notes), and the judge grounds a citation
-	// against ForbiddenActions, not against this text. `bough doctor`
-	// reports which documents resolve; that is the whole current effect.
-	// Empty falls back to the conventional set.
-	GovernancePaths []string `yaml:"governance_paths"`
-	// ForbiddenActions are the CATEGORIES the LLM layer judges against.
-	// They were hardcoded in the prompt, which quietly capped the judge
-	// at whatever bough's author had thought of: a project rule outside
-	// those five — "never defer agreed scope out of the sprint", say —
-	// was invisible no matter what the project's governance said, and the
-	// judge cleared violations of it while looking like it had done its
-	// job. That is the same shape as a checker covering a subset of the
-	// governance it claims to enforce.
-	//
-	// Empty falls back to instinctgate.DefaultForbiddenActions. A project
-	// that sets this REPLACES the defaults rather than adding to them, so
-	// the list in .bough.yaml is the whole answer to "what is forbidden
-	// here" — a merge would leave the real set in two places.
-	ForbiddenActions []string `yaml:"forbidden_actions"`
-}
-
-// GateEnabled reports whether the deterministic policy gate should run.
-// A nil (absent-from-YAML) Enabled defaults to true — see
-// InstinctGate.Enabled for why a reversible, zero-cost guard defaults on.
-func (ic InstinctConfig) GateEnabled() bool {
-	return ic.Gate.Enabled == nil || *ic.Gate.Enabled
-}
-
-// InstinctScopes toggles which of the three scope tiers the
-// coordinator stores into. All three default to true; turning one
-// off (e.g. global=false on a personal monorepo) tells the
-// coordinator to short-circuit promotion attempts and to refuse
-// `bough instinct promote <id> --to global`.
-type InstinctScopes struct {
-	Worktree bool `yaml:"worktree"`
-	Repo     bool `yaml:"repo"`
-	Global   bool `yaml:"global"`
-}
-
-// InstinctMint controls how raw observations are turned into
-// candidate instincts. Mode="hybrid" (the default) emits each
-// minter output as `state:"candidate"` and requires a `bough
-// instinct approve <id>` before it goes active; mode="auto-
-// candidate" skips the approval gate (dangerous, off by default);
-// mode="manual" disables auto-minting entirely so only `bough
-// instinct mint --rule '...'` produces rows; mode="off" disables
-// minting entirely (useful when the user wants only the persistence
-// half of the subsystem).
-//
-// Sources lists which observer-emitted TraceBundle kinds the minter
-// will accept. Note that `session_log` is intentionally NOT in the
-// v0.5 default list: the file watch observer is opt-in beta because
-// of fsnotify cross-platform fragility (macOS FSEvents vs Linux
-// inotify, log rotation, truncate). Production users should pipe
-// CI / make output through `bough instinct ingest --stdin` instead.
-type InstinctMint struct {
-	Mode            string            `yaml:"mode" validate:"omitempty,oneof=off manual auto-candidate hybrid"`
-	RequireApproval bool              `yaml:"require_approval"`
-	Sources         []string          `yaml:"sources"`
-	Redaction       InstinctRedaction `yaml:"redaction"`
-}
-
-// InstinctRedaction sanitises raw TraceBundle content before any
-// minter sees it. Enabled by default; users explicitly opting out
-// should understand that PII / secrets observed in a session log
-// will land in the SQLite store verbatim.
-type InstinctRedaction struct {
-	Enabled     bool     `yaml:"enabled"`
-	PIIPatterns []string `yaml:"pii_patterns"`
-}
-
-// InstinctRetrieve caps query results so accumulated memory does
-// not blow Claude's context window. Both MaxResults and MaxTokens
-// are hard limits: the validator forces a sane default if the user
-// sets them to zero. HybridSearch=false on v0.5 means the SQLite
-// backend uses FTS5 only; v0.6 will gate dense-vector reranking
-// behind this flag.
-type InstinctRetrieve struct {
-	MaxResults    int     `yaml:"max_results"`
-	MaxTokens     int     `yaml:"max_tokens"`
-	MinConfidence float64 `yaml:"min_confidence"`
-	HybridSearch  bool    `yaml:"hybrid_search"`
-}
-
-// InstinctConfidence is the source-aware initial-confidence and
-// decay policy. Sources maps a TraceBundle.Source to the ceiling
-// confidence a minter is allowed to emit: explicit user feedback
-// scores higher than LLM-only inference because the host trusts
-// the former more. ReinforceDelta is added each time a stored
-// instinct's dedupe_key matches an incoming Store. DecayAfterDays
-// is the soft TTL the coordinator's decay_scheduler uses to bump
-// `last_hit_at`-stale rows toward state:"archived".
-type InstinctConfidence struct {
-	Sources        map[string]float64 `yaml:"sources"`
-	ReinforceDelta float64            `yaml:"reinforce_delta"`
-	DecayAfterDays int                `yaml:"decay_after_days"`
-}
-
-// InstinctPoisoningGuard backstops the auto-candidate / hybrid mint
-// modes. MaxActivePerScope is the soft cap on `state:"active"`
-// rows the coordinator allows per scope tier before it starts
-// auto-archiving the lowest-confidence rows. CandidateTTLDays is
-// how long an un-approved candidate sits before the coordinator
-// auto-forgets it. DedupeStrategy picks the hash function (only
-// "sha256" is implemented in v0.5).
-type InstinctPoisoningGuard struct {
-	MaxActivePerScope int    `yaml:"max_active_per_scope"`
-	CandidateTTLDays  int    `yaml:"candidate_ttl_days"`
-	DedupeStrategy    string `yaml:"dedupe_strategy" validate:"omitempty,oneof=sha256"`
-}
-
-// InstinctObserver controls the observer pipeline. v0.5 ships two
-// observers: a stdin ingest path (always available, primary) and a
-// Claude Code `.jsonl` file watch (opt-in beta, off by default).
-// FileWatch.Enabled gates whether the host even tries to set up
-// fsnotify; users on Linux who want the experimental path can set
-// it true, but the docs urge piping the relevant CI / make output
-// through `bough instinct ingest --stdin` instead.
-type InstinctObserver struct {
-	FileWatch InstinctFileWatch `yaml:"file_watch"`
-
-	// Autostart makes the UserPromptSubmit hook ensure the v0.9
-	// continuous-learning observer daemon (`bough observer start`) is
-	// running for this monorepo, so instinct minting happens automatically
-	// once the operator opts in — instead of remembering a manual
-	// `bough observer start` per machine. Default false preserves the
-	// cost-safe posture: the daemon spawns `claude --print` on an interval,
-	// so bough must never start it silently. `bough doctor` surfaces the
-	// autostart posture so an enabled daemon is always visible.
-	Autostart bool `yaml:"autostart"`
-	// IntervalSec is the autostart daemon's minting cadence in seconds
-	// (the operator-tunable knob; 0 = the 10-minute default).
-	// Deliberately NOT struct-tag validated with a min=60: this whole
-	// Config is validated as one unit (config.Config.Validate), so a hard
-	// tag here would reject the ENTIRE .bough.yaml — breaking unrelated
-	// features that share the same config load (e.g. quality gates) —
-	// over a value that internal/cli/hook.go's observerAutostartInterval
-	// already floors gracefully to the 10-minute default at read time. A
-	// low value degrades to the default instead of the whole config
-	// failing to parse.
-	IntervalSec int `yaml:"interval_sec"`
-}
-
-// InstinctFileWatch is the opt-in beta `.jsonl` tail config. The
-// Linux-vs-macOS event semantics differ enough that we treat
-// rotation and truncate as required handling rather than optional.
-// Debounce ms gates how aggressively the observer batches events;
-// 0 disables debouncing.
-type InstinctFileWatch struct {
-	Enabled           bool   `yaml:"enabled"`
-	Stability         string `yaml:"stability" validate:"omitempty,oneof=stable preview beta"`
-	JSONLPathTemplate string `yaml:"jsonl_path_template"`
-	RotationHandling  bool   `yaml:"rotation_handling"`
-	TruncateHandling  bool   `yaml:"truncate_handling"`
-	DebounceMs        int    `yaml:"debounce_ms"`
-}
-
-// InstinctPluginSecurity is the v0.5-v0.8 plugin-signing design's
-// config schema (see docs/SIGNING.md). It parses, but no command
-// reads these fields today: there is no `bough plugin verify`
-// subcommand, and internal/pluginsign — the cosign/minisign
-// verification library this was meant to drive — has no callers.
-// UntrustedWarning=true would tell the host CLI to print a
-// "third-party plugin = untrusted code" banner whenever a
-// non-allowlisted plugin is discovered, if anything wired it up.
-//
-// AcceptedSignatureSchemes (round 4 priority A9 + A11) is the
-// two-system signing surface: "cosign" matches the GoReleaser
-// keyless flow GitHub Actions OIDC uses for official bough
-// releases; "minisign" matches the Ed25519 self-host path docs/
-// SIGNING.md recommends for solo/local plugin authors. Both
-// schemes are accepted by default so plugin authors do not need
-// to pick a side; an enterprise operator can narrow the slice to
-// just "cosign" to enforce the supply-chain story.
-type InstinctPluginSecurity struct {
-	RequireSigned            bool     `yaml:"require_signed"`
-	Allowlist                []string `yaml:"allowlist"`
-	UntrustedWarning         bool     `yaml:"untrusted_warning"`
-	AcceptedSignatureSchemes []string `yaml:"accepted_signature_schemes"`
-}
-
-// MemoryBackendCfg declares one persistent memory backend the
-// coordinator should discover and route store/query calls through.
-// v0.5 ships only `kind: sqlite` (the reference-fallback); v0.6+
-// will add `kind: mem0` / `kind: graphiti` as official optional
-// plugins. The host treats Path / EventsLog / MirrorDir / FTS / WAL
-// / BusyTimeoutMs / Vector as plugin-specific tuning that the
-// memory plugin reads via the gRPC Capabilities / Health pair.
-//
-// Role="reference-fallback" is the canonical role for the SQLite
-// backend — calling it just `"reference"` invites the misreading
-// that bough is competing with mem0 / Graphiti. v0.6+ external
-// backends declare role="external".
-type MemoryBackendCfg struct {
-	Kind          string              `yaml:"kind" validate:"required"`
-	Role          string              `yaml:"role" validate:"required,oneof=reference-fallback external"`
-	Path          string              `yaml:"path"`
-	EventsLog     string              `yaml:"events_log"`
-	MirrorDir     string              `yaml:"mirror_dir"`
-	FTS           bool                `yaml:"fts"`
-	WAL           bool                `yaml:"wal"`
-	BusyTimeoutMs int                 `yaml:"busy_timeout_ms"`
-	Vector        MemoryBackendVector `yaml:"vector"`
-	Endpoint      string              `yaml:"endpoint"`    // v0.6+ external
-	APIKeyEnv     string              `yaml:"api_key_env"` // v0.6+ external
-	Fallback      string              `yaml:"fallback"`    // v0.6+ chain
-	Extras        map[string]string   `yaml:"extras"`
-}
-
-// MemoryBackendVector toggles dense vector indexing inside a memory
-// backend. v0.5 plugins must accept this field but should treat
-// `enabled: true` as a no-op (the SQLite reference-fallback does
-// not ship a vector index). v0.6+ mem0 / Graphiti plugins will
-// honour it.
-type MemoryBackendVector struct {
-	Enabled bool   `yaml:"enabled"`
-	Model   string `yaml:"model"`
-}
-
-// ExportConfig governs `bough instinct export` defaults. v0.5
-// supports `yaml` and `jsonl`; v0.6 adds `claude-skills`,
-// `agent-skill`, and `mcp`. OutputDir is the directory the exporter
-// writes into when the user does not pass `--out`.
-type ExportConfig struct {
-	Formats   []string `yaml:"formats"`
-	OutputDir string   `yaml:"output_dir"`
-}
-
 // LegacyConfig mirrors Config's shape with both the v0.3 field names
 // (so `databases:` / `initial_databases:` / `port_range:` deserialise
 // without error) and the v0.4+ canonical field names. After
@@ -580,23 +216,33 @@ type ExportConfig struct {
 // sections but did not mirror them into this superset, so the strict
 // first-pass decode rejected every v0.5+ `.bough.yaml`. Every other
 // subcommand decoded the file fine through a separate entry point, but
-// `bough config validate` reported a false-negative. The fix here adds
-// the four sections as additive fields and migrateLegacy passes them
-// straight through to Config.
+// `bough config validate` reported a false-negative. Three of those four
+// sections are retired as of v0.28.0 and are held below as opaque
+// yaml.Node fields — still accepted, warned about once, and NOT copied
+// into Config, which has no field for them.
 type LegacyConfig struct {
-	SchemaVersion  int                  `yaml:"schema_version"`
-	MonorepoRoot   string               `yaml:"monorepo_root"`
-	Repositories   []Repository         `yaml:"repositories"`
-	Databases      []LegacyDatabase     `yaml:"databases"`
-	Engines        []Engine             `yaml:"engines"`
-	Ports          map[string]PortRange `yaml:"ports"`
-	Registry       RegistryConfig       `yaml:"registry"`
-	Teardown       TeardownConfig       `yaml:"teardown"`
-	MCP            MCPConfig            `yaml:"mcp"`
-	Instinct       InstinctConfig       `yaml:"instinct"`
-	MemoryBackends []MemoryBackendCfg   `yaml:"memory_backends"`
-	Export         ExportConfig         `yaml:"export"`
-	QualityGates   []QualityGateCfg     `yaml:"quality_gates"`
+	SchemaVersion int                  `yaml:"schema_version"`
+	MonorepoRoot  string               `yaml:"monorepo_root"`
+	Repositories  []Repository         `yaml:"repositories"`
+	Databases     []LegacyDatabase     `yaml:"databases"`
+	Engines       []Engine             `yaml:"engines"`
+	Ports         map[string]PortRange `yaml:"ports"`
+	Registry      RegistryConfig       `yaml:"registry"`
+	Teardown      TeardownConfig       `yaml:"teardown"`
+	MCP           MCPConfig            `yaml:"mcp"`
+
+	// Sections that configured the continuous-learning loop bough
+	// carried until v0.27.0. Decoded as opaque nodes and never read:
+	// the decoder is strict, so without a field here a `.bough.yaml`
+	// that merely still carries one of these lines would fail to parse
+	// and take `claude --worktree` down with it. yaml.Node accepts both
+	// shapes that occur (a mapping for three of them, a sequence for
+	// quality_gates), and !IsZero() is what migrateLegacy warns on.
+	// Removed in v0.29.0.
+	RetiredInstinct       yaml.Node `yaml:"instinct"`
+	RetiredMemoryBackends yaml.Node `yaml:"memory_backends"`
+	RetiredExport         yaml.Node `yaml:"export"`
+	RetiredQualityGates   yaml.Node `yaml:"quality_gates"`
 }
 
 // LegacyDatabase is the v0.3 shape of one `databases:` entry. The
@@ -663,85 +309,10 @@ func LoadFromBytes(raw []byte, pathHint string) (*Config, error) {
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "bough: WARNING %s\n", w)
 	}
-	c.applyInstinctDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("validate %s: %w", pathHint, err)
 	}
 	return c, nil
-}
-
-// applyInstinctDefaults fills defaults on the retired v0.5-v0.8
-// InstinctConfig fields (see the type doc). It still runs on every
-// config load for backward-compat round-tripping, but nothing in
-// v0.9 reads the fields it sets — there is no live subsystem left
-// for these defaults to configure.
-func (c *Config) applyInstinctDefaults() {
-	if c.Instinct.DefaultMemoryBackend == "" {
-		c.Instinct.DefaultMemoryBackend = "sqlite"
-	}
-	if c.Instinct.DefaultInstinctMinter == "" {
-		c.Instinct.DefaultInstinctMinter = "builtin"
-	}
-
-	if c.Instinct.Mint.Mode == "" {
-		c.Instinct.Mint.Mode = "hybrid"
-	}
-	if len(c.Instinct.Mint.Sources) == 0 {
-		// session_log is intentionally NOT default-enabled: the file
-		// watch observer is opt-in beta. Production users pipe CI /
-		// make output through `bough instinct ingest --stdin`.
-		c.Instinct.Mint.Sources = []string{"stdin", "test_failure", "lint_output", "commit_message", "post_create_hook"}
-	}
-	if len(c.Instinct.Mint.Redaction.PIIPatterns) == 0 {
-		c.Instinct.Mint.Redaction.PIIPatterns = []string{"email", "api_key", "token", "password", "aws_secret"}
-	}
-
-	// Retrieve hard-limit fallbacks (round 3 AI #2 + AI #4). The
-	// host's budget aggregator trusts these caps to bound how much
-	// memory ever lands in a Claude prompt.
-	if c.Instinct.Retrieve.MaxResults <= 0 {
-		c.Instinct.Retrieve.MaxResults = 12
-	}
-	if c.Instinct.Retrieve.MaxTokens <= 0 {
-		c.Instinct.Retrieve.MaxTokens = 4000
-	}
-	if c.Instinct.Retrieve.MinConfidence <= 0 {
-		c.Instinct.Retrieve.MinConfidence = 0.55
-	}
-
-	// Source-aware confidence ceilings (round 1 AI #4 + round 2 AI #1).
-	if c.Instinct.Confidence.Sources == nil {
-		c.Instinct.Confidence.Sources = map[string]float64{
-			"explicit_user_feedback": 0.75,
-			"test_failure":           0.60,
-			"session_summary":        0.45,
-			"llm_only":               0.30,
-		}
-	}
-	if c.Instinct.Confidence.ReinforceDelta <= 0 {
-		c.Instinct.Confidence.ReinforceDelta = 0.10
-	}
-	if c.Instinct.Confidence.DecayAfterDays <= 0 {
-		c.Instinct.Confidence.DecayAfterDays = 30
-	}
-
-	if c.Instinct.PoisoningGuard.MaxActivePerScope <= 0 {
-		c.Instinct.PoisoningGuard.MaxActivePerScope = 200
-	}
-	if c.Instinct.PoisoningGuard.CandidateTTLDays <= 0 {
-		c.Instinct.PoisoningGuard.CandidateTTLDays = 14
-	}
-	if c.Instinct.PoisoningGuard.DedupeStrategy == "" {
-		c.Instinct.PoisoningGuard.DedupeStrategy = "sha256"
-	}
-
-	if !c.Instinct.PluginSecurity.UntrustedWarning {
-		c.Instinct.PluginSecurity.UntrustedWarning = true
-	}
-
-	if len(c.Export.Formats) == 0 {
-		c.Export.Formats = []string{"yaml", "jsonl"}
-	}
 }
 
 // migrateLegacy converts a v0.3 LegacyConfig (which also happens to
@@ -756,18 +327,31 @@ func (c *Config) applyInstinctDefaults() {
 func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 	var warnings []string
 	c := &Config{
-		SchemaVersion:  lc.SchemaVersion,
-		MonorepoRoot:   lc.MonorepoRoot,
-		Repositories:   lc.Repositories,
-		Engines:        lc.Engines,
-		Ports:          lc.Ports,
-		Registry:       lc.Registry,
-		Teardown:       lc.Teardown,
-		MCP:            lc.MCP,
-		Instinct:       lc.Instinct,
-		MemoryBackends: lc.MemoryBackends,
-		Export:         lc.Export,
-		QualityGates:   lc.QualityGates,
+		SchemaVersion: lc.SchemaVersion,
+		MonorepoRoot:  lc.MonorepoRoot,
+		Repositories:  lc.Repositories,
+		Engines:       lc.Engines,
+		Ports:         lc.Ports,
+		Registry:      lc.Registry,
+		Teardown:      lc.Teardown,
+		MCP:           lc.MCP,
+	}
+	// One line per retired section the file still carries. Written here
+	// rather than in deprecationWarnings() because only the legacy decode
+	// sees these nodes — Config has no field for them by design.
+	for _, r := range []struct {
+		node yaml.Node
+		key  string
+	}{
+		{lc.RetiredInstinct, "instinct"},
+		{lc.RetiredMemoryBackends, "memory_backends"},
+		{lc.RetiredExport, "export"},
+		{lc.RetiredQualityGates, "quality_gates"},
+	} {
+		if !r.node.IsZero() {
+			warnings = append(warnings, fmt.Sprintf(
+				"YAML section '%s:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)", r.key))
+		}
 	}
 	if lc.SchemaVersion == 1 {
 		warnings = append(warnings,

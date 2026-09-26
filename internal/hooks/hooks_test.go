@@ -3,12 +3,15 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/internal/termio"
 )
 
 // TestAllEvents_StableOrder pins the canonical event list so a
@@ -18,12 +21,6 @@ import (
 func TestAllEvents_StableOrder(t *testing.T) {
 	got := AllEvents()
 	want := []HookEvent{
-		EventPreToolUse,
-		EventPostToolUse,
-		EventUserPromptSubmit,
-		EventStop,
-		EventSessionEnd,
-		EventPreCompact,
 		EventWorktreeCreate,
 		EventWorktreeRemove,
 	}
@@ -44,7 +41,7 @@ func TestAllEvents_StableOrder(t *testing.T) {
 // harness should report it, not fail.
 func TestManager_Replay_NoHandlersWired(t *testing.T) {
 	m := New(filepath.Join(t.TempDir(), "settings.json"))
-	result, err := m.Replay(context.Background(), EventPreToolUse, []byte("{}"))
+	result, err := m.Replay(context.Background(), EventWorktreeCreate, []byte("{}"))
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -70,7 +67,7 @@ func TestManager_Replay_ExecutesWiredCommand(t *testing.T) {
 	// of the pipe wiring.
 	seed := `{
   "hooks": {
-    "PreToolUse": [
+    "WorktreeCreate": [
       {"hooks": [{"type": "command", "command": "cat"}]}
     ]
   }
@@ -80,8 +77,8 @@ func TestManager_Replay_ExecutesWiredCommand(t *testing.T) {
 		t.Fatalf("write seed: %v", err)
 	}
 	m := New(path)
-	payload := []byte(`{"hook_event_name":"PreToolUse","fixture":"smoke"}`)
-	result, err := m.Replay(context.Background(), EventPreToolUse, payload)
+	payload := []byte(`{"hook_event_name":"WorktreeCreate","fixture":"smoke"}`)
+	result, err := m.Replay(context.Background(), EventWorktreeCreate, payload)
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -97,7 +94,7 @@ func TestManager_Replay_ExecutesWiredCommand(t *testing.T) {
 // fixtures so a future patch that breaks the JSON schema gets
 // caught at unit-test time.
 func TestManager_Replay_FixturesParse(t *testing.T) {
-	for _, name := range []string{"PreToolUse.json", "PostToolUse.json", "SessionEnd.json"} {
+	for _, name := range []string{"WorktreeCreate.json", "WorktreeRemove.json"} {
 		data, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Errorf("read %s: %v", name, err)
@@ -191,7 +188,7 @@ func TestManager_Install_PreservesHandEdited(t *testing.T) {
 	path := filepath.Join(dir, ".claude", "settings.json")
 	handEdited := `{
   "hooks": {
-    "PreToolUse": [
+    "WorktreeCreate": [
       {"matcher": "Edit", "hooks": [{"type": "command", "command": "echo hand-edited"}]}
     ]
   }
@@ -211,9 +208,9 @@ func TestManager_Install_PreservesHandEdited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List after Install: %v", err)
 	}
-	groups := set[EventPreToolUse]
+	groups := set[EventWorktreeCreate]
 	if len(groups) != 2 {
-		t.Fatalf("PreToolUse: expected 2 groups (hand-edited + bough), got %d", len(groups))
+		t.Fatalf("WorktreeCreate: expected 2 groups (hand-edited + bough), got %d", len(groups))
 	}
 	foundHand := false
 	for _, g := range groups {
@@ -235,9 +232,9 @@ func TestManager_Install_PreservesHandEdited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List after Uninstall: %v", err)
 	}
-	groups = set[EventPreToolUse]
+	groups = set[EventWorktreeCreate]
 	if len(groups) != 1 {
-		t.Fatalf("PreToolUse after Uninstall: expected 1 group (hand-edited only), got %d", len(groups))
+		t.Fatalf("WorktreeCreate after Uninstall: expected 1 group (hand-edited only), got %d", len(groups))
 	}
 	if len(groups[0].Hooks) != 1 || groups[0].Hooks[0].Command != "echo hand-edited" {
 		t.Errorf("hand-edited entry not preserved after Uninstall: %+v", groups[0])
@@ -349,7 +346,7 @@ func TestManager_List_MissingFile(t *testing.T) {
 // against a fresh repo (= no settings.json, no observations.jsonl).
 func TestManager_Doctor_FreshState(t *testing.T) {
 	m := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
-	report, err := m.Doctor(context.Background(), "")
+	report, err := m.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -361,40 +358,6 @@ func TestManager_Doctor_FreshState(t *testing.T) {
 			t.Errorf("%s: expected unwired on fresh state, got bough=%v hand=%v",
 				st.Event, st.BoughInstalled, st.HandEdited)
 		}
-	}
-	if report.Cost.DataAvailable {
-		t.Errorf("Cost.DataAvailable: expected false on v0.7.0")
-	}
-}
-
-// TestManager_Doctor_ObserverFromPath is the v0.9.18 regression: doctor's
-// observer status comes from the obsPath the caller resolves (the homunculus
-// observations.jsonl), NOT a dead working-tree .bough/ probe. A real file with
-// N lines → Configured=true + LineCount=N; an empty path → not configured.
-func TestManager_Doctor_ObserverFromPath(t *testing.T) {
-	m := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
-
-	obs := filepath.Join(t.TempDir(), "observations.jsonl")
-	if err := os.WriteFile(obs, []byte("{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	report, err := m.Doctor(context.Background(), obs)
-	if err != nil {
-		t.Fatalf("Doctor: %v", err)
-	}
-	if !report.Observer.Configured {
-		t.Errorf("Observer.Configured = false, want true for an existing obs file")
-	}
-	if report.Observer.LineCount != 3 {
-		t.Errorf("Observer.LineCount = %d, want 3", report.Observer.LineCount)
-	}
-
-	empty, err := m.Doctor(context.Background(), "")
-	if err != nil {
-		t.Fatalf("Doctor(empty): %v", err)
-	}
-	if empty.Observer.Configured {
-		t.Errorf("Observer.Configured = true on empty path, want false")
 	}
 }
 
@@ -408,7 +371,7 @@ func TestManager_Doctor_AfterInstall(t *testing.T) {
 	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	report, err := m.Doctor(context.Background(), "")
+	report, err := m.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -437,7 +400,7 @@ func TestDoctorRender_DoubleFireNote(t *testing.T) {
 	if err := installed.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	report, err := installed.Doctor(context.Background(), "")
+	report, err := installed.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -464,7 +427,7 @@ func TestDoctorRender_DoubleFireNote(t *testing.T) {
 
 	// fresh repo (no bough hooks) -> note absent
 	fresh := New(filepath.Join(t.TempDir(), ".claude", "settings.json"))
-	freshReport, err := fresh.Doctor(context.Background(), "")
+	freshReport, err := fresh.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor(fresh): %v", err)
 	}
@@ -486,7 +449,7 @@ func TestManager_List_ParsesExistingHandEdited(t *testing.T) {
 	}
 	seed := `{
   "hooks": {
-    "PreToolUse": [
+    "WorktreeCreate": [
       {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "echo before-edit"}]},
       {"hooks": [{"type": "command", "command": "echo any-tool"}]}
     ]
@@ -501,7 +464,7 @@ func TestManager_List_ParsesExistingHandEdited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	groups := set[EventPreToolUse]
+	groups := set[EventWorktreeCreate]
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
@@ -576,7 +539,7 @@ func TestDoctorRender_PluginConflictIsDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := m.Doctor(context.Background(), "")
+	report, err := m.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -627,7 +590,7 @@ func TestDoctorRender_ConflictListsEveryPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := m.Doctor(context.Background(), "")
+	report, err := m.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -657,7 +620,7 @@ func TestDoctorRender_PluginOnlyIsNotAConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := New(path).Doctor(context.Background(), "")
+	report, err := New(path).Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -686,7 +649,7 @@ func TestDoctorRender_SectionRollup(t *testing.T) {
 	if err := clean.Install(context.Background(), "bough hook handle"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	report, err := clean.Doctor(context.Background(), "")
+	report, err := clean.Doctor(context.Background())
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
@@ -699,9 +662,9 @@ func TestDoctorRender_SectionRollup(t *testing.T) {
 	if strings.Contains(got, "[✗] Hook wiring") || strings.Contains(got, "[!] Hook wiring") {
 		t.Errorf("clean wiring must not show an alarm marker:\n%s", got)
 	}
-	// The Observer/Cost sections carry their own markers too.
-	if !strings.Contains(got, "] Observer") || !strings.Contains(got, "] Cost meter") {
-		t.Errorf("Observer/Cost sections lost their [x] headers:\n%s", got)
+	// The retired-wiring section carries its own marker too.
+	if !strings.Contains(got, "] Retired wiring") {
+		t.Errorf("Retired wiring section lost its [x] header:\n%s", got)
 	}
 
 	// Add a hook-bearing plugin on top → real double-fire → [✗].
@@ -710,6 +673,307 @@ func TestDoctorRender_SectionRollup(t *testing.T) {
 	report.Render(&conflict)
 	if !strings.Contains(conflict.String(), "[✗] Hook wiring") {
 		t.Errorf("a live double-fire should roll up to [✗]:\n%s", conflict.String())
+	}
+}
+
+// TestRetiredEvents_DisjointFromWired pins the two lists apart. An event
+// in both would make Install write a group and then prune it in the same
+// pass, leaving the operator with no wiring and no error.
+func TestRetiredEvents_DisjointFromWired(t *testing.T) {
+	want := []HookEvent{
+		RetiredEventPreToolUse,
+		RetiredEventPostToolUse,
+		RetiredEventUserPromptSubmit,
+		RetiredEventStop,
+		RetiredEventSessionEnd,
+		RetiredEventPreCompact,
+	}
+	got := RetiredEvents()
+	if len(got) != len(want) {
+		t.Fatalf("RetiredEvents length: got %d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("RetiredEvents[%d]: got %q want %q", i, got[i], want[i])
+		}
+	}
+	for _, r := range got {
+		for _, w := range AllEvents() {
+			if r == w {
+				t.Errorf("%q is both wired and retired", r)
+			}
+		}
+		if !IsRetired(string(r)) {
+			t.Errorf("IsRetired(%q) = false", r)
+		}
+		if IsWired(string(r)) {
+			t.Errorf("IsWired(%q) = true for a retired event", r)
+		}
+	}
+	for _, w := range AllEvents() {
+		if !IsWired(string(w)) {
+			t.Errorf("IsWired(%q) = false", w)
+		}
+	}
+}
+
+// TestManager_Install_PrunesRetiredWiring is the upgrade path. An
+// operator arriving from v0.27.0 has all eight events in settings.json;
+// one `bough claude hook install` must leave exactly the two that do
+// something, with the retired keys gone rather than emptied.
+func TestManager_Install_PrunesRetiredWiring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	var sb strings.Builder
+	sb.WriteString(`{"hooks":{`)
+	all := append(RetiredEvents(), AllEvents()...)
+	for i, e := range all {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `%q:[{"hooks":[{"type":"command","command":%q}]}]`,
+			string(e), "bough hook handle --event "+string(e))
+	}
+	sb.WriteString("}}")
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(set) != len(AllEvents()) {
+		t.Fatalf("after Install the file should hold only the wired events, got %d keys: %v", len(set), set)
+	}
+	for _, e := range RetiredEvents() {
+		if _, ok := set[e]; ok {
+			t.Errorf("%q survived Install (an empty array counts: the key must be gone)", e)
+		}
+	}
+	for _, e := range AllEvents() {
+		if len(set[e]) != 1 {
+			t.Errorf("%q: got %d groups want 1", e, len(set[e]))
+		}
+	}
+}
+
+// TestManager_Install_PreservesHandEditedOnRetiredEvent is the other
+// side of the prune. bough deletes what bough wrote; an entry the
+// operator (or another tool) put on a retired event is not bough's.
+func TestManager_Install_PreservesHandEditedOnRetiredEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{
+  "hooks": {
+    "PreToolUse": [
+      {"hooks": [{"type": "command", "command": "echo mine"}]},
+      {"hooks": [{"type": "command", "command": "bough hook handle --event PreToolUse"}]}
+    ],
+    "Stop": [
+      {"hooks": [
+        {"type": "command", "command": "echo also-mine"},
+        {"type": "command", "command": "bough hook handle --event Stop"}
+      ]}
+    ]
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	pre := set[RetiredEventPreToolUse]
+	if len(pre) != 1 || len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != "echo mine" {
+		t.Errorf("the operator's own PreToolUse entry must survive, got %+v", pre)
+	}
+	// A group that mixes one of each is left whole: splitting it would
+	// mean rewriting a group bough did not author.
+	stop := set[RetiredEventStop]
+	if len(stop) != 1 || len(stop[0].Hooks) != 2 {
+		t.Errorf("a mixed group must be preserved intact, got %+v", stop)
+	}
+}
+
+// TestManager_Doctor_ReportsRetiredWiring proves the operator can find
+// out the stale entries are there. Without this the prune is invisible
+// until someone diffs settings.json by hand.
+func TestManager_Doctor_ReportsRetiredWiring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"bough hook handle --event PreToolUse"}]}]}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	report, err := m.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if len(report.Retired) != 1 || report.Retired[0] != RetiredEventPreToolUse {
+		t.Fatalf("Retired: got %v want [PreToolUse]", report.Retired)
+	}
+	var sb strings.Builder
+	report.Render(&sb)
+	if !strings.Contains(sb.String(), "PreToolUse") {
+		t.Errorf("the render must name the stale event:\n%s", sb.String())
+	}
+
+	// After Install the section goes quiet — the same report, not a
+	// different code path, is what tells the operator they are done.
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	after, err := m.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor after Install: %v", err)
+	}
+	if len(after.Retired) != 0 {
+		t.Errorf("Install did not clear the stale wiring: %v", after.Retired)
+	}
+}
+
+// TestDoctorReport_RetiredAdviceWithHookPlugin pins the remedy when a
+// hook-bearing plugin is enabled: install would add a second WorktreeCreate
+// wiring, so the retired section must point at uninstall instead.
+func TestDoctorReport_RetiredAdviceWithHookPlugin(t *testing.T) {
+	r := &DoctorReport{Retired: []HookEvent{RetiredEventPreToolUse}, HookPlugins: []string{"bough-all@bough"}}
+	var sb strings.Builder
+	r.renderRetired(&sb, termio.NewStyler(&sb))
+	if !strings.Contains(sb.String(), "bough claude hook uninstall") || strings.Contains(sb.String(), "hook install") {
+		t.Errorf("with a hook plugin enabled the remedy must be uninstall:\n%s", sb.String())
+	}
+}
+
+// TestDoctorReport_RetiredAdviceWithoutHookPlugin: with no plugin visible in
+// this settings.json, install is the remedy, but a plugin at another scope
+// is invisible here, so the note must point at uninstall for that case.
+func TestDoctorReport_RetiredAdviceWithoutHookPlugin(t *testing.T) {
+	r := &DoctorReport{Retired: []HookEvent{RetiredEventPreToolUse}}
+	var sb strings.Builder
+	r.renderRetired(&sb, termio.NewStyler(&sb))
+	if !strings.Contains(sb.String(), "bough claude hook install` to prune") ||
+		!strings.Contains(sb.String(), "use `uninstall` instead if bough-hooks or bough-all is enabled at another scope") {
+		t.Errorf("without a visible plugin the remedy is install, with the cross-scope note:\n%s", sb.String())
+	}
+}
+
+// TestManager_Install_PreservesEntryTimeout pins the round-trip on a
+// retired event: Install prunes bough's groups there, and the operator's
+// own group must come back with its `"timeout": 300` intact.
+func TestManager_Install_PreservesEntryTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{
+  "hooks": {
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "bough hook handle --event PostToolUse", "timeout": 999}]},
+      {"matcher": "Write", "note": "keep", "hooks": [{"type": "command", "command": "prettier --write", "timeout": 300, "async": true}]}
+    ]
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	set, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	groups := set["PostToolUse"]
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("the operator's own group must survive, got %+v", groups)
+	}
+	got := groups[0].Hooks[0]
+	if got.Command != "prettier --write" || string(got.Extra["timeout"]) != "300" || string(got.Extra["async"]) != "true" {
+		t.Errorf("hand-written entry changed: %+v", got)
+	}
+	if string(groups[0].Extra["note"]) != `"keep"` {
+		t.Errorf("group key dropped from a hand-written group: %+v", groups[0])
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(data), `"timeout": 300`) {
+		t.Errorf("timeout is gone from the file bough wrote:\n%s", data)
+	}
+	// bough's own entries carry no timeout, so preserving the operator's
+	// must not copy it onto them.
+	if strings.Count(string(data), "timeout") != 1 {
+		t.Errorf("timeout leaked onto an entry bough wrote:\n%s", data)
+	}
+}
+
+// TestManager_Doctor_ReportsRetiredWiringInMixedGroup is the other half
+// of the prune contract. Install deliberately leaves a group that mixes
+// a retired bough entry with one the operator wrote, so that shim keeps
+// firing — and a doctor that reported only prunable groups would hand
+// out a clean bill while it does.
+func TestManager_Doctor_ReportsRetiredWiringInMixedGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seed := `{
+  "hooks": {
+    "Stop": [
+      {"hooks": [
+        {"type": "command", "command": "echo mine"},
+        {"type": "command", "command": "bough hook handle --event Stop"}
+      ]}
+    ]
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	m := New(path)
+	if err := m.Install(context.Background(), "bough hook handle"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	report, err := m.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if len(report.Retired) != 0 {
+		t.Errorf("a mixed group is not prunable, so it must not be reported as such: %v", report.Retired)
+	}
+	if len(report.RetiredManual) != 1 || report.RetiredManual[0] != RetiredEventStop {
+		t.Fatalf("RetiredManual: got %v want [Stop]", report.RetiredManual)
+	}
+	var sb strings.Builder
+	report.Render(&sb)
+	out := sb.String()
+	if strings.Contains(out, "none — settings.json wires only the events bough handles") {
+		t.Errorf("doctor reported a clean bill while a retired shim still fires:\n%s", out)
+	}
+	if !strings.Contains(out, "Stop") {
+		t.Errorf("the render must name the event that keeps firing:\n%s", out)
 	}
 }
 

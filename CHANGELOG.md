@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **BREAKING: the continuous-learning loop is gone; bough is a
+  per-worktree isolation tool again.** v0.9.0 through v0.27.0 layered
+  an agent-memory subsystem on top of the isolation core — session
+  observations, confidence-scored instincts minted through
+  `claude --print`, a five-gate clustering pipeline that emitted
+  skills / agents / commands, and six extra Claude Code hook events.
+  All of it is removed. Learning is a Claude Code plugin's job, and an
+  isolation tool has no business shipping a second implementation of
+  one. Non-test Go shrank from 29,014 lines to 14,113.
+
+  **Hook wiring is two events, not eight.** `WorktreeCreate` and
+  `WorktreeRemove` stay; `PreToolUse`, `PostToolUse`,
+  `UserPromptSubmit`, `Stop`, `SessionEnd` and `PreCompact` are
+  retired. Wiring left in `settings.json` still runs and still exits 0,
+  printing one line on stderr:
+
+  ```text
+  [bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune it from settings.json, or `claude plugin update bough-hooks` (or bough-all) if the wiring comes from the plugin
+  ```
+
+  One `bough claude hook install` deletes bough's
+  own entries for all six, empty event keys included; a hand-written
+  entry on a retired event, and a group that mixes one with bough's,
+  are left alone — the rule `uninstall` has always followed.
+
+  **An unknown `--event` is now an error.** `bough hook handle --event
+  PreToolUsee` used to exit 0 with empty stdout, which the host reports
+  two steps from its cause as "hook succeeded but returned no worktree
+  path". It now fails with `unknown hook event "PreToolUsee" (wired:
+  WorktreeCreate, WorktreeRemove)`.
+
+  **Four `.bough.yaml` sections are retired:** `instinct:`,
+  `quality_gates:`, `memory_backends:` and `export:`. They parse, are
+  discarded, and each prints `bough: WARNING YAML section 'instinct:'
+  is retired and does nothing …` once per load. **They stop parsing in
+  v0.29.0.** The strict decode is otherwise unchanged: a misspelled
+  key is still a hard error.
+
+  Gone with it: `bough instinct` (`status` / `list` / `show` /
+  `promote` / `observer` / `evolve` / `import` / `verdict`), `bough
+  ops`, the `bough observer` / `evolve` / `ecc` aliases, the hidden
+  `inject-context` / `session-end` / `preserve-instincts` /
+  `session-evolve-claudemd` verbs, the `/bough:instinct-*` and
+  `/bough:evolve` slash commands, `bough hook handle --out`, eleven
+  `internal/` packages, and the dead `pkg/schema`. `bough create` no
+  longer symlinks a worktree's `.claude/{skills,agents,commands}` at
+  the monorepo copy — `CLAUDE.md`, which was never part of the loop,
+  still is.
+
+  `bough claude doctor` lost its continuous-learning block and gained a
+  **Retired state** section naming leftover wiring, leftover
+  `.bough.yaml` sections, and `~/.local/share/bough-homunculus` if it
+  is still on disk. bough never writes to that directory again (doctor
+  only reads its `observer.pid` files) and will not delete it. Copies of
+  the four retired slash commands made by `bough claude command install`
+  must be deleted by hand; see the migration guide.
+
+  **Stop a running observer daemon before upgrading** (`bough instinct
+  observer stop` on v0.27.0): v0.28.0 has no command to stop it.
+
+  Pin **v0.27.0** to keep the loop. `docs/attic/` keeps the design
+  notes; `docs/MIGRATION-v0.27-to-v0.28.md` has the upgrade steps.
+
 ## v0.27.0
 
 ### Removed

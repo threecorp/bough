@@ -79,11 +79,7 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	identityRoot, err := resolveIdentityRoot(in.Cwd)
-	if err != nil {
-		return err
-	}
-	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, identityRoot, in.Name, false, false)
+	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, false)
 }
 
 // resolveRemoveTarget maps a (worktreePath OR name) removal request to
@@ -181,32 +177,6 @@ func loadConfigAndRoot(cmd *cobra.Command, cwdHint string) (string, *config.Conf
 		}
 	}
 	return abs, cfg, nil
-}
-
-// resolveIdentityRoot returns the un-relocated monorepo root — the directory
-// holding .bough.yaml (or its worktree ancestor) — WITHOUT applying the
-// cfg.MonorepoRoot relocation that loadConfigAndRoot layers on top of it.
-// This is the same root every homunculus identity resolver keys on (evolve /
-// observer / inject / the WorktreeCreate hook all resolve via
-// resolveMonorepoRoot(cwd)); project-scoped skill/agent/command deploy and
-// worktree linking must anchor on it too. Using loadConfigAndRoot's
-// (possibly relocated) root instead silently diverges `bough evolve`'s
-// deploy target from `bough create` / `bough backfill`'s link source under a
-// relocating monorepo_root, so the worktree session loads zero evolved
-// artifacts even though `bough evolve` reports having written them.
-func resolveIdentityRoot(cwdHint string) (string, error) {
-	if cwdHint == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("getwd: %w", err)
-		}
-		cwdHint = cwd
-	}
-	abs, err := filepath.Abs(cwdHint)
-	if err != nil {
-		return "", fmt.Errorf("abs %s: %w", cwdHint, err)
-	}
-	return resolveMonorepoRoot(abs), nil
 }
 
 // rangeLen normalises a closed [low, high] port range into the half-

@@ -1,8 +1,16 @@
 {
   "name": "bough-hooks",
-  "description": "bough's observe → instinct → inject → evolve loop as Claude Code hooks. Install at project scope so it observes only the repo you choose.",
-  "author": { "name": "ikeikeikeike", "email": "jp.ne.co.jp@gmail.com" },
+  "description": "bough's WorktreeCreate / WorktreeRemove handlers as Claude Code hooks — what makes `claude --worktree` build and tear down an isolated environment. Install at project scope so it acts only on the repo you choose.",
+  "author": {
+    "name": "ikeikeikeike",
+    "email": "jp.ne.co.jp@gmail.com"
+  },
   "homepage": "https://github.com/threecorp/bough",
   "repository": "https://github.com/threecorp/bough",
-  "keywords": ["bough", "hooks", "observability", "continuous-learning"]
+  "keywords": [
+    "bough",
+    "hooks",
+    "worktree",
+    "isolation"
+  ]
 }

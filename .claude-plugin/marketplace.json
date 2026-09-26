@@ -1,6 +1,6 @@
 {
   "name": "bough",
-  "description": "bough — per-worktree isolated dev environments + continuous-learning instincts, driven from Claude Code.",
+  "description": "bough — per-worktree isolated dev environments for monorepos, driven from Claude Code.",
   "owner": {
     "name": "ikeikeikeike",
     "email": "jp.ne.co.jp@gmail.com"
@@ -9,17 +9,17 @@
     {
       "name": "bough",
       "source": "./",
-      "description": "Commands + skill only, no hooks: /bough:* slash commands and the using-bough skill. Inert until invoked, so it is safe at any scope. Pair with `bough claude hook install` when you want observation."
+      "description": "Commands + skill only, no hooks: /bough:* slash commands and the using-bough skill. Inert until invoked, so it is safe at any scope. Pair with `bough claude hook install` when you want `claude --worktree` to reach bough."
     },
     {
       "name": "bough-hooks",
       "source": "./claude-plugins/bough-hooks",
-      "description": "Hooks only: bough's observe -> instinct -> inject -> evolve loop plus WorktreeCreate/Remove. Install with --scope project so it observes just that repo."
+      "description": "Hooks only: the WorktreeCreate / WorktreeRemove pair that makes `claude --worktree` build and tear down an isolated environment. Install with --scope project to keep it to that repo."
     },
     {
       "name": "bough-all",
       "source": "./claude-plugins/bough-all",
-      "description": "Everything: /bough:* commands, the using-bough skill, and the hook loop. Install with --scope project to keep the hooks to one repo."
+      "description": "Everything: /bough:* commands, the using-bough skill, and the WorktreeCreate / WorktreeRemove hooks. Install with --scope project to keep the hooks to one repo."
     }
   ]
 }

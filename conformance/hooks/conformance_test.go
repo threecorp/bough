@@ -1,20 +1,20 @@
-// Package hooks is the v0.7.0 Bootstrap safety floor end-to-end
-// test. It builds the actual bough binary, then drives it through
-// the install → handle → bootstrap → doctor → uninstall sequence
-// against a tmpdir-rooted .claude/settings.json + .bough/. The
-// unit tests in internal/hooks pin the per-method behaviour; this
-// suite proves the chain works as a real CLI user would invoke it.
+// Package hooks is the real-binary end-to-end test for the hook
+// lifecycle. It builds the actual bough binary, then drives it through
+// install → handle → doctor → uninstall against a tmpdir-rooted
+// .claude/settings.json. The unit tests in internal/hooks pin the
+// per-method behaviour; this suite proves the chain works as a real CLI
+// user would invoke it.
 //
 // Round 5 review insistence: hook auto-wire without a real-binary
-// integration check is exactly how regressions ship. The
-// subprocess approach (versus an in-process call) is the same
-// pattern conformance/mcp/subprocess_test.go uses for the MCP
-// stdio production path.
+// integration check is exactly how regressions ship. The subprocess
+// approach (versus an in-process call) is the same pattern the other
+// conformance suites use for production stdio paths.
 package hooks_test
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,30 +22,21 @@ import (
 	"testing"
 )
 
-// TestHooks_EndToEnd_InstallHandleBootstrapDoctorUninstall walks
-// the canonical v0.7.0 user flow: install hooks, capture an
-// observation via `bough hook handle`, generate a bootstrap dry-
-// run, render the doctor report, then uninstall. Each step's
-// stdout / artefacts are inspected so a future patch breaking any
-// piece of the chain fails this test.
-func TestHooks_EndToEnd_InstallHandleBootstrapDoctorUninstall(t *testing.T) {
+// TestHooks_EndToEnd_InstallHandleDoctorUninstall walks the canonical
+// user flow: install the wiring, drive retired and unknown events
+// through `bough hook handle`, render the doctor report, prune a
+// v0.27.0 settings.json, then uninstall. The two worktree events need a
+// monorepo to act on, so they are driven where one exists:
+// internal/cli/worktree_hook_test.go and scripts/entrypoint-smoke.sh.
+func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	bin := buildBoughBinary(t)
 	workdir := t.TempDir()
-	// Pin the homunculus the subprocess writes to into a tmpdir. Without
-	// this the real CLI resolves ~/.local/share/bough-homunculus and every
-	// `hook handle` here upserts a TestHooks_EndToEnd_* project into the
-	// operator's live registry (found via dogfooding: the registry had a
-	// dozen /tmp/.../001 turds from past test runs).
-	homDir := t.TempDir()
 
 	run := func(t *testing.T, label string, stdin string, args ...string) (string, string) {
 		t.Helper()
 		cmd := exec.Command(bin, args...)
 		cmd.Dir = workdir
-		// BOUGH_HOMUNCULUS_DIR is NewLayout()'s highest-precedence
-		// override (see internal/homunculus/layout.go), so this keeps the
-		// subprocess corpus inside homDir.
-		cmd.Env = append(os.Environ(), "BOUGH_HOMUNCULUS_DIR="+homDir)
+		cmd.Env = os.Environ()
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -59,68 +50,105 @@ func TestHooks_EndToEnd_InstallHandleBootstrapDoctorUninstall(t *testing.T) {
 	}
 
 	// install
-	stdout, _ := run(t, "hook install", "", "hook", "install")
-	_ = stdout
+	run(t, "hook install", "", "hook", "install")
 	settingsPath := filepath.Join(workdir, ".claude", "settings.json")
 	if _, err := os.Stat(settingsPath); err != nil {
 		t.Fatalf("settings.json not created at %s: %v", settingsPath, err)
 	}
 
-	// list shows the eight events
-	stdout, _ = run(t, "hook list", "", "hook", "list")
-	wantedEvents := []string{
-		"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop",
-		"SessionEnd", "PreCompact", "WorktreeCreate", "WorktreeRemove",
-	}
-	for _, event := range wantedEvents {
+	// list shows the two events bough handles, and nothing else.
+	stdout, _ := run(t, "hook list", "", "hook", "list")
+	for _, event := range []string{"WorktreeCreate", "WorktreeRemove"} {
 		if !strings.Contains(stdout, event) {
 			t.Errorf("hook list missing %s: %s", event, stdout)
 		}
 	}
-
-	// hook handle captures two observations
-	// v0.9.10 (ECC model): `hook handle` defaults to the central
-	// homunculus, never the working tree. Pass --out to assert the
-	// append mechanism against a known path in the test workdir; the
-	// default homunculus routing is unit-tested in internal/cli.
-	obsPath := filepath.Join(workdir, ".bough", "observations.jsonl")
-	run(t, "hook handle PreToolUse",
-		`{"hook_event_name":"PreToolUse","tool_name":"Edit"}`,
-		"hook", "handle", "--event", "PreToolUse", "--out", obsPath,
-	)
-	run(t, "hook handle SessionEnd",
-		`{"hook_event_name":"SessionEnd","reason":"logout"}`,
-		"hook", "handle", "--event", "SessionEnd", "--out", obsPath,
-	)
-	obsData, err := os.ReadFile(obsPath)
-	if err != nil {
-		t.Fatalf("observations.jsonl missing: %v", err)
-	}
-	if got := bytes.Count(obsData, []byte("\n")); got != 2 {
-		t.Errorf("observations.jsonl line count: got %d want 2", got)
+	for _, retired := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"} {
+		if strings.Contains(stdout, retired) {
+			t.Errorf("hook list still wires the retired event %s: %s", retired, stdout)
+		}
 	}
 
-	// v0.9 surface: observer run-once --dry-run renders the
-	// prompt without spawning `claude --print`. The legacy
-	// v0.7-v0.8 `bootstrap --dry-run` writes-Markdown surface is
-	// gone (= chore(v0.9): reset). The dry-run is enough to
-	// verify the install → handle pipeline lands observations
-	// where the observer expects them.
-	stdout, _ = run(t, "observer run-once --dry-run", "", "observer", "run-once", "--dry-run")
-	if !strings.Contains(stdout, "rendered prompt") && !strings.Contains(stdout, "nothing to extract") {
-		t.Errorf("observer run-once output missing expected marker: %s", stdout)
+	// A retired event exits 0 and writes nothing to stdout. This is what
+	// keeps an un-updated settings.json or a cached plugin manifest from
+	// failing every tool call until the operator re-runs install.
+	for _, retired := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"} {
+		out, errOut := run(t, "hook handle "+retired,
+			`{"hook_event_name":"`+retired+`","tool_name":"Edit"}`,
+			"hook", "handle", "--event", retired)
+		if strings.TrimSpace(out) != "" {
+			t.Errorf("a retired event must print nothing to stdout (it is folded into the model's context), got: %q", out)
+		}
+		if !strings.Contains(errOut, "retired") {
+			t.Errorf("a retired event should say so on stderr, got: %q", errOut)
+		}
 	}
 
-	// doctor reports the wired state + observer line count. The flutter-doctor
-	// redesign moved the per-event label from "bough installed" to a "[✓] Hook
-	// wiring … (N/N wired)" header plus a "✓ <Event> bough" line; assert the
-	// header's wired count, which is the same "bough wired these" claim.
+	// An event that is neither wired nor retired is an error. Exiting 0
+	// here is what a host reports as "hook succeeded but returned no
+	// worktree path", with nothing naming the typo.
+	bogus := exec.Command(bin, "hook", "handle", "--event", "WorktreeCreat")
+	bogus.Dir = workdir
+	bogus.Stdin = strings.NewReader("{}")
+	if err := bogus.Run(); err == nil {
+		t.Error("a misspelled --event must fail rather than exit 0 with empty stdout")
+	}
+
+	// doctor reports the wired state.
 	stdout, _ = run(t, "doctor", "", "doctor")
-	if !strings.Contains(stdout, "Hook wiring") || !strings.Contains(stdout, "8/8 wired") {
+	if !strings.Contains(stdout, "Hook wiring") || !strings.Contains(stdout, "2/2 wired") {
 		t.Errorf("doctor missing the wired-state header: %s", stdout)
 	}
-	if !strings.Contains(stdout, "observations.jsonl") {
-		t.Errorf("doctor missing observations.jsonl reference: %s", stdout)
+
+	// The upgrade path an operator actually walks: a settings.json left
+	// over from v0.27.0 wires all eight events. One install must leave
+	// exactly the two that do something. Seeded with the full set rather
+	// than a sample, so a retired event that stops being pruned cannot
+	// hide in the half the fixture skipped.
+	staleEvents := []string{
+		"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact",
+		"WorktreeCreate", "WorktreeRemove",
+	}
+	var stale strings.Builder
+	stale.WriteString(`{"hooks":{`)
+	for i, e := range staleEvents {
+		if i > 0 {
+			stale.WriteString(",")
+		}
+		fmt.Fprintf(&stale, `%q:[{"hooks":[{"type":"command","command":"bough hook handle --event %s"}]}]`, e, e)
+	}
+	stale.WriteString("}}")
+	if err := os.WriteFile(settingsPath, []byte(stale.String()), 0o644); err != nil {
+		t.Fatalf("seed stale settings.json: %v", err)
+	}
+	listOut, _ := run(t, "hook list on stale wiring", "", "hook", "list")
+	doctorOut, _ := run(t, "doctor on stale wiring", "", "doctor")
+	for _, e := range staleEvents[:6] { // the six retired ones
+		if !strings.Contains(listOut, e) {
+			t.Errorf("hook list should show stale retired %s until install prunes it: %s", e, listOut)
+		}
+		if !strings.Contains(doctorOut, e) {
+			t.Errorf("doctor should name the stale retired %s: %s", e, doctorOut)
+		}
+	}
+	run(t, "hook install over stale wiring", "", "hook", "install")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	var doc struct {
+		Hooks map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse settings.json: %v", err)
+	}
+	if len(doc.Hooks) != 2 {
+		t.Errorf("install should leave exactly the two wired events, got %d: %s", len(doc.Hooks), data)
+	}
+	for _, retired := range staleEvents[:6] {
+		if _, ok := doc.Hooks[retired]; ok {
+			t.Errorf("%s survived install (an empty array counts — the key must be gone): %s", retired, data)
+		}
 	}
 
 	// uninstall + list back to empty
@@ -129,10 +157,7 @@ func TestHooks_EndToEnd_InstallHandleBootstrapDoctorUninstall(t *testing.T) {
 	if !strings.Contains(stdout, "(no hooks wired") {
 		t.Errorf("post-uninstall list should report empty: %s", stdout)
 	}
-
-	// settings.json should round-trip to `{}` (= no hand-edited
-	// content was seeded, so uninstall drops the hooks key entirely).
-	data, err := os.ReadFile(settingsPath)
+	data, err = os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read settings.json after uninstall: %v", err)
 	}

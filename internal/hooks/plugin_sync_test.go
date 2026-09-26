@@ -150,7 +150,7 @@ func TestDiffPluginHooksDetectsDrift(t *testing.T) {
 
 	t.Run("missing event", func(t *testing.T) {
 		m := canonical()
-		delete(m, EventPreCompact)
+		delete(m, EventWorktreeRemove)
 		if len(diffPluginHooks(m)) == 0 {
 			t.Fatal("expected a missing event to be reported")
 		}
@@ -158,7 +158,7 @@ func TestDiffPluginHooksDetectsDrift(t *testing.T) {
 
 	t.Run("wrong command", func(t *testing.T) {
 		m := canonical()
-		m[EventUserPromptSubmit] = []HookGroup{{Hooks: []HookEntry{{Type: "command", Command: "bough hook handle --event Bogus"}}}}
+		m[EventWorktreeCreate] = []HookGroup{{Hooks: []HookEntry{{Type: "command", Command: "bough hook handle --event Bogus"}}}}
 		if len(diffPluginHooks(m)) == 0 {
 			t.Fatal("expected a wrong command to be reported")
 		}

@@ -1,94 +1,47 @@
 # bough roadmap
 
-Round 3 external review (June 2026) settled the v0.5 → v0.6 → v0.7+ shape. This document is the canonical reference; the release CHANGELOG ties specific commits back to each item.
+bough bootstraps one isolated development environment per git
+worktree: the worktree itself, an engine set of its own, deterministic
+ports, a rendered `.env.local` in every sub-repo, and the two
+`claude --worktree` hooks that drive it. This document is the
+canonical reference for that scope; the release CHANGELOG ties
+specific commits back to each item.
 
-## v0.9.2 — Full loop (shipped 2026-06-25)
+## v0.28.0 — Isolation only (2026-09)
 
-Closes the continuous-learning loop. v0.9.0 observed, v0.9.1
-evolved; v0.9.2 injects what was learned into the next session,
-reinforces useful instincts at session end, and migrates existing
-ECC corpora.
+v0.9.0 through v0.27.0 carried a second, unrelated subsystem: a
+continuous-learning loop (observe → instinct → judge → evolve →
+inject) with its own corpus under `~/.local/share/bough-homunculus`,
+its own `claude --print` calls, and six extra Claude Code hook events.
 
-- ✅ `bough inject-context` — UserPromptSubmit hook, confidence-
-  ranked instinct block (~9.5 KB cap), pure filesystem. Wired into
-  `bough hook handle --event UserPromptSubmit` so one entry records
-  + injects.
-- ✅ `bough session-end` — SessionEnd hook, reinforces exercised
-  instincts one confidence band up + appends eval/scores.jsonl.
-- ✅ `bough preserve-instincts` — PreCompact hook, MEMORY.md top-5
-  snapshot.
-- ✅ `bough observer start/stop/status` — opt-in background daemon
-  (PID-file lifecycle, Setsid detach, no systemd/launchd).
-- ✅ `bough ecc import` — migrate an existing ECC corpus into
-  bough's namespace (dry-run default; --apply copies).
+v0.28.0 removes all of it. Learning is a Claude Code plugin's job, and
+an isolation tool has no business shipping a second implementation of
+one. What remains is the isolation core, which is what bough was for
+before v0.9.0 and what it is used for today.
 
-The `claude --worktree X` → observe → evolve → inject loop is now
-end-to-end. The v0.9 ECC port is complete.
+Concretely, v0.28.0:
 
-## v0.9.1 — Evolve pipeline (shipped 2026-06-25)
+- wires two hook events (`WorktreeCreate`, `WorktreeRemove`) instead
+  of eight, and prunes the other six out of `settings.json` on the
+  next `bough claude hook install`;
+- drops the `instinct:`, `quality_gates:`, `memory_backends:` and
+  `export:` sections from `.bough.yaml` — they are read and warned
+  about for one minor series, then stop parsing in v0.29.0;
+- leaves `~/.local/share/bough-homunculus` on disk untouched (doctor
+  only reads its `observer.pid` files); deleting it is the operator's call.
 
-The evolve half of the ECC port. v0.9.0 shipped the observer (=
-instinct extraction); v0.9.1 ships the five-gate clustering pipeline
-that turns instincts into skills / agents / commands.
+`docs/attic/` keeps the design notes. Pin `v0.27.0` to keep the loop.
+`docs/MIGRATION-v0.27-to-v0.28.md` has the upgrade steps.
 
-- ✅ `bough evolve` (preview, no LLM) / `bough evolve --generate`
-  (GATE 5 + emit). The ECC `/evolve-skill-manual-v3` UX.
-- ✅ `internal/evolve/` — tokenize / Jaccard / coverage, connected-
-  component clustering, the four mechanical gates (ECC v3 verbatim:
-  MEMBER_MIN=2 / COH_MIN=0.20 / LEXICON_COVERAGE_MAX=0.55 /
-  REL_ISOLATION_MIN=0.40), GATE 5 LLM judge via `claude --print`,
-  cluster-labels.json with the sacred-string rule + backup, and the
-  SKILL.md / agent / command emitters.
-- ✅ GATE 5 verdict routing: PASS mints a fresh label, DOUBT reuses
-  the nearest prior label, FAIL rejects.
-- ✅ Agent eligibility (cluster >= 3 + avg conf >= 0.75) + command
-  eligibility (workflow domain + conf >= 0.70), ECC thresholds.
-- ✅ `claudecli.Provider.GenerateRaw` for pre-rendered prompts.
+## v0.27.0 — Docker is the only engine backend (2026-09)
 
-v0.9.2 (= upcoming): `bough inject-context` UserPromptSubmit hook +
-SessionEnd handlers + PreCompact + optional observer daemon +
-`bough ecc import`.
-
-## v0.9.0 — ECC verbatim port (shipped 2026-06-23)
-
-The "reset to the operator's vision" release. v0.5-v0.8 accreted
-memory backends, capability compilers, MCP server, evaluator
-adapters, judges, ECC import helpers — none of which the operator's
-vision needs. v0.9 deletes them and ships threecorp ECC's
-continuous-learning architecture verbatim in Go.
-
-Mechanism: `claude --print` subprocess. No Anthropic API call. LLM
-cost stays inside the operator's existing Claude Code subscription.
-
-- ✅ `internal/homunculus/` — `~/.local/share/bough-homunculus/`
-  layout, project_id (= sha256[:12] of git remote URL stripped),
-  atomic registry, instinct file IO with filename ↔ id enforcement.
-- ✅ `internal/observe/` — `observations.jsonl` writer (O_APPEND
-  per-line atomic) + Anthropic env scrub.
-- ✅ `internal/prompts/` — //go:embed defaults + 3-layer override
-  resolver. Template.Version is sha256[:12] of body for cache
-  pinning.
-- ✅ `internal/provider/claudecli/` — Option A′ subprocess provider
-  + Limiter (10 calls/session, 30/hour, 3-failure breaker, 15min
-  cooldown).
-- ✅ `bough observer run-once` — synchronous single-shot extraction
-  pass with `--dry-run` preview.
-- ✅ `bough instinct status / list / show` — read-side corpus
-  inspection (5-bucket confidence histogram, filterable list).
-- ✅ `bough doctor` — continuous-learning posture block (claude CLI
-  on PATH, Anthropic env scrub warning, Limiter defaults,
-  homunculus root).
-
-v0.9.1 + v0.9.2 (= upcoming):
-
-- 5-gate evolve pipeline (= ECC v3 verbatim, MEMBER_MIN=2 / COH_MIN
-  =0.20 / LEXICON_COVERAGE_MAX=0.55 / REL_ISOLATION_MIN=0.40) +
-  GATE 5 LLM judge + cluster-labels.json + SKILL.md / agent /
-  command emit.
-- `bough inject-context` UserPromptSubmit hook (9.5KB cap +
-  confidence-sorted LRU) + SessionEnd handlers (summary /
-  evaluate / evolve-claudemd) + PreCompact + optional observer
-  daemon + `bough ecc import` migration.
+The Nix / services-flake engine backend is gone: it could not start
+Elasticsearch, gave Postgres different credentials than the container
+path, and no CI job ever ran it. `engines[].backend` accepts only
+`docker` and may be omitted. Each engine honours `engines[].version` or
+refuses it at `Up`, each plugin registers its backend in `New()`, and
+`bough remove` deletes nothing while an engine port still answers.
+The CHANGELOG has the detail.
 
 ## v0.5.0 - v0.8.0 — Superseded memory-orchestration surface
 
@@ -99,23 +52,21 @@ into memory / rule / skill / command / tool / agent / evaluator
 artifacts, a read-only `bough-mcp-server`, `SkillEvaluator` adapters
 (GEPA / TextGrad / MUSE / SkillAudit), and a "v0.7 Bootstrap" plan for
 LLM-judged clustering on top of it. v0.9.0 reset all of it in favour
-of the ECC-verbatim continuous-learning port described above; none of
-it shipped past v0.8.1. See CHANGELOG.md for the release-by-release
-detail if you need the history.
+of the continuous-learning port described above; none of it shipped
+past v0.8.1, and v0.28.0 retired the port too. See CHANGELOG.md for
+the release-by-release detail if you need the history.
 
 ## What bough deliberately does not do
 
-These are durable non-goals, independent of which continuous-learning
-design is current:
+These are durable non-goals:
 
+- Agent memory of any shape — instinct corpora, observation logs,
+  prompt injection into the next session. Retired in v0.28.0, and a
+  Claude Code plugin's job rather than an isolation tool's.
 - Weight updates (SEAL / SFT / RLHF) — a model-tier concern, not
   something an orchestration layer does.
 - Proprietary vendor memory (OpenAI Memory, Anthropic Memory) —
   avoids vendor lock-in.
-- Forcing every instinct through a single `skill → command → agent`
-  chain — `bough evolve` clusters an instinct into whichever kind
-  (skill / command / agent) its content warrants, not a chain every
-  instinct must pass through.
 
-bough is a per-worktree development-environment orchestrator, not an
-agent memory system; these non-goals keep it from drifting into either.
+bough is a per-worktree development-environment orchestrator. These
+non-goals are what keep it one.
