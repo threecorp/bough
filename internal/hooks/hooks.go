@@ -773,8 +773,14 @@ func (r *DoctorReport) renderRetired(w io.Writer, st termio.Styler) {
 	if len(r.Retired) > 0 {
 		fmt.Fprintf(w, "    %s %s still wired to bough and does nothing\n",
 			st.Mark(termio.StatusWarn), eventNames(r.Retired))
-		fmt.Fprintf(w, "    %s run `bough claude hook install` to prune it\n",
-			st.Mark(termio.StatusNeutral))
+		// With a hook-bearing plugin enabled, install would add a second
+		// WorktreeCreate wiring; uninstall prunes the same groups without it.
+		fix := "install"
+		if len(r.HookPlugins) > 0 {
+			fix = "uninstall"
+		}
+		fmt.Fprintf(w, "    %s run `bough claude hook %s` to prune it\n",
+			st.Mark(termio.StatusNeutral), fix)
 	}
 	// Named apart because install will NOT clear these: the bough entry
 	// shares a group with one the operator wrote, and bough does not

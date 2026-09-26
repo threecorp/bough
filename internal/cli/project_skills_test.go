@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestEnsureSymlink covers the shared idempotent-symlink helper used by the
-// project-scoped artifact deploy + the worktree artifact link.
+// TestEnsureSymlink covers the idempotent-symlink helper that links a
+// worktree's CLAUDE.md to the monorepo root's.
 func TestEnsureSymlink(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "target")

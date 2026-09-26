@@ -121,6 +121,10 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(stale.String()), 0o644); err != nil {
 		t.Fatalf("seed stale settings.json: %v", err)
 	}
+	stdout, _ = run(t, "hook list on stale wiring", "", "hook", "list")
+	if !strings.Contains(stdout, "PreToolUse") {
+		t.Errorf("hook list should show stale retired wiring until install prunes it: %s", stdout)
+	}
 	stdout, _ = run(t, "doctor on stale wiring", "", "doctor")
 	if !strings.Contains(stdout, "PreToolUse") {
 		t.Errorf("doctor should name the stale retired wiring: %s", stdout)

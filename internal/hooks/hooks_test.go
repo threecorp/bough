@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/internal/termio"
 )
 
 // TestAllEvents_StableOrder pins the canonical event list so a
@@ -845,6 +847,18 @@ func TestManager_Doctor_ReportsRetiredWiring(t *testing.T) {
 	}
 	if len(after.Retired) != 0 {
 		t.Errorf("Install did not clear the stale wiring: %v", after.Retired)
+	}
+}
+
+// TestDoctorReport_RetiredAdviceWithHookPlugin pins the remedy when a
+// hook-bearing plugin is enabled: install would add a second WorktreeCreate
+// wiring, so the retired section must point at uninstall instead.
+func TestDoctorReport_RetiredAdviceWithHookPlugin(t *testing.T) {
+	r := &DoctorReport{Retired: []HookEvent{RetiredEventPreToolUse}, HookPlugins: []string{"bough-all@bough"}}
+	var sb strings.Builder
+	r.renderRetired(&sb, termio.NewStyler(&sb))
+	if !strings.Contains(sb.String(), "bough claude hook uninstall") || strings.Contains(sb.String(), "hook install") {
+		t.Errorf("with a hook plugin enabled the remedy must be uninstall:\n%s", sb.String())
 	}
 }
 

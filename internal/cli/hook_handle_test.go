@@ -6,10 +6,8 @@ import (
 	"testing"
 )
 
-// TestResolveMonorepoRoot covers the v0.9.10 ECC-model routing: every
-// sub-repo / worktree session must pool into the one monorepo project
-// (the dir holding .bough.yaml), so observations land in a single
-// homunculus project instead of fragmenting a .bough/ into every cwd.
+// TestResolveMonorepoRoot covers how a hook session finds its monorepo: every
+// sub-repo and worktree path resolves to the one dir holding .bough.yaml.
 func TestResolveMonorepoRoot(t *testing.T) {
 	// a worktree path resolves to the monorepo parent (before /.worktrees/),
 	// verified by the .bough.yaml marker on that parent (v0.9.18).

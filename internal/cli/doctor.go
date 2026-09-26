@@ -5,9 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ikeikeikeike/bough/internal/termio"
 )
@@ -56,6 +59,10 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 	if dir := retiredCorpusDir(); dir != "" {
 		notes = append(notes, fmt.Sprintf(
 			"%s holds the instinct corpus from v0.27.0 and earlier; bough no longer reads or writes it", dir))
+		for _, pid := range liveObserverPIDs(dir) {
+			notes = append(notes, fmt.Sprintf(
+				"an observer daemon from v0.27.0 or earlier is still running (pid %d); stop it with `pkill -f 'observer _run-daemon'`", pid))
+		}
 	}
 
 	if len(notes) == 0 {
@@ -71,28 +78,22 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 }
 
 // retiredConfigKeys reports which retired sections a .bough.yaml still
-// carries, in a fixed order. Matched at the top level only (a key at
-// column 0), so a nested `export:` belonging to some other section is
-// not reported: the file is scanned as text because the loader
-// deliberately drops these keys on the floor.
+// carries, in a fixed order. The file is parsed as YAML rather than scanned
+// as text, so every spelling the loader accepts (`"instinct":`, `instinct :`,
+// a flow mapping) is found, and a nested key of the same name is not.
 func retiredConfigKeys(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	lines := splitLines(string(data))
+	var top map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil
+	}
 	var found []string
 	for _, key := range []string{"instinct", "memory_backends", "export", "quality_gates"} {
-		for _, line := range lines {
-			// Prefix, not equality: `export: {}`, `quality_gates: []` and a
-			// key with a trailing space or `# comment` are all sections the
-			// loader warns about, and a doctor that matched only the bare
-			// `key:` spelling would hand out a clean bill for a file bough
-			// itself complains about on every create.
-			if strings.HasPrefix(line, key+":") {
-				found = append(found, key)
-				break
-			}
+		if _, ok := top[key]; ok {
+			found = append(found, key)
 		}
 	}
 	return found
@@ -116,20 +117,24 @@ func retiredCorpusDir() string {
 	return ""
 }
 
-// splitLines splits on newlines and trims the trailing carriage return
-// a Windows-edited file leaves behind, so a key match is not missed for
-// a reason that has nothing to do with the key.
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == '\n' {
-			line := s[start:i]
-			if n := len(line); n > 0 && line[n-1] == '\r' {
-				line = line[:n-1]
-			}
-			out = append(out, line)
-			start = i + 1
+// liveObserverPIDs returns the PIDs recorded in the retired corpus's
+// observer.pid files whose process is still alive. The daemon is detached
+// and this version has no command to stop it, so doctor is where an
+// operator learns it outlived the upgrade.
+func liveObserverPIDs(corpusDir string) []int {
+	files, _ := filepath.Glob(filepath.Join(corpusDir, "projects", "*", "observer.pid"))
+	var out []int
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		if proc, err := os.FindProcess(pid); err == nil && proc.Signal(syscall.Signal(0)) == nil {
+			out = append(out, pid)
 		}
 	}
 	return out

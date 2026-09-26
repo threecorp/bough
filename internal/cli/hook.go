@@ -102,7 +102,9 @@ func newHookListCmd() *cobra.Command {
 				fmt.Fprintf(c.OutOrStdout(), "(no hooks wired in %s)\n", settingsPath)
 				return nil
 			}
-			for _, event := range hooks.AllEvents() {
+			// Retired events are listed too: until install prunes them they
+			// still fire, and a list that hid them would disagree with doctor.
+			for _, event := range append(hooks.AllEvents(), hooks.RetiredEvents()...) {
 				groups, ok := set[event]
 				if !ok {
 					continue
@@ -341,6 +343,8 @@ func hasMonorepoMarker(dir string) bool {
 	return err == nil
 }
 
+// HookScope picks which Claude Code settings.json the hook
+// subcommands target: the project's or the user's.
 type HookScope string
 
 const (

@@ -12,7 +12,7 @@
   skills / agents / commands, and six extra Claude Code hook events.
   All of it is removed. Learning is a Claude Code plugin's job, and an
   isolation tool has no business shipping a second implementation of
-  one. Non-test Go shrank from 28,763 lines to 13,820.
+  one. Non-test Go shrank from 29,014 lines to 14,113.
 
   **Hook wiring is two events, not eight.** `WorktreeCreate` and
   `WorktreeRemove` stay; `PreToolUse`, `PostToolUse`,
@@ -21,7 +21,7 @@
   printing one line on stderr:
 
   ```text
-  [bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune the stale wiring
+  [bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune it from settings.json, or `claude plugin update bough-hooks` (or bough-all) if the wiring comes from the plugin
   ```
 
   One `bough claude hook install` deletes bough's
@@ -58,6 +58,9 @@
   `.bough.yaml` sections, and `~/.local/share/bough-homunculus` if it
   is still on disk. That directory is never read or written again, and
   bough will not delete it.
+
+  **Stop a running observer daemon before upgrading** (`bough instinct
+  observer stop` on v0.27.0): v0.28.0 has no command to stop it.
 
   Pin **v0.27.0** to keep the loop. `docs/attic/` keeps the design
   notes; `docs/MIGRATION-v0.27-to-v0.28.md` has the upgrade steps.

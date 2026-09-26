@@ -20,6 +20,7 @@ bough claude hook install     # prunes the six retired hook events
 | Six retired events in `settings.json` | Each fires, prints one stderr line, exits 0 | `bough claude hook install` |
 | `instinct:` / `quality_gates:` / `memory_backends:` / `export:` in `.bough.yaml` | Read, warned about once per load, otherwise ignored | Delete the section before v0.29.0 |
 | `~/.local/share/bough-homunculus/` | Never read, never written | Yours to keep or delete |
+| A running observer daemon (`bough instinct observer start`, or `observer.autostart`) | Keeps running on the old binary image; v0.28.0 cannot stop it | Stop it first — see [On-disk state](#on-disk-state) |
 | Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.27.0, or drop the call |
 | The `bough-hooks` / `bough-all` Claude Code plugin | Updates to two events when you update the plugin | `/plugin update`, or nothing |
 
@@ -38,7 +39,7 @@ still runs — the host fires it on every tool call — and each run exits
 0 with one line on stderr:
 
 ```text
-[bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune the stale wiring
+[bough] hook event PreToolUse is retired since v0.28.0 and does nothing; run `bough claude hook install` to prune it from settings.json, or `claude plugin update bough-hooks` (or bough-all) if the wiring comes from the plugin
 ```
 
 Claude Code does not show a successful hook's stderr, so this is
@@ -105,13 +106,31 @@ gets a top-level key of its own.
 Everything else keeps its name and its flags: `create`, `remove`,
 `verify`, `list`, `status`, `backfill`, `repair`, `config validate`,
 `plugins list`, `claude hook|skill|command install|uninstall|list`,
-`claude doctor`, and `hook handle`.
+`claude doctor`, and `hook handle` (which lost only its `--out` flag).
 
 `bough claude doctor` lost its continuous-learning block and gained a
 **Retired state** section that names leftover wiring, leftover
 `.bough.yaml` sections, and the corpus directory if it is still there.
 
 ## On-disk state
+
+**Stop the observer daemon before you upgrade.** It is a detached process
+that v0.28.0 has no command to stop, and it carries on from the old binary
+already in memory. On v0.27.0 or earlier, in each monorepo that started one:
+
+```bash
+bough instinct observer stop
+```
+
+If you have already upgraded, find it by its command line and stop it:
+
+```bash
+pgrep -fl 'observer _run-daemon'      # one line per monorepo it was started for
+pkill -f 'observer _run-daemon'
+```
+
+Its PID is also in `~/.local/share/bough-homunculus/projects/<project-id>/observer.pid`.
+`bough claude doctor` names any PID from those files that is still alive.
 
 `~/.local/share/bough-homunculus/` (or wherever
 `BOUGH_HOMUNCULUS_DIR` pointed) is left exactly as it is. v0.28.0 never
