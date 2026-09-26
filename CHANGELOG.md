@@ -62,6 +62,10 @@
   Pin **v0.26.0** to keep the loop. `docs/attic/` keeps the design
   notes; `docs/MIGRATION-v0.26-to-v0.27.md` has the upgrade steps.
 
+## v0.27.0
+
+### Removed
+
 - **BREAKING: the Nix engine backend is gone; every engine runs on
   Docker.** It could not start Elasticsearch at all — the bundled flake
   invoked nixpkgs' launcher without `ES_HOME`, which refuses — gave
@@ -84,9 +88,14 @@
   `backend: docker`) and they work again.
 
   **Stop any Nix-backed worktree before upgrading.** The new `Down`
-  finds no container and returns nil, and `remove` then deletes the
-  datadir under a still-running engine. Run `bough remove` on the old
-  binary first.
+  finds no container to stop, so the engine keeps running. `remove`
+  now notices: if an engine port still accepts connections after
+  `Down`, it stops with the port and an `lsof` line to find the owner,
+  and deletes nothing — not the datadir, the worktree or the registry
+  entry. Every engine port the registry holds is checked, on both
+  loopbacks, and `pre_remove` hooks run first so a hook that stops such
+  an engine still works. Run `bough remove` on the old binary, or stop
+  the process, and remove again.
 
   With it went:
   - `internal/backend/` and the nix-with-flakes / docker-daemon race on
