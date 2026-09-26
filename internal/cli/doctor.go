@@ -51,6 +51,13 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 	if err == nil {
 		if path := resolveConfigPath(c, resolveMonorepoRoot(cwd)); path != "" {
 			keys, err := retiredConfigKeys(path)
+			if errors.Is(err, fs.ErrNotExist) {
+				// An absent default config is normal; a named or dangling one is not.
+				explicit, _ := c.Flags().GetString("config")
+				if _, lerr := os.Lstat(path); explicit == "" && lerr != nil {
+					err = nil
+				}
+			}
 			if err != nil {
 				notes = append(notes, fmt.Sprintf("%s: could not check for retired sections: %v", path, err))
 			}
@@ -88,9 +95,6 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 // a flow mapping) is found, and a nested key of the same name is not.
 func retiredConfigKeys(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil // no config here is not a problem to report
-	}
 	if err != nil {
 		return nil, err
 	}

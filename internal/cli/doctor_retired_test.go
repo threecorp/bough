@@ -127,6 +127,27 @@ func TestRenderRetiredConfig(t *testing.T) {
 		t.Errorf("live PID must be reported as one to check:\n%s", got)
 	}
 
+	// A named config that is missing, and a default path that exists but
+	// cannot be read, are both problems to report.
+	named := &cobra.Command{}
+	named.Flags().String("config", filepath.Join(dir, "missing.yaml"), "")
+	out.Reset()
+	renderRetiredConfig(named, &out)
+	if !strings.Contains(out.String(), "missing.yaml: could not check for retired sections") {
+		t.Errorf("a missing --config file must be reported:\n%s", out.String())
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".bough.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	renderRetiredConfig(&cobra.Command{}, &out)
+	if !strings.Contains(out.String(), "could not check for retired sections") {
+		t.Errorf("an unreadable .bough.yaml must be reported:\n%s", out.String())
+	}
+	if err := os.Remove(filepath.Join(dir, ".bough.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := os.WriteFile(filepath.Join(dir, ".bough.yaml"), []byte("instinct: [\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +155,16 @@ func TestRenderRetiredConfig(t *testing.T) {
 	renderRetiredConfig(&cobra.Command{}, &out)
 	if !strings.Contains(out.String(), "could not check for retired sections") {
 		t.Errorf("a broken .bough.yaml must be reported:\n%s", out.String())
+	}
+}
+
+// TestRenderRetiredConfig_CleanState: no config, no corpus reads as none.
+func TestRenderRetiredConfig_CleanState(t *testing.T) {
+	t.Setenv("BOUGH_HOMUNCULUS_DIR", filepath.Join(t.TempDir(), "absent"))
+	t.Chdir(t.TempDir())
+	var out bytes.Buffer
+	renderRetiredConfig(&cobra.Command{}, &out)
+	if !strings.Contains(out.String(), "none — no retired config sections, no leftover corpus") {
+		t.Errorf("clean state must read as none:\n%s", out.String())
 	}
 }
