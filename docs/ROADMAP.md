@@ -27,8 +27,8 @@ Concretely, v0.28.0:
 - drops the `instinct:`, `quality_gates:`, `memory_backends:` and
   `export:` sections from `.bough.yaml` — they are read and warned
   about for one minor series, then stop parsing in v0.29.0;
-- leaves `~/.local/share/bough-homunculus` on disk untouched and
-  unread; deleting it is the operator's call.
+- leaves `~/.local/share/bough-homunculus` on disk untouched (doctor
+  only reads its `observer.pid` files); deleting it is the operator's call.
 
 `docs/attic/` keeps the design notes. Pin `v0.27.0` to keep the loop.
 `docs/MIGRATION-v0.27-to-v0.28.md` has the upgrade steps.

@@ -781,6 +781,11 @@ func (r *DoctorReport) renderRetired(w io.Writer, st termio.Styler) {
 		}
 		fmt.Fprintf(w, "    %s run `bough claude hook %s` to prune it\n",
 			st.Mark(termio.StatusNeutral), fix)
+		// This file cannot see a plugin enabled at the other scope.
+		if fix == "install" {
+			fmt.Fprintf(w, "    %s (use `uninstall` instead if bough-hooks or bough-all is enabled at another scope — claude plugin list)\n",
+				st.Mark(termio.StatusNeutral))
+		}
 	}
 	// Named apart because install will NOT clear these: the bough entry
 	// shares a group with one the operator wrote, and bough does not

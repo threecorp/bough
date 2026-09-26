@@ -56,8 +56,10 @@
   `bough claude doctor` lost its continuous-learning block and gained a
   **Retired state** section naming leftover wiring, leftover
   `.bough.yaml` sections, and `~/.local/share/bough-homunculus` if it
-  is still on disk. That directory is never read or written again, and
-  bough will not delete it.
+  is still on disk. bough never writes to that directory again (doctor
+  only reads its `observer.pid` files) and will not delete it. Copies of
+  the four retired slash commands made by `bough claude command install`
+  must be deleted by hand; see the migration guide.
 
   **Stop a running observer daemon before upgrading** (`bough instinct
   observer stop` on v0.27.0): v0.28.0 has no command to stop it.

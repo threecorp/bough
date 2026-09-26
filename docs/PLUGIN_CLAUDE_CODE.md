@@ -148,8 +148,8 @@ halves are in that file the doctor says so outright:
         claude plugin uninstall bough-all@bough
 ```
 
-One limit worth knowing: the doctor reads the `settings.json` for the scope it
-was asked about. A plugin enabled at the *other* scope (user vs project) is
+One limit worth knowing: the doctor reads the project's `settings.json`
+only. A plugin enabled at the *other* scope (user vs project) is
 outside what it can see, so it says that rather than implying all-clear —
 `claude plugin list` shows the rest.
 
