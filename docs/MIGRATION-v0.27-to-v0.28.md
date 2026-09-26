@@ -14,16 +14,18 @@ bough claude hook install     # prunes the six retired hook events
 ```
 
 If the `bough-hooks` or `bough-all` plugin is enabled at any scope, run
-`bough claude hook uninstall` instead: the plugin already wires the two
-live events, and `install` would wire them a second time.
+`bough claude hook uninstall` instead, at each scope that holds the old
+wiring (add `--scope user` for `~/.claude/settings.json`): the plugin
+already wires the two live events, and `install` would wire them a second
+time.
 
 ## TL;DR
 
 | You have | What happens on v0.28.0 | What to do |
 |---|---|---|
-| Six retired events in `settings.json` | Each fires, prints one stderr line, exits 0 | `bough claude hook install` |
+| Six retired events in `settings.json` | Each fires, prints one stderr line, exits 0 | `bough claude hook install` (or `uninstall` with a hooks plugin enabled; see above) |
 | `instinct:` / `quality_gates:` / `memory_backends:` / `export:` in `.bough.yaml` | Read, warned about once per load, otherwise ignored | Delete the section before v0.29.0 |
-| `~/.local/share/bough-homunculus/` | Never read, never written | Yours to keep or delete |
+| `~/.local/share/bough-homunculus/` | Never written; doctor only reads its `observer.pid` files | Yours to keep or delete |
 | A running observer daemon (`bough instinct observer start`, or `observer.autostart`) | Keeps running on the old binary image; v0.28.0 cannot stop it | Stop it first — see [On-disk state](#on-disk-state) |
 | Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.27.0, or drop the call |
 | The `bough-hooks` / `bough-all` Claude Code plugin | Updates to two events when you update the plugin | `/plugin update`, or nothing |
@@ -113,7 +115,8 @@ at each scope you installed to (`.claude/commands/` in the project,
 `~/.claude/commands/` for user scope):
 
 ```bash
-rm -f .claude/commands/{evolve,instinct-list,instinct-promote,instinct-status}.md
+rm -f .claude/commands/{evolve,instinct-list,instinct-promote,instinct-status}.md    # project
+rm -f ~/.claude/commands/{evolve,instinct-list,instinct-promote,instinct-status}.md  # user
 ```
 
 Everything else keeps its name and its flags: `create`, `remove`,

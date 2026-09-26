@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,8 +34,9 @@ func newDoctorCmd() *cobra.Command {
 
 // renderRetiredConfig names the `.bough.yaml` sections and on-disk
 // state left over from the continuous-learning loop bough carried
-// until v0.27.0. Neither is read any more, and neither is bough's to
-// delete, so the doctor is where an operator finds out they are there.
+// until v0.27.0. bough no longer uses either (doctor only reads them), and
+// neither is bough's to delete, so the doctor is where an operator finds
+// out they are there.
 //
 // The config half re-reads the file rather than taking the loaded
 // Config: the retired keys are deliberately absent from that struct
@@ -86,6 +88,9 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 // a flow mapping) is found, and a nested key of the same name is not.
 func retiredConfigKeys(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // no config here is not a problem to report
+	}
 	if err != nil {
 		return nil, err
 	}

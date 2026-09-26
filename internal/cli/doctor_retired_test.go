@@ -1,11 +1,18 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestRetiredConfigKeys pins that the doctor finds every spelling of a
@@ -77,8 +84,8 @@ func TestLiveObserverPIDs(t *testing.T) {
 // TestLiveObserverPIDs_OtherUsersProcessIsAlive: signal 0 to a process
 // owned by another user fails with EPERM, which still means it exists.
 func TestLiveObserverPIDs_OtherUsersProcessIsAlive(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root can signal pid 1, so EPERM is not exercised")
+	if err := syscall.Kill(1, 0); !errors.Is(err, syscall.EPERM) {
+		t.Skipf("signal 0 to pid 1 returned %v here, not EPERM", err)
 	}
 	corpus := t.TempDir()
 	d := filepath.Join(corpus, "projects", "p")
@@ -90,5 +97,42 @@ func TestLiveObserverPIDs_OtherUsersProcessIsAlive(t *testing.T) {
 	}
 	if got := liveObserverPIDs(corpus); len(got) != 1 || got[0] != 1 {
 		t.Fatalf("liveObserverPIDs = %v, want [1]", got)
+	}
+}
+
+// TestRenderRetiredConfig pins what the operator reads: no config file is
+// not an error, a live PID is one to check rather than a confirmed daemon,
+// and a broken .bough.yaml is reported instead of passing as clean.
+func TestRenderRetiredConfig(t *testing.T) {
+	corpus := t.TempDir()
+	d := filepath.Join(corpus, "projects", "p")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "observer.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOUGH_HOMUNCULUS_DIR", corpus)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	var out bytes.Buffer
+	renderRetiredConfig(&cobra.Command{}, &out)
+	got := out.String()
+	if strings.Contains(got, "could not check") {
+		t.Errorf("a directory without .bough.yaml must not report an error:\n%s", got)
+	}
+	want := fmt.Sprintf("observer.pid names pid %d, which is still alive; if `pgrep -fl 'observer _run-daemon'` lists it", os.Getpid())
+	if !strings.Contains(got, want) {
+		t.Errorf("live PID must be reported as one to check:\n%s", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".bough.yaml"), []byte("instinct: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	renderRetiredConfig(&cobra.Command{}, &out)
+	if !strings.Contains(out.String(), "could not check for retired sections") {
+		t.Errorf("a broken .bough.yaml must be reported:\n%s", out.String())
 	}
 }

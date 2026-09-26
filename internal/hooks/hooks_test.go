@@ -862,6 +862,19 @@ func TestDoctorReport_RetiredAdviceWithHookPlugin(t *testing.T) {
 	}
 }
 
+// TestDoctorReport_RetiredAdviceWithoutHookPlugin: with no plugin visible in
+// this settings.json, install is the remedy, but a plugin at another scope
+// is invisible here, so the note must point at uninstall for that case.
+func TestDoctorReport_RetiredAdviceWithoutHookPlugin(t *testing.T) {
+	r := &DoctorReport{Retired: []HookEvent{RetiredEventPreToolUse}}
+	var sb strings.Builder
+	r.renderRetired(&sb, termio.NewStyler(&sb))
+	if !strings.Contains(sb.String(), "bough claude hook install` to prune") ||
+		!strings.Contains(sb.String(), "use `uninstall` instead if bough-hooks or bough-all is enabled at another scope") {
+		t.Errorf("without a visible plugin the remedy is install, with the cross-scope note:\n%s", sb.String())
+	}
+}
+
 // TestManager_Install_PreservesEntryTimeout pins the round-trip on a
 // retired event: Install prunes bough's groups there, and the operator's
 // own group must come back with its `"timeout": 300` intact.

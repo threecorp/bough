@@ -72,7 +72,7 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 	// A retired event exits 0 and writes nothing to stdout. This is what
 	// keeps an un-updated settings.json or a cached plugin manifest from
 	// failing every tool call until the operator re-runs install.
-	for _, retired := range []string{"PreToolUse", "SessionEnd"} {
+	for _, retired := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"} {
 		out, errOut := run(t, "hook handle "+retired,
 			`{"hook_event_name":"`+retired+`","tool_name":"Edit"}`,
 			"hook", "handle", "--event", retired)
