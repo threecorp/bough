@@ -1,5 +1,5 @@
 ---
-description: Create a bough per-worktree isolated dev environment (spins up its DB/engines + writes each sub-repo's .env.local).
+description: Create a bough per-worktree isolated dev environment (starts its engines, renders .env.local for repos that declare env_local).
 argument-hint: <worktree-name>
 allowed-tools: Bash
 ---
@@ -8,18 +8,18 @@ Create a bough worktree named `$ARGUMENTS`.
 
 If `$ARGUMENTS` is empty, ask the user for the worktree name (e.g. `F-Feature`) and stop.
 
-bough's `create` reads the same WorktreeCreate payload the `claude --worktree`
-hook sends, so feed it on stdin from the current monorepo checkout:
+Run it from the monorepo root:
 
 ```bash
-printf '{"name":"%s","cwd":"%s"}' "$ARGUMENTS" "$PWD" | bough create --stdin-json
+bough create --name "$ARGUMENTS" --cwd "$PWD"
 ```
 
-Run it, then:
+Then:
 
 - Report the worktree root path bough printed on stdout.
-- Note that its engines (mysql / redis / elasticsearch / …) are now running and
-  each sub-repo's `.env.local` has been rendered with the allocated ports.
+- Read stderr. A `[bough] WARNING: create finished with N problem(s)` block
+  means the worktree exists but a sub-repo, `.env.local` or `post_create`
+  step failed; quote each listed problem instead of reporting success.
 
 If the command fails with "command not found: bough", stop and tell the user the
 `bough` binary must be installed on PATH first — point them at the install

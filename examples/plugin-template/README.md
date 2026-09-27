@@ -1,9 +1,10 @@
 # bough plugin template
 
-Copy this directory, rename `myplugin` to your engine kind (e.g.
-`cassandra`, `mongodb`, `clickhouse`, `rabbitmq`, `kafka`), and fill in
-the four `TODO:` markers. The conformance suite will then verify your
-plugin satisfies the bough contract end-to-end.
+This directory is the conformance harness for a new engine plugin: a
+`conformance_test.go` and a GitHub Actions workflow that runs it. It
+does not contain the plugin itself; you write that (a Go module with a
+provider package and a `cmd/bough-plugin-<kind>/main.go`), and the
+harness verifies it against the bough contract end-to-end.
 
 ## Steps
 
@@ -16,22 +17,20 @@ find . -name '*.bak' -delete
 
 Then:
 
-1. **`docker.go`** — implement the engine-specific docker bits
-   (`Cmd`, `Env`, `ExposedPorts`, `Ulimits`, readiness probe). The
-   bough-internal plugins under `plugins/engine/{mysql,postgres,redis,
-   elasticsearch}/docker.go` are the reference.
-2. **`main.go`** — the go-plugin server entry. Copy from
-   `cmd/bough-plugin-mysql/main.go` and only change the imported
+1. **The provider** — implement `plugins/engine/api.EngineProvider`
+   (`PortRangeDefault`, `Up`, `ReadyCheck`, `EnvVars`, `Down`,
+   `Cleanup`). `plugins/engine/{mysql,postgres,redis,elasticsearch}/`
+   are the reference implementations.
+2. **`cmd/bough-plugin-<kind>/main.go`** — the go-plugin server entry.
+   Copy `cmd/bough-plugin-mysql/main.go` and change the imported
    provider package.
-3. **`conformance_test.go`** — pick `Image`, set `ReadyTimeout` to
-   match the engine's cold-start, and supply a `NativeProbe` if the
-   bough stdlib helpers (`RedisPing`, `ElasticsearchGetRoot`) don't
-   fit. See the `mysql` plugin for a stdlib-only handshake-byte probe
-   pattern.
-4. **`.github/workflows/ci.yml`** — change the matrix `plugin` value
-   and the pre-pull image ref.
+3. **`conformance_test.go`** — resolve its `TODO:` markers: the `Image`,
+   the `ReadyTimeout` for the engine's cold start, and a `NativeProbe`
+   if the stdlib helpers (`RedisPing`, `ElasticsearchGetRoot`) don't fit.
+   See the `mysql` plugin for a stdlib-only handshake-byte probe.
+4. **`.github/workflows/ci.yml`** — change the pre-pull image ref.
 
-Once those are filled in:
+Once those are in place:
 
 ```bash
 go build -o bin/bough-plugin-cassandra ./cmd/bough-plugin-cassandra
@@ -68,5 +67,5 @@ for the rabbitmq author's view of `PortRangeDefault`, `Up`, and
   the bough plugin contract every conformance assertion traces back to.
 - [`docs/PLUGIN_AUTHOR_GUIDE.md`](../../docs/PLUGIN_AUTHOR_GUIDE.md) —
   how the conformance suite ergonomics work end-to-end.
-- The four bough-internal plugins under `plugins/engine/` — copy
+- The bough-internal plugins under `plugins/engine/` — copy
   whichever one is closest to your engine.

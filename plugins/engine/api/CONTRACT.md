@@ -2,17 +2,17 @@
 
 > This document is the canonical list of invariants a
 > `bough-plugin-<kind>` binary must uphold under the v0.4.0 EngineProvider
-> contract. The `bough/conformance` test suite checks every clause
-> mechanically against a real Docker container, so the document and the
-> guard tests stay in lock-step.
+> contract. The `bough/conformance` test suite checks these clauses
+> against a real Docker container, except where a clause says it is not
+> checked.
 >
 > **v0.4.0 rename**: `DBProvider` → `EngineProvider`, `plugins/db/` →
 > `plugins/engine/`. See `docs/MIGRATION-v0.3-to-v0.4.md` for the wire
 > shape diff (`Port int` → `[]PortSpec`, `InitialDatabases []string` →
 > `[]ResourceSpec`).
 
-Plugin authors: if your plugin passes `conformance.Run(t, cfg)`, it
-satisfies this contract. If a clause below describes a behaviour you
+Plugin authors: passing `conformance.Run(t, cfg)` is the minimum; the
+clauses marked as not checked are still yours to uphold. If a clause below describes a behaviour you
 cannot simulate (e.g. you have no socket layer to preempt with a sidecar
 listener), set the corresponding `Skip*` flag in `conformance.Config`
 and the suite will treat the clause as not-applicable rather than failed.
@@ -43,30 +43,27 @@ and the suite will treat the clause as not-applicable rather than failed.
    least one protocol-level message** on every entry in `Ports`. A TCP
    listen alone is not enough — the official mysql, postgres, redis and
    elasticsearch images all open the TCP socket before the daemon
-   itself is ready.
+   itself is ready. The suite checks the protocol level only when you
+   set `Config.NativeProbe`. The bundled `compose` plugin is the
+   exception: it defaults to a TCP dial unless the operator sets
+   `extras.compose.ready_probe`.
 6. **`Down` is graceful within `GracefulTimeoutSec`**. After that
-   deadline the plugin must SIGKILL the workload. When a plugin
-   registers more than one backend, `Down` and `ReadyCheck` carry no
-   backend token, so the plugin decides from what is running — and that
-   check must confirm the candidate resource is actually *running*, not
-   merely that it exists. A stopped/leftover Docker container matching
-   the engine's naming convention must not count as "this backend is in
-   use": `Down` would then act on the wrong resource while the real,
-   active engine keeps running untouched, and a later `Cleanup` would
-   delete its `Datadir` out from under it. `api.Backends.ForPort`
-   implements this; a single registered backend short-circuits it.
-   Registering a second backend therefore also means carrying the token
-   on `DownRequest`/`ReadyCheckRequest`: an engine whose `Up` has not
-   finished is running nowhere yet, and resolving by `Running` alone
-   would hand it to the default backend.
+   deadline the plugin must SIGKILL the workload. The suite checks that
+   `Down` returns nil, not how long it took. `Down` and `ReadyCheck`
+   carry no backend token, so a plugin that registers more than one
+   backend must pick the one whose resource is actually *running* (a
+   stopped container with the canonical name does not count);
+   `api.Backends.ForPort` does this, and a single backend
+   short-circuits it.
 7. **`Cleanup` is idempotent.** A second `Cleanup` on the same
-   `datadir` + `ports` must return nil.
+   `datadir` + `ports` must return nil. The suite skips, rather than
+   fails, a permission error from a datadir the container's user owns.
 
 ## EnvVars
 
 8. **Every value `EnvVars` returns is non-empty.**
 9. **Every host:port pair `EnvVars` advertises is reachable from the
-   host.** This is the v0.2.6 invariant: a value like
+   host.** A value like
    `BOUGH_<ENGINE>_HOST=172.17.0.4` (a container bridge IP) passes plain
    unit tests but crashes sniffing clients at boot.
 
@@ -83,7 +80,7 @@ and the suite will treat the clause as not-applicable rather than failed.
      `AssertReachable` walks every `*_PORT` key.
 
 10. **Values are shell-safe** unless the plugin declares
-    `Config.AllowShellMetachars=true`. This is the v0.2.5 invariant: a
+    `Config.AllowShellMetachars=true`. A
     `(` / `&` / `;` / `$` in a value aborts bash `source .env.local`.
 
 ## Datadir

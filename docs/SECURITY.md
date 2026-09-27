@@ -1,33 +1,29 @@
 # bough plugin security
 
-> Third-party engine plugins (`bough-plugin-<kind>`) are untrusted code.
+> Engine plugins (`bough-plugin-<kind>`) run as your user, with your
+> filesystem and network access.
 
 ## Trust model
 
-bough discovers plugins on PATH and spawns them as subprocesses under hashicorp/go-plugin's gRPC transport. Each plugin runs with the user's full filesystem and network privileges. Today "plugin" means an engine plugin (`bough-plugin-{mysql,postgres,redis,elasticsearch}` bundled, or a third-party engine a plugin author ships) — both `bough create` (Up) and `bough remove` (Down/Cleanup) spawn one.
+bough discovers plugins on `PATH` and spawns them as subprocesses over
+hashicorp/go-plugin's gRPC transport. That covers the five bundled
+plugins (`bough-plugin-{mysql,postgres,redis,elasticsearch,compose}`)
+and any third-party engine. Both `bough create` (Up) and `bough remove`
+(Down / Cleanup) spawn them.
 
 A malicious engine plugin could:
 
 - read your `.git/` directory, your `.bough.yaml`, your `~/.ssh`
-- read or exfiltrate whatever it's handed at `Up` time (datadir path, worktree root, port, extras)
-- open network connections under your user's identity
+- read or exfiltrate whatever it is handed at `Up` (datadir path,
+  worktree root, port, extras)
+- open network connections under your identity
 
-Run only plugins you trust. See [SIGNING.md](SIGNING.md) for the (currently unenforced) signature-verification design.
-
-## Plugin security config
-
-There is none today. The signature-verification design in
-[SIGNING.md](SIGNING.md) has no config surface: the schema it used to
-carry lived under the `instinct:` section, which was removed in v0.28.0
-along with the rest of the continuous-learning loop. Nothing read it —
-no NOTICE, no allowlist check, no enforce gate — so it went with the
-section rather than being rehomed to a key that would also do nothing.
-Wiring enforcement is what earns a config key back.
+bough does not verify plugin signatures ([SIGNING.md](SIGNING.md)).
 
 ## Recommended posture
 
-- Only install engine plugin binaries (`bough-plugin-*`) you built
-  yourself or trust the source of — bough does not currently verify
-  them for you.
-- Keep `PATH` scoped so an unrelated `bough-plugin-<kind>` binary
-  from another project cannot shadow the one you intend to run.
+- Install the bundled plugins from a release archive you verified
+  ([SIGNING.md](SIGNING.md)), or build them yourself.
+- Keep `PATH` scoped so an unrelated `bough-plugin-<kind>` binary from
+  another project cannot shadow the one you intend to run.
+  `bough plugins list` shows which binary each kind resolves to.

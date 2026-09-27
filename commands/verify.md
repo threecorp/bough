@@ -1,13 +1,13 @@
 ---
-description: Compare a worktree's registry vs .env.local vs declared ranges and report any drift.
+description: Check a worktree's registered ports against the declared ranges and that its .env.local files exist.
 argument-hint: <worktree-name>
 allowed-tools: Bash(bough:*)
 ---
 
-Run `bough verify $ARGUMENTS` to check the given worktree for drift between the
-port registry, the rendered `.env.local` files, and the declared `.bough.yaml`
-ranges.
+Run `bough verify $ARGUMENTS`. It reports a port missing from the registry, a
+port outside its declared `.bough.yaml` range, and a `.env.local` that should
+exist but does not. It does not compare the values inside `.env.local`.
 
 If `$ARGUMENTS` is empty, run `bough list` first and ask which worktree to
 verify. Report whether it is consistent, and if `bough verify` exits non-zero,
-explain exactly which value drifted.
+quote each drift line.

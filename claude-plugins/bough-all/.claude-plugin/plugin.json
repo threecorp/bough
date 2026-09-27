@@ -1,6 +1,6 @@
 {
   "name": "bough-all",
-  "description": "Everything bough installs into Claude Code: /bough:* commands, the using-bough skill, and the WorktreeCreate / WorktreeRemove hooks. Install at project scope to keep the hooks to one repo.",
+  "description": "Everything bough installs into Claude Code: /bough-all:* commands, the using-bough skill, and the WorktreeCreate / WorktreeRemove hooks. Install at project scope to keep the hooks to one repo.",
   "author": {
     "name": "ikeikeikeike",
     "email": "jp.ne.co.jp@gmail.com"
