@@ -1,12 +1,12 @@
 ---
-description: Check a worktree's engine and ports: entries against the declared ranges, and that its .env.local files exist.
+description: "Check a worktree's engine main ports and ports: entries against the declared ranges, and that its .env.local files exist."
 argument-hint: <worktree-name>
 allowed-tools: Bash(bough:*)
 ---
 
-Run `bough verify $ARGUMENTS`. For each engine and each `ports:` entry in
-`.bough.yaml` it reports a registry entry that is missing or outside its
-declared range, and it reports a `.env.local` that should exist but does not.
+Run `bough verify $ARGUMENTS`. For each engine's `main` role and each
+`ports:` entry in `.bough.yaml` it reports a registry entry that is missing
+or outside its declared range (other engine roles are not checked), and it reports a `.env.local` that should exist but does not.
 It does not compare the values inside `.env.local`, and registry entries that
 `.bough.yaml` no longer declares are not checked.
 

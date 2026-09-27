@@ -38,7 +38,7 @@ carries hooks at project scope unless you want them in every repo. The
 | `remove` | Tear one down: engines stopped, datadirs dropped, worktree removed. The branch is kept unless `teardown.remove_branch: true`. | `<name-or-path>` |
 | `list` | List registered worktrees and their ports. | — |
 | `status` | Registered ports and whether a listener is detected on each (uses `lsof`). | — |
-| `verify` | Check a worktree's engine and `ports:` entries against the declared ranges, and that its `.env.local` files exist. | `<name>` |
+| `verify` | Check a worktree's engine `main` ports and `ports:` entries against the declared ranges, and that its `.env.local` files exist. | `<name>` |
 | `config-validate` | Validate `./.bough.yaml` (or a given path) against the schema. | `[path]` |
 | `doctor` | Report hook wiring, worktree containers, engine plugins, and leftovers from retired features. | — |
 
@@ -80,10 +80,11 @@ bough claude <kind> list | uninstall           # same verbs for all three
   from the monorepo root. `--scope user` means `~/.claude/`.
 - Commands installed this way are not namespaced: `/create`, not
   `/bough:create`.
-- `install` overwrites, and `uninstall` removes, every command file whose
-  name bough ships (`create.md`, `list.md`, …), including one you wrote
-  under the same name, and the whole `skills/using-bough/` directory,
-  including any file you added inside it. Other files are left alone.
+- `install` overwrites every file bough ships (`commands/create.md`,
+  `skills/using-bough/SKILL.md`, …), including one you wrote under the
+  same name. `uninstall` removes those command files and the whole
+  `skills/using-bough/` directory, including any file you added inside
+  it. Other files are left alone.
 - `bough create` symlinks only `CLAUDE.md` into a worktree, so a worktree
   session does not see project-scoped commands or skills; install them
   user-scoped if you want them there.

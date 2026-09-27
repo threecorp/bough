@@ -20,10 +20,11 @@ bough remove --name "$ARGUMENTS"
 Check the exit status and stderr before reporting:
 
 - If it refuses because an engine port still answers, quote that message. The
-  datadir, worktree and registry entry were kept; the engines were already
-  asked to stop.
-- Quote any `worktree remove`, `branch -D` or `rm -rf` line on stderr: remove
-  prints those and carries on, so the worktree may be partly left behind.
-- Otherwise confirm the engines were stopped and the worktree removed.
+  datadir, worktree and registry entry were kept.
+- Quote any `discover`, `Down`, `worktree remove`, `branch -D` or `rm -rf`
+  line on stderr: remove prints those and carries on, so an engine may still
+  be running or the worktree may be partly left behind even when it exits 0.
+- Only when none of those appear, report the engines stopped and the
+  worktree removed.
 
 The git branch is kept unless `.bough.yaml` sets `teardown.remove_branch: true`.
