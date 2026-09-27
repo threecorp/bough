@@ -27,6 +27,6 @@ bough does not verify plugin signatures ([SIGNING.md](SIGNING.md)).
 - Keep `PATH` scoped so an unrelated `bough-plugin-<kind>` binary from
   another project cannot shadow the one you intend to run.
   `bough plugins list` shows the first `bough-plugin-<kind>` file on
-  `PATH` for each kind; `type -P bough-plugin-<kind>` (bash) shows the
-  executable file bough will actually run, ignoring shell aliases and
-  functions.
+  `PATH` for each kind; in bash, `(hash -r; type -P bough-plugin-<kind>)`
+  shows the executable file bough will actually run (a fresh `PATH`
+  search, ignoring aliases, functions and the shell's command cache).
