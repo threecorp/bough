@@ -49,7 +49,8 @@ Then in CI:
 
 The suite spawns your binary under go-plugin (the same path the bough
 host uses in production), drives the full lifecycle `IdempotentCount`
-times, checks that `Up` on an already-running engine reuses it, asserts
+times, calls `Up` again on a running engine and checks it returns nil and
+stays reachable, asserts
 the contract invariants, and runs two fault injections (port conflict,
 image pull failure).
 
@@ -62,7 +63,7 @@ image pull failure).
 | `Up` on an already-up engine | returns nil and leaves it reachable (the UpReuse phase) |
 | `ReadyCheck` | returns true within `ReadyTimeout` |
 | `EnvVars` | every value non-empty (`AssertNonEmpty`) |
-| `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` is dialable from the host (`AssertReachable`) |
+| `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` with a host and a known or explicit port is dialable from the host (`AssertReachable`); other URLs are skipped |
 | `EnvVars` | no value contains shell metachars unless `AllowShellMetachars=true` (`AssertShellSafe`) |
 | `EnvVars` | `Config.NativeProbe(ctx, hostPort)` returns nil for every dialable address — only when you set `NativeProbe` |
 | `Down` | returns nil |
@@ -121,8 +122,10 @@ go test -tags=conformance -race -timeout=15m -v ./...
 
 On macOS the suite talks to Docker Desktop / OrbStack / Colima
 through `client.FromEnv`. On Linux it talks to the system docker
-socket. A plugin built on the Docker SDK needs no `docker` CLI; the
-bundled `compose` plugin does, since it runs `docker compose`.
+socket. A plugin built on the Docker SDK needs no `docker` CLI to run;
+the bundled `compose` plugin does, since it runs `docker compose`. On
+Linux the suite's own cleanup may run `docker run … chown` to reclaim a
+datadir the container's user owns.
 
 ## Running in CI
 

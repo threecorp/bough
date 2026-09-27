@@ -17,7 +17,13 @@ bough remove --path "$ARGUMENTS"
 bough remove --name "$ARGUMENTS"
 ```
 
-If it refuses because an engine port still answers, quote that message: nothing
-was deleted. Otherwise confirm the engines were stopped and the worktree
-removed. The git branch is kept unless `.bough.yaml` sets
-`teardown.remove_branch: true`.
+Check the exit status and stderr before reporting:
+
+- If it refuses because an engine port still answers, quote that message. The
+  datadir, worktree and registry entry were kept; the engines were already
+  asked to stop.
+- Quote any `worktree remove`, `branch -D` or `rm -rf` line on stderr: remove
+  prints those and carries on, so the worktree may be partly left behind.
+- Otherwise confirm the engines were stopped and the worktree removed.
+
+The git branch is kept unless `.bough.yaml` sets `teardown.remove_branch: true`.

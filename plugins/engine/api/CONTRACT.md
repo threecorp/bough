@@ -2,9 +2,10 @@
 
 > This document is the canonical list of invariants a
 > `bough-plugin-<kind>` binary must uphold under the v0.4.0 EngineProvider
-> contract. The `bough/conformance` test suite checks these clauses
-> against a real Docker container, except where a clause says it is not
-> checked.
+> contract. The `bough/conformance` test suite exercises these clauses
+> against a real Docker container through the RPC surface; it cannot see
+> container identity or naming, and some clauses say what it does not
+> check.
 >
 > **v0.4.0 rename**: `DBProvider` → `EngineProvider`, `plugins/db/` →
 > `plugins/engine/`. See `docs/MIGRATION-v0.3-to-v0.4.md` for the wire
@@ -35,7 +36,8 @@ and the suite will treat the clause as not-applicable rather than failed.
    already running, `Up` returns nil without recreating it. The suite
    asserts this in the `UpReuse` phase — it calls `Up` a second time
    while the service is up, requires a nil return, then re-checks
-   readiness to confirm the reuse did not disrupt the running engine.
+   readiness. It does not compare container identity, so a plugin that
+   recreates the container can still pass.
    (Running the full lifecycle `IdempotentCount` times, by contrast,
    only exercises restart: each loop Downs before the next Up.)
 4. **`Up` surfaces port conflicts** as a non-nil error.
@@ -54,7 +56,11 @@ and the suite will treat the clause as not-applicable rather than failed.
    backend must pick the one whose resource is actually *running* (a
    stopped container with the canonical name does not count);
    `api.Backends.ForPort` does this, and a single backend
-   short-circuits it.
+   short-circuits it. With no backend running, `ForPort` falls back to
+   the default backend, so an engine whose `Up` is still in flight on a
+   second backend resolves to the wrong one: registering a second
+   backend also means carrying the backend token on
+   `DownRequest` / `ReadyCheckRequest`.
 7. **`Cleanup` is idempotent.** A second `Cleanup` on the same
    `datadir` + `ports` must return nil. The suite skips, rather than
    fails, a permission error from a datadir the container's user owns.

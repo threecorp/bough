@@ -4,5 +4,7 @@ allowed-tools: Bash(bough:*)
 ---
 
 Run `bough status` and summarize the worktree/port table for the user. Call out
-any registered port that is not listening: its engine or app is not running.
-`status` only probes registered ports, so it cannot see other listeners.
+any registered port with no listener detected: the engine or app on it is
+probably not running. The probe uses `lsof`; if `lsof` is missing or not
+permitted, every port reads as not listening. `status` only probes registered
+ports, so it cannot see other listeners.

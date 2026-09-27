@@ -73,7 +73,8 @@ engines:
     initial_resources:
       - { type: database, name: demo }
 
-  # multi-port engine — the schema accepts roles; the host still allocates only `main`
+  # schema illustration only: `bough create` rejects an engine without a
+  # `main` role, and the host still allocates only `main`
   - kind: rabbitmq
     port_ranges:
       amqp:       [60000, 60499]
@@ -95,8 +96,8 @@ External plugin maintainers (your `bough-plugin-<kind>` repo):
    The exported `api.PickMainPort` and `api.PickFirstResourceName` helpers
    in `plugins/engine/api/shims.go` cover the trivial single-port case.
 3. Rebuild your binary against the current `plugins/engine/api`. The
-   handshake is at protocol version 3 today (v0.4.0 introduced 2), so a
-   binary built against an older API no longer spawns.
+   host requires handshake protocol version 3 (v0.4.0 introduced 2), so
+   a binary built for protocol 1 or 2 no longer spawns.
 
 ## What's NOT removed in v0.4.0
 

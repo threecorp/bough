@@ -65,6 +65,11 @@ go install github.com/ikeikeikeike/bough/cmd/bough-plugin-postgres@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-redis@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-elasticsearch@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-compose@latest
+
+# 3. Nix flake: builds bough + the four native plugins only (no
+#    bough-plugin-compose), and `bough --version` reports 0.1.1
+#    whatever the commit.
+nix profile install github:threecorp/bough
 ```
 
 Release archives are signed with cosign; [`docs/SIGNING.md`](./docs/SIGNING.md)
@@ -95,7 +100,10 @@ names per variant and the CLI equivalents.
 ## Quick start
 
 Drop a `.bough.yaml` at the monorepo root that declares which sub-repos
-hang off `worktrees/<name>/` and which engines start per worktree:
+hang off `worktrees/<name>/` and which engines start per worktree. Each
+repository must already be checked out at the root (or under
+`.bough/repos/`), or declare `source:` (a git URL or local path) for bough
+to clone:
 
 ```yaml
 schema_version: 2
@@ -137,7 +145,7 @@ engines:
   #   port_ranges:
   #     main: [56000, 58999]
   #   extras:
-  #     es.mem_limit: "2g"          # docker --memory cap (default: 2x heap)
+  #     es.mem_limit: "2g"          # docker --memory cap (default: the larger of 2x heap and heap + 1 GiB)
   #     es.config_mount: "demo-api/es-config/analyzer"   # relative to the worktree root
   #   plugins:
   #     - id: analysis-icu          # official plugin: id only
@@ -149,6 +157,7 @@ ports:
 
 registry:
   path: ".bough/ports.json"
+  # backup_dir: "~/.bough/backups"   # copy the registry here before each write; unset = no backup
 
 teardown:
   remove_branch: false     # true also deletes the feature branch on remove
@@ -218,13 +227,16 @@ warning and create still exits 0 once the worktree exists, because
 Claude Code needs its path. Pass `--strict` to make those failures fatal.
 
 `bough remove` (or the WorktreeRemove hook) reverses it: plugin Down →
-`pre_remove` commands → a check that no engine port still answers (if
-one does, remove stops and deletes nothing) → datadir teardown →
-`git worktree remove` per sub-repo → registry cleanup.
+`pre_remove` commands → a check that no engine port still answers → datadir
+teardown → `git worktree remove` per sub-repo → registry cleanup. If a port
+still answers, remove stops before the datadir step, so the datadir,
+worktree and registry entry are kept (Down and `pre_remove` have already
+run). A failed `git worktree remove` or branch delete is printed and remove
+carries on.
 
 ## Workspace layout & resumable worktree sessions
 
-Everything bough generates at the monorepo root lives in two directories:
+With the default layout, bough's checkouts, registry and worktrees live in two directories:
 
 ```
 <monorepo-root>/
@@ -287,13 +299,19 @@ engines:
 bough never edits your compose file. It renders a worktree-scoped
 override (fixed host port + a `bough-compose-<port>` container name) and
 runs `docker compose -f demo-api/compose.yml -f <override> -p
-<worktree-scoped-project> up -d redis`. Two worktrees using the same file
-never collide: different project, container and port.
+<worktree-scoped-project> up -d redis`. Each worktree gets its own project
+name, container name and host port for that service, so two worktrees
+using the same file do not collide on them. Two caveats: the project name
+lowercases the worktree name and folds other characters to `-`
+(`F_Foo` and `F-Foo` map to the same project), and a `compose.project` you
+set is used as is.
 
 Trade-offs versus the four native plugins:
 
 - **Compose starts the service's dependencies too** (`depends_on`), as
-  `docker compose up <service>` always does.
+  `docker compose up <service>` always does. Only the wrapped service gets
+  bough's port and name override, and remove stops only that service:
+  dependencies and the project network stay up until you remove them.
 - **`teardown.remove_datadir: true` does not touch compose-managed
   volumes.** `Down` stops and removes the container; the data in your
   compose file's volumes is yours to delete.

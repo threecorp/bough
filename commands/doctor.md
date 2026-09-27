@@ -10,8 +10,10 @@ Run `bough claude doctor` and summarize for the user:
   (`bough repair` converts them);
 - which `bough-plugin-*` engine plugins were found on `PATH` and how many of
   them actually start;
-- whether wiring, `.bough.yaml` sections or an observer daemon from a retired
-  feature are still there.
+- whether wiring or `.bough.yaml` sections from a retired feature are still
+  there, and whether an `observer.pid` from the old observer daemon names a
+  live process (doctor cannot tell whether that process is the daemon; pass
+  on its `pgrep` check).
 
 If the report warns that the hooks are wired twice (in `settings.json` and by
 the bough Claude Code plugin), say that one copy has to go, and pass on the

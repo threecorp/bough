@@ -2,7 +2,7 @@
 
 bough bootstraps one isolated development environment per git
 worktree: the worktree itself, an engine set of its own, deterministic
-ports, a rendered `.env.local` per sub-repo, and the two
+ports, a rendered `.env.local` per sub-repo that declares `env_local`, and the two
 `claude --worktree` hooks that drive it. The CHANGELOG records what
 each release shipped; this file lists what is planned and what is out
 of scope.
