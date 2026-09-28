@@ -69,18 +69,22 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 		}
 	}
 
-	// A retired event exits 0 and writes nothing to stdout. This is what
-	// keeps an un-updated settings.json or a cached plugin manifest from
-	// failing every tool call until the operator re-runs install.
+	// Since v0.29.0 a retired event fails, naming itself and the fix, and
+	// still writes nothing to stdout (UserPromptSubmit stdout reaches the model).
 	for _, retired := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"} {
-		out, errOut := run(t, "hook handle "+retired,
-			`{"hook_event_name":"`+retired+`","tool_name":"Edit"}`,
-			"hook", "handle", "--event", retired)
-		if strings.TrimSpace(out) != "" {
-			t.Errorf("a retired event must print nothing to stdout (it is folded into the model's context), got: %q", out)
+		cmd := exec.Command(bin, "hook", "handle", "--event", retired)
+		cmd.Dir = workdir
+		cmd.Stdin = strings.NewReader(`{"hook_event_name":"` + retired + `","tool_name":"Edit"}`)
+		var out, errOut bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		if err := cmd.Run(); err == nil {
+			t.Errorf("a retired event must fail since v0.29.0: %s", retired)
 		}
-		if !strings.Contains(errOut, "retired") {
-			t.Errorf("a retired event should say so on stderr, got: %q", errOut)
+		if strings.TrimSpace(out.String()) != "" {
+			t.Errorf("a retired event must print nothing to stdout, got: %q", out.String())
+		}
+		if !strings.Contains(errOut.String(), "retired") || !strings.Contains(errOut.String(), "hook install") {
+			t.Errorf("a retired event should name itself and the fix on stderr, got: %q", errOut.String())
 		}
 	}
 

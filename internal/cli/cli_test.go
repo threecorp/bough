@@ -150,9 +150,10 @@ func TestConfigValidate_WarnsOnce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".bough.yaml"), []byte(`schema_version: 2
 monorepo_root: "."
 repositories:
-  - {name: a, branch_strategy: develop}
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: mysql, version: "8.4", socket_dir: /tmp, port_ranges: {main: [42000, 42999]}}
 registry: {path: .bough-ports.json}
-instinct: {enabled: true}
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +168,8 @@ instinct: {enabled: true}
 			t.Errorf("validate: %v\n%s", err, out.String())
 		}
 	})
-	if n := strings.Count(stderr, "'instinct:' is retired"); n != 1 {
-		t.Errorf("retired-section warning printed %d times, want 1:\n%s", n, stderr)
+	if n := strings.Count(stderr, "socket_dir has no effect"); n != 1 {
+		t.Errorf("load warning printed %d times, want 1:\n%s", n, stderr)
 	}
 	if !strings.Contains(out.String(), ": valid") {
 		t.Errorf("want a valid line, got %q", out.String())
