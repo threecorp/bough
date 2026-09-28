@@ -1206,7 +1206,7 @@ replacement) are contained entirely inside the plugin.
 ## v0.9.29
 
 Fixes a mysql:8.4 docker-backend readiness race reported via an
-external handover (threecorp extremo config, no `initial_resources`):
+external handover (a real project's config, no `initial_resources`):
 `bough create` could declare the mysql engine ready ~1-2s before the
 real server's TCP listener existed, deterministically breaking
 `post_create` hooks (e.g. `make create-database`) that connect over
