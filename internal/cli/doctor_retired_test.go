@@ -154,8 +154,8 @@ func TestRenderRetiredConfig(t *testing.T) {
 	}
 	out.Reset()
 	renderRetiredConfig(&cobra.Command{}, &out)
-	if !strings.Contains(out.String(), "could not check for retired sections") {
-		t.Errorf("a broken .bough.yaml must be reported:\n%s", out.String())
+	if !strings.Contains(out.String(), "could not check for retired sections") || !strings.Contains(out.String(), "[!] Retired state") {
+		t.Errorf("a broken .bough.yaml must be reported as a warning:\n%s", out.String())
 	}
 }
 
