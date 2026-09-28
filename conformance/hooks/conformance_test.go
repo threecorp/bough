@@ -14,6 +14,7 @@ package hooks_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,18 +70,26 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 		}
 	}
 
-	// A retired event exits 0 and writes nothing to stdout. This is what
-	// keeps an un-updated settings.json or a cached plugin manifest from
-	// failing every tool call until the operator re-runs install.
+	// Since v0.29.0 a retired event fails, naming itself and the fix, and
+	// still writes nothing to stdout (UserPromptSubmit stdout reaches the model).
 	for _, retired := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"} {
-		out, errOut := run(t, "hook handle "+retired,
-			`{"hook_event_name":"`+retired+`","tool_name":"Edit"}`,
-			"hook", "handle", "--event", retired)
-		if strings.TrimSpace(out) != "" {
-			t.Errorf("a retired event must print nothing to stdout (it is folded into the model's context), got: %q", out)
+		cmd := exec.Command(bin, "hook", "handle", "--event", retired)
+		cmd.Dir = workdir
+		cmd.Stdin = strings.NewReader(`{"hook_event_name":"` + retired + `","tool_name":"Edit"}`)
+		var out, errOut bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		// Exactly 1: Claude Code blocks the tool call or prompt on exit 2.
+		var exitErr *exec.ExitError
+		if err := cmd.Run(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			t.Errorf("a retired event must exit 1 since v0.29.0: %s: %v", retired, err)
 		}
-		if !strings.Contains(errOut, "retired") {
-			t.Errorf("a retired event should say so on stderr, got: %q", errOut)
+		if strings.TrimSpace(out.String()) != "" {
+			t.Errorf("a retired event must print nothing to stdout, got: %q", out.String())
+		}
+		for _, want := range []string{retired, "hook install", "--scope user", "hook uninstall", "bough-hooks or bough-all is enabled", "claude plugin update"} {
+			if !strings.Contains(errOut.String(), want) {
+				t.Errorf("stderr for %s should contain %q, got: %q", retired, want, errOut.String())
+			}
 		}
 	}
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.29.0 (unreleased)
+
+### Removed
+
+- **BREAKING: the v0.28.x compatibility shims are gone.** A `.bough.yaml`
+  that still carries `instinct:`, `quality_gates:`, `memory_backends:`,
+  `export:` or `mcp:` now fails to load, with an error naming the section
+  to delete. `bough hook handle` fails on the six retired hook events
+  (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd`,
+  `PreCompact`) instead of exiting 0. `bough claude hook install` still
+  prunes them from `settings.json`, and `bough claude doctor` still names
+  both.
+
 ## Unreleased
 
 ### Fixed

@@ -57,5 +57,6 @@ Without one, wire the hooks from the repo the user wants
 - `bough claude hook install --scope user` — `~/.claude/settings.json` (every repo)
 - `bough claude hook uninstall` — remove them
 
-Upgrading from v0.27.0 or earlier leaves six retired hook events behind;
-`bough claude doctor` names them and prints the remedy.
+Upgrading from v0.27.0 or earlier leaves six retired hook events behind,
+and since v0.29.0 each fails when it fires; `bough claude doctor` names
+them and prints the remedy.
