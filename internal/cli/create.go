@@ -37,6 +37,7 @@ func newCreateCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
+		Args:  cobra.NoArgs,
 		Short: "Bootstrap a per-worktree isolated environment",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stdinJSON {
@@ -56,7 +57,7 @@ func newCreateCmd() *cobra.Command {
 			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "worktree name (mutually exclusive with --stdin-json)")
+	cmd.Flags().StringVar(&name, "name", "", "worktree name (the name in a --stdin-json payload overrides it)")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "monorepo root (defaults to current working dir; overridden by --stdin-json)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")

@@ -142,7 +142,7 @@ func resolveConfigPath(cmd *cobra.Command, monorepoRoot string) string {
 	}
 	legacy := filepath.Join(monorepoRoot, ".worktree-isolation.yaml")
 	if _, err := os.Stat(legacy); err == nil {
-		fmt.Fprintln(os.Stderr, "bough: WARNING .worktree-isolation.yaml is deprecated, rename to .bough.yaml (removed in v0.5.0)")
+		fmt.Fprintln(os.Stderr, "bough: WARNING .worktree-isolation.yaml is deprecated (still read); rename to .bough.yaml")
 		return legacy
 	}
 	// Both absent — Load will surface the missing-file error against
