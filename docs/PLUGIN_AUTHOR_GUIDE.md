@@ -48,9 +48,11 @@ Then in CI:
 ```
 
 The suite spawns your binary under go-plugin (the same path the bough
-host uses in production), drives the full lifecycle twice for
-idempotency, asserts the contract invariants, and runs three fault
-injections (port conflict, datadir permission, image pull failure).
+host uses in production), drives the full lifecycle `IdempotentCount`
+times, calls `Up` again on a running engine and checks it returns nil and
+stays reachable, asserts
+the contract invariants, and runs two fault injections (port conflict,
+image pull failure).
 
 ## What the suite checks
 
@@ -58,14 +60,14 @@ injections (port conflict, datadir permission, image pull failure).
 |---|---|
 | `PortRangeDefault` | returns at least one role; every range has `0 < Low < High` |
 | `Up` | non-nil error on port conflict / image pull failure (skip with `SkipPortConflict` / `SkipImagePullFailure`) |
-| `Up` × N | second call on already-up state is up-or-reuse, not recreate |
+| `Up` on an already-up engine | returns nil and leaves it reachable (the UpReuse phase) |
 | `ReadyCheck` | returns true within `ReadyTimeout` |
 | `EnvVars` | every value non-empty (`AssertNonEmpty`) |
-| `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` is dialable from the host (`AssertReachable`) — v0.2.6 guard |
-| `EnvVars` | no value contains shell metachars unless `AllowShellMetachars=true` (`AssertShellSafe`) — v0.2.5 guard |
-| `EnvVars` | `Config.NativeProbe(ctx, hostPort)` returns nil for every dialable address — v0.2.6 guard, protocol-level |
-| `Down` | returns nil within `GracefulTimeoutSec` |
-| `Cleanup` × 2 | idempotent — second call must not error |
+| `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` with a host and a known or explicit port is dialable from the host (`AssertReachable`); other URLs are skipped |
+| `EnvVars` | no value contains shell metachars unless `AllowShellMetachars=true` (`AssertShellSafe`) |
+| `EnvVars` | `Config.NativeProbe(ctx, hostPort)` returns nil for every dialable address — only when you set `NativeProbe` |
+| `Down` | returns nil |
+| `Cleanup` × 2 | idempotent — second call must not error (a permission error from a container-owned datadir is skipped, not failed) |
 
 See [`plugins/engine/api/CONTRACT.md`](../plugins/engine/api/CONTRACT.md) for
 the prose contract every invariant traces back to.
@@ -85,9 +87,9 @@ the prose contract every invariant traces back to.
 - **`ReadyTimeout`** — how long `ReadyCheck` may poll. Defaults to 60 s;
   raise for engines with long warm-up (elasticsearch JVM ≈ 30-60 s
   cold).
-- **`IdempotentCount`** — how many full lifecycle loops to run before
-  the final `Cleanup`. Defaults to 2 (= one normal run + one re-Up to
-  catch "already running" bugs).
+- **`IdempotentCount`** — how many Up → Down loops to run before the
+  final `Cleanup`. Defaults to 2, so the second `Up` is a restart from a
+  downed state. Reuse of a running engine is checked separately.
 - **`AllowShellMetachars`** — set true if your plugin legitimately
   emits values with `(`, `&`, `;`, `$`, etc. The mysql go-sql-driver
   DSN format is the canonical case.
@@ -120,7 +122,10 @@ go test -tags=conformance -race -timeout=15m -v ./...
 
 On macOS the suite talks to Docker Desktop / OrbStack / Colima
 through `client.FromEnv`. On Linux it talks to the system docker
-socket. The suite never depends on `docker` being on `PATH`.
+socket. A plugin built on the Docker SDK needs no `docker` CLI to run;
+the bundled `compose` plugin does, since it runs `docker compose`. On
+Linux the suite's own cleanup may run `docker run … chown` to reclaim a
+datadir the container's user owns.
 
 ## Running in CI
 
@@ -158,17 +163,23 @@ jobs:
   `api.DefaultBackend` into `extras["backend"]` when your `Config`
   carries none; pass a token there to exercise another backend your
   plugin registers.
-- That your plugin builds. The suite skips with a clear message if
-  `BOUGH_CONFORMANCE_PLUGIN_BIN` is unset or points at a missing
-  file. Run `go build` in CI before invoking the suite.
+- That your plugin builds. The suite skips when
+  `BOUGH_CONFORMANCE_PLUGIN_BIN` is unset and fails when it points at a
+  binary that does not start. Run `go build` in CI before invoking the
+  suite.
 
 ## Multi-port engines (rabbitmq / kafka / nats / ...)
 
 Some engines listen on more than one TCP socket. RabbitMQ exposes AMQP
 on 5672 and a management UI on 15672. Kafka exposes broker + KRaft
-controller. NATS exposes client + monitor + cluster. Bough models this
-with one `Role` per listen point; the host allocates a deterministic
-port per role and the plugin binds them all in a single `Up`.
+controller. NATS exposes client + monitor + cluster. The plugin
+contract models this with one `Role` per listen point, and the
+conformance suite exercises every role a plugin declares.
+
+> The `bough create` host does not do this yet: it allocates and passes
+> only the `main` role's port. A multi-port plugin passes conformance
+> today but cannot run under the host until per-role allocation lands
+> (see [ROADMAP.md](ROADMAP.md)).
 
 A multi-port `Provider` differs from a single-port one only in:
 
@@ -220,9 +231,8 @@ A multi-port `Provider` differs from a single-port one only in:
    without a separate per-role `_HOST` duplicate.
 
 4. **Set `Config.MainPortRole`** on your conformance run to the role
-   the fault tests should target (the role port-conflict bind onto,
-   the role `datadir-permission` and `image-pull-failure` reference
-   in their error messages):
+   the fault tests should target (the role the port-conflict test binds
+   onto):
 
    ```go
    conformance.Run(t, conformance.Config{
@@ -240,7 +250,7 @@ for a minimal reference Provider.
 
 ## Mirror the bough-internal pattern
 
-The four bough-internal plugins (`mysql` / `postgres` / `redis` /
-`elasticsearch`) each contain a single `conformance_test.go` you can
-copy verbatim and tweak. Start there if you're unsure what your
+The five bough-internal plugins (`mysql` / `postgres` / `redis` /
+`elasticsearch` / `compose`) each contain a single `conformance_test.go`
+you can copy verbatim and tweak. Start there if you're unsure what your
 plugin's test should look like.

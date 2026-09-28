@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The repo publishes three Claude Code plugins from one tree, and every one of
@@ -144,5 +147,33 @@ func TestBoughAllSharesRootTrees(t *testing.T) {
 				t.Fatalf("bough-all/%s is a copy, not the shared tree\n got: %s\nwant: %s", tree, got, want)
 			}
 		})
+	}
+}
+
+// TestFrontmatterParses: Claude Code reads each command's and skill's YAML
+// frontmatter, so an unquoted colon in a description breaks the artifact.
+func TestFrontmatterParses(t *testing.T) {
+	files, _ := filepath.Glob("commands/*.md")
+	skills, _ := filepath.Glob("skills/*/SKILL.md")
+	for _, f := range append(files, skills...) {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.SplitN(string(b), "---\n", 3)
+		if len(parts) < 3 || parts[0] != "" {
+			t.Errorf("%s: no leading --- frontmatter block", f)
+			continue
+		}
+		var fm struct {
+			Description string `yaml:"description"`
+		}
+		if err := yaml.Unmarshal([]byte(parts[1]), &fm); err != nil {
+			t.Errorf("%s: frontmatter is not valid YAML: %v", f, err)
+			continue
+		}
+		if fm.Description == "" {
+			t.Errorf("%s: frontmatter has no description", f)
+		}
 	}
 }

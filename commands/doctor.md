@@ -3,21 +3,21 @@ description: Report bough's hook wiring, worktree containers, and engine-plugin 
 allowed-tools: Bash(bough:*)
 ---
 
-Run `bough doctor` and summarize for the user:
+Run `bough claude doctor` and summarize for the user:
 
 - which hook events are wired, and whether they come from bough or a hand-edit;
-- whether any worktree container is in a shape the host would refuse;
+- whether any worktree container is in a shape the host would refuse
+  (`bough repair` converts them);
 - which `bough-plugin-*` engine plugins were found on `PATH` and how many of
-  them actually start (nothing is reported when none are installed);
-- whether wiring or `.bough.yaml` sections from a retired feature are still there.
+  them actually start;
+- whether wiring or `.bough.yaml` sections from a retired feature are still
+  there, and whether an `observer.pid` from the old observer daemon names a
+  live process (doctor cannot tell whether that process is the daemon; pass
+  on its `pgrep` check).
 
-If the report warns that these hooks live in `settings.json` while the bough
-Claude Code plugin is also installed, explain that the two double-fire and the
-`settings.json` copy should be removed with `bough claude hook uninstall`.
+If the report warns that the hooks are wired twice (in `settings.json` and by
+the bough Claude Code plugin), say that one copy has to go, and pass on the
+remedy the report prints.
 
-If it names retired wiring or retired config sections, say that one
-`bough claude hook install` prunes the wiring, and the `.bough.yaml` sections
-are the user's to delete. Two cases install does NOT cover, so pass them on as
-the report words them: a retired entry sharing a hook group with one the user
-wrote has to be deleted by hand, and wiring supplied by the `bough-hooks` /
-`bough-all` plugin goes away with `claude plugin update`, not with install.
+For retired wiring or config, pass on the remedy the report prints; the
+upgrade guide is `docs/MIGRATION-v0.27-to-v0.28.md` in the bough repository.

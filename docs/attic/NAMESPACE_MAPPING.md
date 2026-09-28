@@ -20,7 +20,7 @@ Two monorepos that both have a `main` branch, or that both happen to use a `F-so
 
 - The host's coordinator never sees this mapping — it works in `schema.Scope` and lets the backend translate at the wire.
 - v0.6 mem0 / Graphiti plugin authors implement the mapping inside their `MemoryBackend.Store` / `Query` handlers.
-- The conformance suite passes `schema.Scope{Level: "worktree", WorktreeID: "F-test", RepoName: "auba"}`; backends are free to translate however they like internally as long as round-trip Store → Query honours the scope filter.
+- The conformance suite passes `schema.Scope{Level: "worktree", WorktreeID: "F-test", RepoName: "demo-api"}`; backends are free to translate however they like internally as long as round-trip Store → Query honours the scope filter.
 
 ## Implementation notes
 

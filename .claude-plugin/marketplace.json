@@ -9,7 +9,7 @@
     {
       "name": "bough",
       "source": "./",
-      "description": "Commands + skill only, no hooks: /bough:* slash commands and the using-bough skill. Inert until invoked, so it is safe at any scope. Pair with `bough claude hook install` when you want `claude --worktree` to reach bough."
+      "description": "Commands + skill only, no hooks: /bough:* slash commands and the using-bough skill. Nothing runs in the background, so it is safe at any scope. Pair with `bough claude hook install` when you want `claude --worktree` to reach bough."
     },
     {
       "name": "bough-hooks",
@@ -19,7 +19,7 @@
     {
       "name": "bough-all",
       "source": "./claude-plugins/bough-all",
-      "description": "Everything: /bough:* commands, the using-bough skill, and the WorktreeCreate / WorktreeRemove hooks. Install with --scope project to keep the hooks to one repo."
+      "description": "Everything: /bough-all:* commands, the using-bough skill, and the WorktreeCreate / WorktreeRemove hooks. Install with --scope project to keep the hooks to one repo."
     }
   ]
 }

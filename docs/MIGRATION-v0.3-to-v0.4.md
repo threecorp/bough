@@ -43,7 +43,7 @@ v0.4.x.
 | registry file | `.worktree-ports.json` | `.bough-ports.json` | same |
 | backup dir | `~/.claude/backups/` | `~/.bough/backups/` | same |
 | YAML section | `databases:` | `engines:` | loader accepts both |
-| YAML field | `initial_databases: ["auba"]` | `initial_resources: [{type: database, name: auba}]` | old `[]string` auto-converts to `[{type: database, name: <s>}]` |
+| YAML field | `initial_databases: ["demo"]` | `initial_resources: [{type: database, name: demo}]` | old `[]string` auto-converts to `[{type: database, name: <s>}]` |
 | YAML field | `port_range: [42000, 44999]` | `port_ranges: { main: [42000, 44999] }` | old array auto-wraps as `{main: [...]}` |
 | Go interface | `DBProvider` | `EngineProvider` | n/a (host ↔ plugin gRPC) |
 | Go pkg | `plugins/db/` | `plugins/engine/` | `git mv`; external plugin authors must update `import` paths |
@@ -60,7 +60,7 @@ schema_version: 1
 databases:
   - kind: mysql
     port_range: [42000, 44999]
-    initial_databases: ["auba"]
+    initial_databases: ["demo"]
 ```
 
 v0.4.0:
@@ -71,9 +71,10 @@ engines:
     port_ranges:
       main: [42000, 44999]
     initial_resources:
-      - { type: database, name: auba }
+      - { type: database, name: demo }
 
-  # multi-port engine — plugin lands in v0.5.0; schema is ready in v0.4.0
+  # schema illustration only: `bough create` rejects an engine without a
+  # `main` role, and the host still allocates only `main`
   - kind: rabbitmq
     port_ranges:
       amqp:       [60000, 60499]
@@ -92,11 +93,11 @@ External plugin maintainers (your `bough-plugin-<kind>` repo):
 2. Rename your provider's signature to match `EngineProvider`:
    `Up(ctx, *UpReq)` now takes `[]PortSpec` instead of a single `Port`
    field, `[]ResourceSpec` instead of `InitialDatabases []string`.
-   The bundled `pickMainPort()` and `pickFirstResourceName()` helpers
+   The exported `api.PickMainPort` and `api.PickFirstResourceName` helpers
    in `plugins/engine/api/shims.go` cover the trivial single-port case.
-3. Rebuild your binary against bough v0.4.0 — the magic-cookie handshake
-   has moved, but the host's fallback path keeps v0.3.x binaries
-   working through v0.4.x.
+3. Rebuild your binary against the current `plugins/engine/api`. The
+   host requires handshake protocol version 3 (v0.4.0 introduced 2), so
+   a binary built for protocol 1 or 2 no longer spawns.
 
 ## What's NOT removed in v0.4.0
 

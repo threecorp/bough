@@ -1,101 +1,29 @@
-# Plugin signing (design, not yet wired up)
+# Signatures
 
-bough plugins are third-party code: any binary on `PATH` named
-`bough-plugin-<kind>` is a subprocess the host spawns with the
-operator's file-system + network capabilities — today that means
-the four bundled engine plugins (mysql / postgres / redis /
-elasticsearch). Signing is meant to be the supply-chain control
-point operators use to verify that a plugin came from the source
-they trust before letting it run.
+## Verifying a release
 
-> **Status: designed, not enforced.** `internal/pluginsign` implements
-> the cosign / minisign verification calls below and the config
-> schema parses, but no command currently calls it — `bough plugins`
-> only has a `list` subcommand today (no `verify`, no spawn-time
-> enforce gate). Treat everything past this notice as the intended
-> design, not current behaviour.
+Every release archive is signed with [cosign](https://www.sigstore.dev/)
+keyless signing from the release workflow. Each
+`bough_<version>_<os>_<arch>.tar.gz` asset has a `.sig` and a `.pem`
+next to it. Verify the archive before you extract it:
 
-## Schemes (round 4 priority A9)
-
-bough accepts two signature schemes side-by-side:
-
-| Scheme | Best for | Tooling |
-|---|---|---|
-| **cosign** (Sigstore) | official bough releases (GoReleaser keyless via GitHub Actions OIDC), enterprise CI, multi-tenant registries | `cosign verify-blob --bundle <sig> <binary>` |
-| **minisign** (Ed25519) | solo / local plugin authors, air-gapped deploys, pinned-public-key flows | `minisign -V -m <binary> -x <sig> -p <pubkey>` |
-
-Pick either. The reference is `docs/SIGNING.md` (this file); plugin
-authors should mention which scheme they ship in their own
-`docs/INTEGRATION.md`.
-
-## Configuration
-
-None yet, deliberately. The schema sketched here used to sit under the
-`instinct:` section and was removed with it in v0.28.0; no command path
-called `internal/pluginsign`, so the keys parsed and did nothing. A
-config surface lands in the same change that wires the enforce gate
-below — a key that configures nothing is worse than no key, because it
-reads as a control that is switched off rather than one that is absent.
-
-The shape it will take, once wired up: every engine plugin spawn would
-run through an enforce gate that:
-
-1. **Skips verification** when the binary name is on
-   `plugin_security.allowlist` (= the operator's "I vendored this
-   one myself, do not verify" signal).
-2. **Tries each scheme** in `accepted_signature_schemes` in order
-   (defaults to `[cosign, minisign]`). The first success wins.
-3. **Fails open with a stderr NOTICE** when the verifier binary is
-   missing on PATH, so flipping the flag without installing cosign /
-   minisign does not lock you out of your own host. A
-   `fail_close_on_missing_verifier` flag for enterprise deploys that
-   need a hard gate is part of the design but unimplemented.
-4. **Refuses to spawn** when at least one verifier ran and reported
-   a non-verified result. The error mentions which schemes were
-   tried and how to recover (= add to allowlist or re-sign).
-
-Cosign keyless verification needs the OIDC identity + issuer the
-GoReleaser pipeline signed under (bough's own release identity:
-`https://github.com/threecorp/bough/.github/workflows/release.yml@<ref>`,
-issuer `https://token.actions.githubusercontent.com`). `internal
-/pluginsign.Request` carries `CertIdentity` / `CertOIDCIssuer` /
-`CertPath` fields for this — there is no env-var or config-file
-loader for them yet since nothing constructs a `Request` at all:
-`internal/pluginsign` has no test files either, so this path has
-zero coverage today, not just zero callers outside its own tests.
-
-## Current CLI
-
-```sh
-bough plugins list
+```bash
+v=0.28.0; a=bough_${v}_darwin_arm64.tar.gz
+gh release download v$v --repo threecorp/bough -p "$a" -p "$a.sig" -p "$a.pem"
+cosign verify-blob "$a" \
+  --signature "$a.sig" --certificate "$a.pem" \
+  --certificate-identity-regexp '^https://github.com/threecorp/bough/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# Verified OK
 ```
 
-lists every `bough-plugin-<kind>` binary bough finds on `PATH`.
-There is no `bough plugins verify` subcommand today — verifying a
-binary means invoking `cosign verify-blob` / `minisign -V` directly
-(see the table above), not through bough.
+`checksums.txt` in the same release carries the SHA-256 of every archive.
 
-## Why two schemes
+## Plugin binaries are not verified
 
-Sigstore (cosign) is the de-facto Go OSS standard in 2025–2026:
-GoReleaser's `keyless` integration uses GitHub Actions OIDC, so
-official bough releases get a verifiable supply-chain trail without
-anyone managing private keys. minisign is small, portable, and
-Ed25519-based — perfect for a solo plugin author who just wants
-`minisign -S` once and `minisign -V` on every machine that pulls
-the binary.
-
-Neither scheme is "the right one" — operators pick the flow that
-matches their threat model. The bough host accepts both so plugin
-authors do not have to agree.
-
-## See also
-
-- [SECURITY.md](SECURITY.md) — the broader third-party plugin trust
-  model (= why "bin on PATH" is not enough on its own).
-- [GoReleaser sign docs](https://goreleaser.com/customization/sign/) —
-  the official bough release pipeline lives here.
-- [Sigstore](https://www.sigstore.dev/) — cosign / Fulcio / Rekor
-  story.
-- [minisign](https://github.com/jedisct1/minisign) — the Ed25519
-  signer.
+bough spawns whatever `bough-plugin-<kind>` it finds on `PATH` and does
+not check a signature first. `internal/pluginsign` has cosign and
+minisign verification helpers, but no command calls them and there is
+no configuration for them. Until that is wired, verify the release
+archive as above and keep `PATH` to binaries you trust — see
+[SECURITY.md](SECURITY.md).
