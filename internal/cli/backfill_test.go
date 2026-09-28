@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ikeikeikeike/bough/internal/config"
+	"github.com/ikeikeikeike/bough/internal/registry"
 )
 
 // TestRunBackfill_NoWorktreesDirIsANoop preserves the pre-existing
@@ -119,5 +120,41 @@ func TestRunBackfill_RelinksClaudeLocalMd(t *testing.T) {
 	}
 	if got, err := os.Readlink(filepath.Join(wtDir, "CLAUDE.local.md")); err != nil || got != filepath.Join(mono, "CLAUDE.local.md") {
 		t.Errorf("CLAUDE.local.md link = %q (%v)", got, err)
+	}
+}
+
+// TestRunBackfill_RepairsStaleLinkOnRegisteredWorktree: an already
+// registered worktree whose CLAUDE.local.md link points elsewhere is
+// repointed at the root copy, not skipped with the registration.
+func TestRunBackfill_RepairsStaleLinkOnRegisteredWorktree(t *testing.T) {
+	mono := t.TempDir()
+	want := filepath.Join(mono, "CLAUDE.local.md")
+	if err := os.WriteFile(want, []byte("# mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtDir := filepath.Join(mono, "worktrees", "F-known")
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone.md"), filepath.Join(wtDir, "CLAUDE.local.md")); err != nil {
+		t.Fatal(err)
+	}
+	regPath := filepath.Join(mono, ".bough-ports.json")
+	store := registry.NewStore(regPath, "")
+	reg, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg["F-known"] = map[string]int{}
+	if err := store.Save(reg, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Registry: config.RegistryConfig{Path: regPath}}
+	var stderr bytes.Buffer
+	if err := runBackfill(&stderr, cfg, mono); err != nil {
+		t.Fatalf("runBackfill: %v", err)
+	}
+	if got, err := os.Readlink(filepath.Join(wtDir, "CLAUDE.local.md")); err != nil || got != want {
+		t.Errorf("stale link not repaired: %q (%v), want %q", got, err, want)
 	}
 }

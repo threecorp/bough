@@ -8,7 +8,8 @@
   `CLAUDE.local.md` into each worktree next to `CLAUDE.md`, so a
   `claude --worktree` session also loads the operator's personal
   guidance. Each file is linked only when the root has it, and a real
-  file already in the worktree is left alone.
+  file already in the worktree is left alone. Like `CLAUDE.md`, the link
+  shows as untracked in the worktree container's `git status`.
 
 ## v0.28.0
 

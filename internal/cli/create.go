@@ -730,14 +730,10 @@ func linkWorktreeClaudeMd(stderr io.Writer, monorepoRoot, worktreeRoot string) {
 			continue // no root file to expose
 		}
 		dst := filepath.Join(worktreeRoot, name)
-		// When the container is a work tree of the monorepo root (see
-		// materializeWorktreeRoot) and the root TRACKS the file, git has
-		// already checked out a real file here — the session reads it without
-		// help. Replacing it with a symlink would be a downgrade, and
-		// ensureSymlink refuses a non-symlink anyway; skipping silently keeps
-		// that non-event out of the operator's stderr. An untracked (or
-		// ignored) root file — CLAUDE.local.md usually is — leaves nothing here
-		// and still gets linked.
+		// A real file here is one the operator wrote (the container is checked
+		// out at an empty tree, so git never puts one here); keep it, and keep
+		// the refusal out of stderr. The link shows as untracked in the
+		// container's git status, like the sub-repo dirs beside it.
 		if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
 			continue
 		}

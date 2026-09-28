@@ -160,3 +160,18 @@ func TestLinkWorktreeClaudeMd_LinksClaudeLocalMd(t *testing.T) {
 		t.Errorf("a real worktree CLAUDE.local.md was turned into a symlink")
 	}
 }
+
+// TestLinkWorktreeClaudeMd_SkipsNonRegularRoot: a root CLAUDE.local.md that
+// is a directory is not linked.
+func TestLinkWorktreeClaudeMd_SkipsNonRegularRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "CLAUDE.local.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	_ = os.MkdirAll(wt, 0o755)
+	linkWorktreeClaudeMd(io.Discard, root, wt)
+	if _, err := os.Lstat(filepath.Join(wt, "CLAUDE.local.md")); !os.IsNotExist(err) {
+		t.Errorf("a directory named CLAUDE.local.md at the root must not be linked: %v", err)
+	}
+}
