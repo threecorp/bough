@@ -36,7 +36,10 @@ func newConfigValidateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				path = resolveConfigPath(cmd, monorepoRoot)
+				// Already loaded and validated above; loading again would
+				// print every warning twice.
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: valid\n", resolveConfigPath(cmd, monorepoRoot))
+				return nil
 			}
 			if path == "" {
 				return fmt.Errorf("path argument missing and could not be resolved from cwd")
