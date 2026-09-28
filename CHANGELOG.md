@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `bough create` and `bough backfill` symlink the monorepo root's
+  `CLAUDE.local.md` into each worktree next to `CLAUDE.md`, so a
+  `claude --worktree` session also loads the operator's personal
+  guidance. Each file is linked only when the root has it, and a real
+  file already in the worktree is left alone.
+
 ## v0.28.0
 
 ### Removed

@@ -112,3 +112,51 @@ func TestLinkWorktreeClaudeMd(t *testing.T) {
 		t.Errorf("real worktree CLAUDE.md content was modified")
 	}
 }
+
+// TestLinkWorktreeClaudeMd_LinksClaudeLocalMd: the root's personal
+// CLAUDE.local.md follows CLAUDE.md into the worktree, each one only when
+// the root has it, and a real file already in the worktree is kept.
+func TestLinkWorktreeClaudeMd_LinksClaudeLocalMd(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("# "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	_ = os.MkdirAll(wt, 0o755)
+	linkWorktreeClaudeMd(io.Discard, root, wt)
+	for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md"} {
+		if got, err := os.Readlink(filepath.Join(wt, name)); err != nil || got != filepath.Join(root, name) {
+			t.Errorf("%s link = %q (%v), want %q", name, got, err, filepath.Join(root, name))
+		}
+	}
+
+	// Only CLAUDE.local.md at the root: it is linked on its own.
+	localOnly := t.TempDir()
+	if err := os.WriteFile(filepath.Join(localOnly, "CLAUDE.local.md"), []byte("# mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wt2 := filepath.Join(t.TempDir(), "wt2")
+	_ = os.MkdirAll(wt2, 0o755)
+	linkWorktreeClaudeMd(io.Discard, localOnly, wt2)
+	if _, err := os.Readlink(filepath.Join(wt2, "CLAUDE.local.md")); err != nil {
+		t.Errorf("CLAUDE.local.md must be linked even without a root CLAUDE.md: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(wt2, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("no root CLAUDE.md must leave no worktree CLAUDE.md")
+	}
+
+	// A real CLAUDE.local.md in the worktree is left intact.
+	wt3 := filepath.Join(t.TempDir(), "wt3")
+	_ = os.MkdirAll(wt3, 0o755)
+	real := filepath.Join(wt3, "CLAUDE.local.md")
+	_ = os.WriteFile(real, []byte("worktree's own\n"), 0o644)
+	linkWorktreeClaudeMd(io.Discard, root, wt3)
+	if b, _ := os.ReadFile(real); string(b) != "worktree's own\n" {
+		t.Errorf("a real worktree CLAUDE.local.md was replaced")
+	}
+	if fi, _ := os.Lstat(real); fi != nil && fi.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("a real worktree CLAUDE.local.md was turned into a symlink")
+	}
+}

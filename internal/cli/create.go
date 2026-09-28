@@ -178,7 +178,8 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// data is missing.
 	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
-	// 5b. Expose the monorepo's root CLAUDE.md to the worktree session.
+	// 5b. Expose the monorepo's root CLAUDE.md and CLAUDE.local.md to the
+	// worktree session.
 	// `claude --worktree` cd's into <worktreeRoot> — a non-git container whose
 	// git walk-up cannot reach the monorepo root — so without the symlink the
 	// worktree session would not load it. Best-effort, and it follows
@@ -714,35 +715,38 @@ func ensureSymlink(target, linkPath string) error {
 	return os.Symlink(target, linkPath)
 }
 
-// linkWorktreeClaudeMd symlinks <worktreeRoot>/CLAUDE.md ->
-// <monorepoRoot>/CLAUDE.md so the worktree's Claude session inherits the
-// monorepo root's guidance. The session cd's into the worktree — a non-git
-// container whose git walk-up cannot reach the monorepo root — so without the
-// symlink the root CLAUDE.md would not load for that session. Best-effort and
-// only when the monorepo root actually has a regular-file CLAUDE.md; a real
-// (non-symlink) CLAUDE.md already in the worktree is left untouched by
-// ensureSymlink.
+// linkWorktreeClaudeMd symlinks <worktreeRoot>/CLAUDE.md and
+// <worktreeRoot>/CLAUDE.local.md to the monorepo root's copies so the
+// worktree's Claude session inherits the root's shared and personal guidance.
+// The session cd's into the worktree — a non-git container whose git walk-up
+// cannot reach the monorepo root — so without the symlinks the root files
+// would not load for that session. Best-effort and per file: only a
+// regular-file original is linked, and a real (non-symlink) file already in
+// the worktree is left untouched by ensureSymlink.
 func linkWorktreeClaudeMd(stderr io.Writer, monorepoRoot, worktreeRoot string) {
-	src := filepath.Join(monorepoRoot, "CLAUDE.md")
-	if fi, err := os.Stat(src); err != nil || !fi.Mode().IsRegular() {
-		return // no root CLAUDE.md to expose; nothing to do
+	for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md"} {
+		src := filepath.Join(monorepoRoot, name)
+		if fi, err := os.Stat(src); err != nil || !fi.Mode().IsRegular() {
+			continue // no root file to expose
+		}
+		dst := filepath.Join(worktreeRoot, name)
+		// When the container is a work tree of the monorepo root (see
+		// materializeWorktreeRoot) and the root TRACKS the file, git has
+		// already checked out a real file here — the session reads it without
+		// help. Replacing it with a symlink would be a downgrade, and
+		// ensureSymlink refuses a non-symlink anyway; skipping silently keeps
+		// that non-event out of the operator's stderr. An untracked (or
+		// ignored) root file — CLAUDE.local.md usually is — leaves nothing here
+		// and still gets linked.
+		if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
+			continue
+		}
+		if err := ensureSymlink(src, dst); err != nil {
+			logf(stderr, "[bough] %s: %v", name, err)
+			continue
+		}
+		logf(stderr, "[bough] %s → %s", name, src)
 	}
-	dst := filepath.Join(worktreeRoot, "CLAUDE.md")
-	// When the container is a work tree of the monorepo root (see
-	// materializeWorktreeRoot) and the root TRACKS its CLAUDE.md, git has
-	// already checked out a real file here — the session reads it without
-	// help. Replacing it with a symlink would be a downgrade, and
-	// ensureSymlink refuses a non-symlink anyway; skipping silently keeps
-	// that non-event out of the operator's stderr. An untracked (or
-	// ignored) root CLAUDE.md leaves nothing here and still gets linked.
-	if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
-		return
-	}
-	if err := ensureSymlink(src, dst); err != nil {
-		logf(stderr, "[bough] CLAUDE.md: %v", err)
-		return
-	}
-	logf(stderr, "[bough] CLAUDE.md → %s", src)
 }
 
 // renderEnvLocals walks repositories that declare env_local templates

@@ -100,3 +100,24 @@ func TestRunBackfill_ClaudeMdRealFileGuardAndMissingRoot(t *testing.T) {
 		t.Errorf("real worktree CLAUDE.md content was modified")
 	}
 }
+
+// TestRunBackfill_RelinksClaudeLocalMd: backfill repairs the CLAUDE.local.md
+// link through the same helper as create.
+func TestRunBackfill_RelinksClaudeLocalMd(t *testing.T) {
+	mono := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mono, "CLAUDE.local.md"), []byte("# mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtDir := filepath.Join(mono, "worktrees", "F-existing")
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Registry: config.RegistryConfig{Path: filepath.Join(mono, ".bough-ports.json")}}
+	var stderr bytes.Buffer
+	if err := runBackfill(&stderr, cfg, mono); err != nil {
+		t.Fatalf("runBackfill: %v", err)
+	}
+	if got, err := os.Readlink(filepath.Join(wtDir, "CLAUDE.local.md")); err != nil || got != filepath.Join(mono, "CLAUDE.local.md") {
+		t.Errorf("CLAUDE.local.md link = %q (%v)", got, err)
+	}
+}
