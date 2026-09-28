@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `teardown.graceful_timeout_sec` now reaches each engine's `Down`. It was
+  parsed and never used; `--graceful-timeout` still wins when set, and the
+  `WorktreeRemove` hook path uses the configured value.
+- `bough config validate` with no path printed every load warning twice.
+- `bough create` / `bough remove` reject a positional argument instead of
+  ignoring it (`bough remove foo` used to fail with "removal needs a
+  worktree path or name").
+- The `.worktree-isolation.yaml` warning no longer says the file was
+  removed in v0.5.0; it is still read.
+- The Nix flake builds `bough-plugin-compose` too, and stamps the commit as
+  the version instead of a fixed `0.1.1`.
+- Added the `LICENSE` file (MIT) the README already referred to.
+
+### Deprecated
+
+- The `mcp:` section of `.bough.yaml` is retired: it parsed into a struct no
+  code read. It now loads with a warning, `bough claude doctor` names it,
+  and it stops parsing in v0.29.0 with the other retired sections.
+
 ## v0.28.1
 
 ### Added
