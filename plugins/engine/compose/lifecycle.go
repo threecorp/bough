@@ -227,13 +227,19 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	}
 
 	timeoutSec := req.GracefulTimeoutSec
-	if timeoutSec <= 0 {
+	stopArgs := []string{"compose", "-f", composeFile, "-f", overridePath, "-p", st.Project, "stop"}
+	if timeoutSec > 0 {
+		// compose stop owns the grace and kills after it; the client
+		// deadline only has to outlast that.
+		stopArgs = append(stopArgs, "-t", strconv.Itoa(timeoutSec))
+		timeoutSec += 30
+	} else {
 		timeoutSec = 10
 	}
+	stopArgs = append(stopArgs, st.Service)
 	gctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
-	stopCmd := exec.CommandContext(gctx, "docker", "compose",
-		"-f", composeFile, "-f", overridePath, "-p", st.Project, "stop", st.Service)
+	stopCmd := exec.CommandContext(gctx, "docker", stopArgs...)
 	if out, err := stopCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compose: Down: docker compose stop failed: %w\n%s", err, out)
 	}
