@@ -226,15 +226,12 @@ func runDoctor(c *cobra.Command) error {
 // `bough hook replay` reuse the same payload format for golden
 // tests without colliding with operator workflows.
 //
-// Since v0.28.0 the only events with a body are WorktreeCreate and
-// WorktreeRemove. The six events the continuous-learning loop used to
-// drive are accepted and ignored (see hooks.RetiredEvents) so wiring
-// left in an operator's settings.json — or cached inside an
-// already-installed bough-hooks plugin — keeps exiting 0 until they
-// re-run `bough claude hook install`. An event that is neither wired
-// nor retired is an error: a typo'd --event used to exit 0 with empty
-// stdout, which a host reports as "hook succeeded but returned no
-// worktree path" with nothing naming the cause.
+// The only events with a body are WorktreeCreate and WorktreeRemove. The
+// six the continuous-learning loop used to drive (hooks.RetiredEvents)
+// were accepted and ignored through v0.28.x; since v0.29.0 they fail with
+// an error naming the fix. Any other event is an error too: a typo'd
+// --event used to exit 0 with empty stdout, which a host reports as "hook
+// succeeded but returned no worktree path" with nothing naming the cause.
 func newHookHandleCmd() *cobra.Command {
 	var event string
 	cmd := &cobra.Command{
@@ -245,24 +242,15 @@ func newHookHandleCmd() *cobra.Command {
 			if event == "" {
 				return fmt.Errorf("--event is required (= called by Claude Code's settings.json wiring; see `bough claude hook install`)")
 			}
-			// Answered before reading stdin or touching the config: a
-			// stale plugin sends six of these per tool call, and they must
-			// cost nothing. stderr, never stdout — UserPromptSubmit stdout
-			// is folded into the model's next turn, so a notice written
-			// there would be read as context every single turn.
+			// Answered before reading stdin or touching the config: stale
+			// wiring sends six of these per tool call. Both remediations are
+			// named because `hook install` only edits settings.json; wiring
+			// cached in a bough-hooks / bough-all plugin needs a plugin update.
 			if hooks.IsRetired(event) {
-				// Both remediations are named because `hook install` only
-				// edits settings.json. When the stale wiring comes from a
-				// cached bough-hooks / bough-all plugin manifest — the other
-				// half of the case this shim exists for — install changes
-				// nothing and the notice would otherwise repeat on every
-				// tool call with no way out.
-				fmt.Fprintf(c.ErrOrStderr(),
-					"[bough] hook event %s is retired since v0.28.0 and does nothing; "+
-						"run `bough claude hook install` to prune it from settings.json, "+
-						"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
-						"comes from the plugin\n", event)
-				return nil
+				return fmt.Errorf("hook event %s was retired in v0.28.0 and is no longer handled; "+
+					"run `bough claude hook install` to prune it from settings.json, "+
+					"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
+					"comes from the plugin", event)
 			}
 			if !hooks.IsWired(event) {
 				return fmt.Errorf("unknown hook event %q (wired: %s)", event, hooks.WiredEventNames())
