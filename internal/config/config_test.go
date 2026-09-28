@@ -13,10 +13,10 @@ func TestDeriveRepoName(t *testing.T) {
 		"git@github.com:demo-company/demo-proto":           "demo-proto",
 		"git@github.com:demo-company/demo-proto.git":       "demo-proto",
 		"https://github.com/demo-company/demo-dbmigration": "demo-dbmigration",
-		"ssh://git@host/org/repo.git":                        "repo",
+		"ssh://git@host/org/repo.git":                      "repo",
 		"~/src/demo-company/claude/demo-proto":             "demo-proto",
-		"../demo-proto/":                                     "demo-proto",
-		"/abs/path/to/repo.git":                              "repo",
+		"../demo-proto/":                                   "demo-proto",
+		"/abs/path/to/repo.git":                            "repo",
 	}
 	for in, want := range cases {
 		if got := deriveRepoName(in); got != want {
@@ -578,6 +578,7 @@ registry:
 		{"memory_backends", "memory_backends:\n  - kind: sqlite\n    role: reference-fallback\n", "memory_backends"},
 		{"export", "export:\n  enabled: true\n", "export"},
 		{"quality_gates", "quality_gates:\n  - name: lint\n    command: \"golangci-lint run\"\n", "quality_gates"},
+		{"mcp", "mcp:\n  enabled: true\n  source_of_truth: \"~/.claude.json\"\n", "mcp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, warnings, err := loadForTest(t, base+tc.section)
