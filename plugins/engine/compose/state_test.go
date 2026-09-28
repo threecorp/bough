@@ -11,9 +11,9 @@ import (
 func TestSidecarState_WriteReadRoundTrip(t *testing.T) {
 	worktreeRoot := t.TempDir()
 	want := &upState{
-		File:       "auba-api/compose.yml",
+		File:       "demo-api/compose.yml",
 		Service:    "redis",
-		Project:    "bough-f-feature-auba-api-compose-yml",
+		Project:    "bough-f-feature-demo-api-compose-yml",
 		TargetPort: 6379,
 		HostPort:   56123,
 		EnvPrefix:  "REDIS",

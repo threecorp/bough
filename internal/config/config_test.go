@@ -10,12 +10,12 @@ import (
 
 func TestDeriveRepoName(t *testing.T) {
 	cases := map[string]string{
-		"git@github.com:eiicon-company/auba-proto":           "auba-proto",
-		"git@github.com:eiicon-company/auba-proto.git":       "auba-proto",
-		"https://github.com/eiicon-company/auba-dbmigration": "auba-dbmigration",
+		"git@github.com:demo-company/demo-proto":           "demo-proto",
+		"git@github.com:demo-company/demo-proto.git":       "demo-proto",
+		"https://github.com/demo-company/demo-dbmigration": "demo-dbmigration",
 		"ssh://git@host/org/repo.git":                        "repo",
-		"~/src/eiicon-company/claude/auba-proto":             "auba-proto",
-		"../auba-proto/":                                     "auba-proto",
+		"~/src/demo-company/claude/demo-proto":             "demo-proto",
+		"../demo-proto/":                                     "demo-proto",
 		"/abs/path/to/repo.git":                              "repo",
 	}
 	for in, want := range cases {
@@ -32,7 +32,7 @@ func TestLoad_SourceAndOptionalBranchStrategy(t *testing.T) {
 	y := `schema_version: 2
 monorepo_root: "."
 repositories:
-  - source: git@github.com:eiicon-company/auba-proto
+  - source: git@github.com:demo-company/demo-proto
 registry:
   path: ".bough-ports.json"
 `
@@ -40,7 +40,7 @@ registry:
 	if err != nil {
 		t.Fatalf("load source-only: %v", err)
 	}
-	if len(cfg.Repositories) != 1 || cfg.Repositories[0].Name != "auba-proto" {
+	if len(cfg.Repositories) != 1 || cfg.Repositories[0].Name != "demo-proto" {
 		t.Fatalf("name not derived from source: %+v", cfg.Repositories)
 	}
 	if cfg.Repositories[0].BranchStrategy != "" {
@@ -115,7 +115,7 @@ func TestLoad_RejectsReservedName(t *testing.T) {
 // the v0.4 loader, exercising migrateLegacy()'s `databases:` →
 // `engines:`, `port_range:` → `port_ranges:{main:...}`,
 // `initial_databases:` → `initial_resources:[{type:database,...}]`
-// auto-conversion path. Once auba ships a v0.4-canonical fixture the
+// auto-conversion path. Once a real monorepo ships a v0.4-canonical fixture the
 // expected SchemaVersion bumps to 2 and the assertions stay otherwise
 // identical.
 func TestLoad_validExample(t *testing.T) {
@@ -187,7 +187,7 @@ engines:
     version: "7-alpine"
     port_ranges: {main: [56000, 56999]}
     compose:
-      file: "auba-api/compose.yml"
+      file: "demo-api/compose.yml"
       service: redis
       target_port: 6379
 registry: {path: .bough-ports.json}
@@ -206,7 +206,7 @@ registry: {path: .bough-ports.json}
 	if eng.Compose == nil {
 		t.Fatalf("Engine.Compose is nil, want a populated *ComposeSpec")
 	}
-	if got, want := eng.Compose.File, "auba-api/compose.yml"; got != want {
+	if got, want := eng.Compose.File, "demo-api/compose.yml"; got != want {
 		t.Errorf("Compose.File: got %q want %q", got, want)
 	}
 	if got, want := eng.Compose.Service, "redis"; got != want {
@@ -474,7 +474,7 @@ databases:
   - kind: mysql
     version: "8.4"
     port_range: [42000, 44999]
-    initial_databases: [auba, replica]
+    initial_databases: [demo, replica]
 registry: {path: .worktree-ports.json}
 `
 	c, err := LoadFromBytes([]byte(yaml), "test-legacy")
@@ -497,7 +497,7 @@ registry: {path: .worktree-ports.json}
 	if got, want := eng.InitialResources[0].Type, "database"; got != want {
 		t.Errorf("InitialResources[0].Type: got %q want %q", got, want)
 	}
-	if got, want := eng.InitialResources[0].Name, "auba"; got != want {
+	if got, want := eng.InitialResources[0].Name, "demo"; got != want {
 		t.Errorf("InitialResources[0].Name: got %q want %q", got, want)
 	}
 	if got, want := eng.InitialResources[1].Name, "replica"; got != want {

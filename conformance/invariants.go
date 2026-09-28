@@ -63,7 +63,7 @@ func AssertReachable(t Reporter, env map[string]string) {
 // into a bash `source` line. This is the v0.2.5 guard: a value
 // containing `(`, `&`, `;`, etc. aborts `source .env.local` on the
 // first such byte and silently leaves every subsequent variable
-// unset, which is how the empty-port redis URL crashed auba-api at
+// unset, which is how the empty-port redis URL crashed demo-api at
 // boot.
 //
 // Plugins whose values legitimately contain shell metachars (the

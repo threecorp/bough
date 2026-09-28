@@ -102,7 +102,7 @@ func TestParseBoundPort(t *testing.T) {
 func TestProvider_Up_RejectsMissingExtras(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestProvider_Up_RejectsMissingExtras(t *testing.T) {
 func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: 56123}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/does-not-exist.yml",
+			"compose.file":        "demo-api/does-not-exist.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -153,7 +153,7 @@ func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: port}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -200,7 +200,7 @@ func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: port}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -235,18 +235,18 @@ func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 func TestProvider_Up_RejectsInvalidTargetPort(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktreeRoot, "auba-api", "compose.yml"), []byte("services: {redis: {}}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "demo-api", "compose.yml"), []byte("services: {redis: {}}"), 0o644); err != nil {
 		t.Fatalf("seed compose.yml: %v", err)
 	}
 	err := p.Up(context.Background(), &api.UpReq{
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: 56123}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "not-a-number",
 		},

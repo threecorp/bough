@@ -67,7 +67,7 @@ type Repository struct {
 	// Name is the sub-directory under the monorepo root (and under each
 	// worktree) this repo lives in. Optional when Source is set — it is
 	// then derived from the Source basename (e.g. source
-	// git@github.com:org/auba-proto → name "auba-proto"). At least one of
+	// git@github.com:org/demo-proto → name "demo-proto"). At least one of
 	// Name / Source must be present.
 	Name string `yaml:"name"`
 	// Source, when set, is where bough acquires the repo from if

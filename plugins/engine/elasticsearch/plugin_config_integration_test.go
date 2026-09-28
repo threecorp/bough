@@ -52,7 +52,7 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 	requireDocker(t)
 
 	root := t.TempDir()
-	engineProviderWorktree := filepath.Join(root, "auba-api")
+	engineProviderWorktree := filepath.Join(root, "demo-api")
 	if err := os.MkdirAll(engineProviderWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir engine-provider worktree: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestPluginConfigMechanism_InstallsPluginAndMountsConfig(t *testing.T) {
 	// config_mount source: a host-prepared dir (standing in for a
 	// pre-fetched analyzer dictionary), declared relative to the raw
 	// worktree root exactly as an operator would in .bough.yaml.
-	configMountRel := filepath.Join("auba-api", "es-config-fixture")
+	configMountRel := filepath.Join("demo-api", "es-config-fixture")
 	configMountAbs := filepath.Join(root, configMountRel)
 	if err := os.MkdirAll(configMountAbs, 0o755); err != nil {
 		t.Fatalf("mkdir config_mount fixture: %v", err)

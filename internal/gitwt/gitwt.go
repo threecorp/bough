@@ -195,7 +195,7 @@ func (r *Runner) AddOrAttach(ctx context.Context, repoPath, dst, branch, base st
 
 	// --no-track: when effectiveBase is the remote-tracking origin/<base>,
 	// `git worktree add -b` would set the new branch's upstream to
-	// origin/<base>. auba publishes feature branches with a bare `git push`
+	// origin/<base>. A production monorepo publishes feature branches with a bare `git push`
 	// (push.default=simple), which then refuses because the upstream is
 	// origin/<base>, not origin/<branch>; --no-track leaves the branch
 	// upstream-less so the first `git push -u` wins. Harmless no-op when
@@ -369,7 +369,7 @@ const emptyContainerSubject = "bough: empty worktree container"
 // cloned over its transport; any other value is treated as a local
 // filesystem path and cloned with `--local` (hardlink-fast, offline). A
 // leading `~` is expanded and a relative local path is resolved against
-// baseDir (the monorepo root) so `source: ../auba-proto` is unambiguous.
+// baseDir (the monorepo root) so `source: ../demo-proto` is unambiguous.
 // CombinedOutput is captured so a clone failure surfaces git's message.
 func (r *Runner) Clone(ctx context.Context, source, dst, baseDir string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

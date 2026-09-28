@@ -41,7 +41,7 @@ var composeURLSchemes = map[string]string{
 // directory containing every declared repository as a sibling) —
 // req.WorktreeRoot itself is the engine-provider repo's own worktree
 // path (create.go's engineProviderWorktree), one level too deep for a
-// path like "auba-api/compose.yml" that names a sibling repo. This is
+// path like "demo-api/compose.yml" that names a sibling repo. This is
 // a deliberate deviation from how the other four plugins use
 // WorktreeRoot (as their own base directory).
 func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {

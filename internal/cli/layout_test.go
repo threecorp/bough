@@ -73,12 +73,12 @@ func TestWarnIfRootNotGit(t *testing.T) {
 			t.Fatalf("mkdir: %v", err)
 		}
 		// A pre-v0.11 root-level checkout that .bough/ would NOT cover.
-		mkGitRepo(t, filepath.Join(root, "auba-api"))
+		mkGitRepo(t, filepath.Join(root, "demo-api"))
 		var buf bytes.Buffer
 		inside, determined := insideGitWorkTree(root)
-		warnIfRootNotGit(&buf, &config.Config{Repositories: []config.Repository{{Name: "auba-api"}}}, root, inside, determined)
-		got := gitignoreSuggestions(&config.Config{Repositories: []config.Repository{{Name: "auba-api"}}}, root)
-		want := []string{".bough/", ".worktrees/", "auba-api/"}
+		warnIfRootNotGit(&buf, &config.Config{Repositories: []config.Repository{{Name: "demo-api"}}}, root, inside, determined)
+		got := gitignoreSuggestions(&config.Config{Repositories: []config.Repository{{Name: "demo-api"}}}, root)
+		want := []string{".bough/", ".worktrees/", "demo-api/"}
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("gitignoreSuggestions = %v, want %v (legacy .worktrees/ + root-level checkout must be covered)", got, want)
 		}
@@ -119,27 +119,27 @@ func mkGitRepo(t *testing.T, dir string) {
 func TestResolveRepoSrc(t *testing.T) {
 	t.Run("new .bough/repos location wins when present", func(t *testing.T) {
 		root := t.TempDir()
-		newLoc := filepath.Join(root, ".bough", "repos", "auba-api")
+		newLoc := filepath.Join(root, ".bough", "repos", "demo-api")
 		mkGitRepo(t, newLoc)
-		mkGitRepo(t, filepath.Join(root, "auba-api")) // old also present
-		if got := resolveRepoSrc(root, "auba-api"); got != newLoc {
+		mkGitRepo(t, filepath.Join(root, "demo-api")) // old also present
+		if got := resolveRepoSrc(root, "demo-api"); got != newLoc {
 			t.Errorf("resolveRepoSrc = %q, want the new .bough/repos location %q", got, newLoc)
 		}
 	})
 
 	t.Run("falls back to existing root-level checkout", func(t *testing.T) {
 		root := t.TempDir()
-		oldLoc := filepath.Join(root, "auba-api")
+		oldLoc := filepath.Join(root, "demo-api")
 		mkGitRepo(t, oldLoc)
-		if got := resolveRepoSrc(root, "auba-api"); got != oldLoc {
+		if got := resolveRepoSrc(root, "demo-api"); got != oldLoc {
 			t.Errorf("resolveRepoSrc = %q, want the existing root-level checkout %q (must not orphan it)", got, oldLoc)
 		}
 	})
 
 	t.Run("fresh acquisition targets the new location", func(t *testing.T) {
 		root := t.TempDir()
-		want := filepath.Join(root, ".bough", "repos", "auba-api")
-		if got := resolveRepoSrc(root, "auba-api"); got != want {
+		want := filepath.Join(root, ".bough", "repos", "demo-api")
+		if got := resolveRepoSrc(root, "demo-api"); got != want {
 			t.Errorf("resolveRepoSrc = %q, want a fresh clone to target %q", got, want)
 		}
 	})
