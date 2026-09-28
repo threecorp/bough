@@ -62,7 +62,8 @@ Claude Code fires these for `claude --worktree`, for a subagent with
 wired.
 
 Versions up to v0.27.0 also wired `PreToolUse`, `PostToolUse`,
-`UserPromptSubmit`, `Stop`, `SessionEnd` and `PreCompact`; see
+`UserPromptSubmit`, `Stop`, `SessionEnd` and `PreCompact`; since v0.29.0
+`bough hook handle` fails on them. See
 [MIGRATION-v0.27-to-v0.28.md](MIGRATION-v0.27-to-v0.28.md) to clear them.
 
 ## The CLI installs the same artifacts

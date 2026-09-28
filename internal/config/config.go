@@ -228,18 +228,15 @@ type LegacyConfig struct {
 	Teardown      TeardownConfig       `yaml:"teardown"`
 
 	// Sections that configured the continuous-learning loop bough
-	// carried until v0.27.0. Decoded as opaque nodes and never read:
-	// the decoder is strict, so without a field here a `.bough.yaml`
-	// that merely still carries one of these lines would fail to parse
-	// and take `claude --worktree` down with it. yaml.Node accepts both
-	// shapes that occur (a mapping for three of them, a sequence for
-	// quality_gates), and !IsZero() is what migrateLegacy warns on.
-	// Removed in v0.29.0.
+	// carried until v0.27.0. Decoded as opaque nodes only so LoadFromBytes
+	// can reject them by name rather than as an unknown field. yaml.Node
+	// accepts both shapes that occur (a mapping, or a sequence for
+	// quality_gates).
 	RetiredInstinct       yaml.Node `yaml:"instinct"`
 	RetiredMemoryBackends yaml.Node `yaml:"memory_backends"`
 	RetiredExport         yaml.Node `yaml:"export"`
 	RetiredQualityGates   yaml.Node `yaml:"quality_gates"`
-	// `mcp:` parsed into a struct nothing ever read. Removed in v0.29.0.
+	// `mcp:` parsed into a struct nothing ever read; rejected the same way.
 	RetiredMCP yaml.Node `yaml:"mcp"`
 }
 
@@ -302,6 +299,25 @@ func LoadFromBytes(raw []byte, pathHint string) (*Config, error) {
 		return &c, nil
 	}
 
+	// Sections retired in v0.28.x fail the load since v0.29.0. The fields
+	// remain only so the error can name the section to delete.
+	const loop = "the continuous-learning loop it configured was removed in v0.28.0"
+	for _, r := range []struct {
+		node yaml.Node
+		key  string
+		why  string
+	}{
+		{lc.RetiredInstinct, "instinct", loop},
+		{lc.RetiredMemoryBackends, "memory_backends", loop},
+		{lc.RetiredExport, "export", loop},
+		{lc.RetiredQualityGates, "quality_gates", loop},
+		{lc.RetiredMCP, "mcp", "no version of bough ever read it"},
+	} {
+		if !r.node.IsZero() {
+			return nil, fmt.Errorf("parse %s: YAML section '%s:' is no longer accepted (%s); delete it", pathHint, r.key, r.why)
+		}
+	}
+
 	c, warnings := migrateLegacy(&lc)
 	warnings = append(warnings, c.deprecationWarnings()...)
 	for _, w := range warnings {
@@ -332,26 +348,6 @@ func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 		Ports:         lc.Ports,
 		Registry:      lc.Registry,
 		Teardown:      lc.Teardown,
-	}
-	// One line per retired section the file still carries. Written here
-	// rather than in deprecationWarnings() because only the legacy decode
-	// sees these nodes — Config has no field for them by design.
-	const loop = "the continuous-learning loop it configured was removed in v0.28.0"
-	for _, r := range []struct {
-		node yaml.Node
-		key  string
-		why  string
-	}{
-		{lc.RetiredInstinct, "instinct", loop},
-		{lc.RetiredMemoryBackends, "memory_backends", loop},
-		{lc.RetiredExport, "export", loop},
-		{lc.RetiredQualityGates, "quality_gates", loop},
-		{lc.RetiredMCP, "mcp", "no version of bough ever read it"},
-	} {
-		if !r.node.IsZero() {
-			warnings = append(warnings, fmt.Sprintf(
-				"YAML section '%s:' is retired and does nothing: %s; delete the section (the key stops parsing in v0.29.0)", r.key, r.why))
-		}
 	}
 	if lc.SchemaVersion == 1 {
 		warnings = append(warnings,

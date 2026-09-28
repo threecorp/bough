@@ -58,9 +58,8 @@ const (
 // because the wiring outlives the binary: an operator's settings.json
 // holds them until the next `bough claude hook install`, and a
 // bough-hooks plugin installed from the marketplace carries its own
-// cached copy until the operator updates it. Install prunes them and
-// `hook handle` accepts-and-ignores them for the v0.28.x line; both go
-// away in v0.29.0.
+// cached copy until the operator updates it. Install prunes them; since
+// v0.29.0 `hook handle` rejects them with an error that names the fix.
 const (
 	RetiredEventPreToolUse       HookEvent = "PreToolUse"
 	RetiredEventPostToolUse      HookEvent = "PostToolUse"
@@ -96,7 +95,7 @@ func RetiredEvents() []HookEvent {
 }
 
 // IsRetired reports whether name is one of the events bough used to
-// wire. `bough hook handle` answers these with a notice and exit 0.
+// wire. `bough hook handle` rejects these with an error naming the fix.
 func IsRetired(name string) bool {
 	for _, e := range RetiredEvents() {
 		if string(e) == name {
@@ -771,7 +770,7 @@ func (r *DoctorReport) renderRetired(w io.Writer, st termio.Styler) {
 	}
 	fmt.Fprintf(w, "%s Retired wiring\n", st.Section(termio.StatusWarn))
 	if len(r.Retired) > 0 {
-		fmt.Fprintf(w, "    %s %s still wired to bough and does nothing\n",
+		fmt.Fprintf(w, "    %s %s still wired to bough and fails on every call\n",
 			st.Mark(termio.StatusWarn), eventNames(r.Retired))
 		// With a hook-bearing plugin enabled, install would add a second
 		// WorktreeCreate wiring; uninstall prunes the same groups without it.

@@ -30,9 +30,9 @@ time.
 | Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.27.0, or drop the call |
 | The `bough-hooks` / `bough-all` Claude Code plugin | Updates to two events when you update the plugin | `/plugin update`, or nothing |
 
-The compatibility shims above last one minor series. **v0.29.0 makes a
-retired `.bough.yaml` key a hard validation error and drops the hook
-shim**, so a retired event would then exit non-zero.
+The compatibility shims above lasted one minor series. **Since v0.29.0 a
+retired `.bough.yaml` section fails the load and a retired hook event
+exits non-zero**, so finish these steps before upgrading past v0.28.x.
 
 ## Hook wiring
 

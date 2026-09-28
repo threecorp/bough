@@ -63,7 +63,7 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 			}
 			for _, k := range keys {
 				notes = append(notes, fmt.Sprintf(
-					"%s: section '%s:' is retired and does nothing (delete it; the key stops parsing in v0.29.0)",
+					"%s: section '%s:' is no longer accepted, so bough cannot load this file until you delete it",
 					path, k))
 			}
 		}

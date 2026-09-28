@@ -9,11 +9,6 @@ of scope.
 
 ## Next
 
-- **v0.29.0** — drop the v0.28.0 compatibility shims: a retired
-  `.bough.yaml` section (`instinct:`, `quality_gates:`,
-  `memory_backends:`, `export:`) becomes a validation error, and a
-  retired hook event makes `bough hook handle` exit non-zero. See
-  [MIGRATION-v0.27-to-v0.28.md](MIGRATION-v0.27-to-v0.28.md).
 - **Multi-port engines in the host** — the plugin contract already
   carries one port per role; the host still allocates and passes only
   `main`. Per-role allocation comes before any bundled rabbitmq / kafka /
