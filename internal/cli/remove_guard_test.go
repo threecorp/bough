@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,5 +245,73 @@ func TestGuardedPorts_EngineWinsOverSameNamedAppPort(t *testing.T) {
 	}
 	if got := guardedPorts(map[string]int{"redis.main": 53001}, cfg); len(got) != 1 || got[0] != 53001 {
 		t.Fatalf("guardedPorts = %v, want [53001]", got)
+	}
+}
+
+// TestRunRemove_UsesConfiguredGracefulTimeout: teardown.graceful_timeout_sec
+// reaches the plugin's Down when --graceful-timeout is left at 0 (as it is
+// on the WorktreeRemove hook path), and the flag wins when set.
+func TestRunRemove_UsesConfiguredGracefulTimeout(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not on PATH")
+	}
+	binDir := t.TempDir()
+	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "bough-plugin-zzmock"),
+		"github.com/ikeikeikeike/bough/conformance/mock_plugin")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build mock plugin: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name       string
+		configured int
+		flag       int
+		want       string
+	}{
+		{"config used when flag unset", 7, 0, "7"},
+		{"flag wins", 7, 3, "3"},
+		{"neither set leaves the plugin default", 0, 0, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := filepath.Join(t.TempDir(), "down.txt")
+			t.Setenv("BOUGH_MOCK_DOWN_RECORD", record)
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := ln.Addr().(*net.TCPAddr).Port
+			_ = ln.Close()
+
+			root := t.TempDir()
+			regPath := filepath.Join(root, ".bough-ports.json")
+			store := registry.NewStore(regPath, "")
+			reg, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry.Set(reg, "F-g", "zzmock.main", port)
+			if err := store.Save(reg, "seed"); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{
+				Engines:  []config.Engine{{Kind: "zzmock"}},
+				Registry: config.RegistryConfig{Path: regPath},
+				Teardown: config.TeardownConfig{GracefulTimeoutSec: tc.configured},
+			}
+			wt := filepath.Join(root, "worktrees", "F-g")
+			if err := runRemove(context.Background(), io.Discard, cfg, root, "F-g", wt, tc.flag); err != nil {
+				t.Fatalf("runRemove: %v", err)
+			}
+			got, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatalf("plugin Down was not called: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("Down GracefulTimeoutSec = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

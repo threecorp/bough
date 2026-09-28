@@ -11,6 +11,10 @@
 //     127.0.0.1, mimicking the v0.2.6 elasticsearch sniff bug.
 //   - "shell-metachar" — EnvVars emits a DSN that contains `(`, `&`
 //     and `$`, mimicking the v0.2.5 bash-source-aborts bug.
+//
+// Independently, BOUGH_MOCK_DOWN_RECORD names a file Down writes the
+// GracefulTimeoutSec it received to, so host tests can see what reached it.
+//
 //   - "multi-port"     — PortRangeDefault declares two roles (amqp +
 //     management); Up binds both ports; EnvVars emits the role-
 //     suffixed naming convention (BOUGH_MOCK_AMQP_PORT /
@@ -27,6 +31,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -36,7 +41,8 @@ import (
 )
 
 const (
-	failModeEnv = "BOUGH_MOCK_FAIL_MODE"
+	failModeEnv   = "BOUGH_MOCK_FAIL_MODE"
+	downRecordEnv = "BOUGH_MOCK_DOWN_RECORD"
 
 	failBridgeIP  = "bridge-ip"
 	failShellMeta = "shell-metachar"
@@ -120,6 +126,9 @@ func acceptLoop(ln net.Listener) {
 func (p *mockProvider) Down(_ context.Context, req *api.DownReq) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if f := os.Getenv(downRecordEnv); f != "" {
+		_ = os.WriteFile(f, []byte(strconv.Itoa(req.GracefulTimeoutSec)), 0o644)
+	}
 	for _, port := range req.Ports {
 		if ln, ok := p.listeners[port]; ok {
 			_ = ln.Close()

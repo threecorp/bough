@@ -34,6 +34,7 @@ func newRemoveCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "remove",
+		Args:  cobra.NoArgs,
 		Short: "Tear down a per-worktree environment created by `bough create`",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stdinJSON {
@@ -65,6 +66,10 @@ func newRemoveCmd() *cobra.Command {
 }
 
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
+	// The flag wins; the hook path passes 0, so it gets the config value.
+	if gracefulSecs <= 0 {
+		gracefulSecs = cfg.Teardown.GracefulTimeoutSec
+	}
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.
