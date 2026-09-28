@@ -55,21 +55,20 @@ func newRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !cmd.Flags().Changed("graceful-timeout") {
+				gracefulSecs = cfg.Teardown.GracefulTimeoutSec
+			}
 			return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, resolvedPath, gracefulSecs)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (when --path is not provided)")
 	cmd.Flags().StringVar(&path, "path", "", "absolute worktree path (typical Claude Code stdin payload)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {worktree_path} from stdin")
-	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback (0 = let each engine plugin use its own tuned default)")
+	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback (default: teardown.graceful_timeout_sec; 0 = let each engine plugin use its own tuned default)")
 	return cmd
 }
 
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
-	// The flag wins; the hook path passes 0, so it gets the config value.
-	if gracefulSecs <= 0 {
-		gracefulSecs = cfg.Teardown.GracefulTimeoutSec
-	}
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.

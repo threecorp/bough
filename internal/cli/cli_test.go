@@ -175,6 +175,32 @@ instinct: {enabled: true}
 	}
 }
 
+// TestConfigValidate_ReportsTheFileItRead: monorepo_root moves the root,
+// not the file; validate must name the file it actually loaded.
+func TestConfigValidate_ReportsTheFileItRead(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".bough.yaml"), []byte(`schema_version: 2
+monorepo_root: "sub"
+repositories:
+  - {name: a, branch_strategy: develop}
+registry: {path: .bough-ports.json}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var out bytes.Buffer
+	root := NewRootCmd("0.0.0-test")
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"config", "validate"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("validate: %v\n%s", err, out.String())
+	}
+	if want := filepath.Join(dir, ".bough.yaml") + ": valid"; !strings.Contains(out.String(), want) {
+		t.Errorf("got %q, want it to name %s", out.String(), want)
+	}
+}
+
 // TestCreateRemove_RejectPositionalArgs: `bough remove foo` used to ignore
 // "foo" silently; both commands take the worktree only through flags.
 func TestCreateRemove_RejectPositionalArgs(t *testing.T) {

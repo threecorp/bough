@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 	"github.com/spf13/cobra"
@@ -26,20 +27,13 @@ func newConfigValidateCmd() *cobra.Command {
 			if len(args) == 1 {
 				path = args[0]
 			} else {
-				// loadConfigAndRoot's error is the real cause (missing
-				// file, malformed YAML, failed schema validation) — it
-				// must propagate, not be discarded in favor of the
-				// generic "path missing" message below, which would be
-				// actively wrong (the path did resolve) and hide what
-				// actually failed.
-				monorepoRoot, _, err := loadConfigAndRoot(cmd, "")
+				// Resolve once, from cwd: monorepo_root moves the root, not the
+				// file being validated, and each resolution can print a warning.
+				cwd, err := os.Getwd()
 				if err != nil {
-					return err
+					return fmt.Errorf("getwd: %w", err)
 				}
-				// Already loaded and validated above; loading again would
-				// print every warning twice.
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: valid\n", resolveConfigPath(cmd, monorepoRoot))
-				return nil
+				path = resolveConfigPath(cmd, cwd)
 			}
 			if path == "" {
 				return fmt.Errorf("path argument missing and could not be resolved from cwd")

@@ -248,10 +248,10 @@ func TestGuardedPorts_EngineWinsOverSameNamedAppPort(t *testing.T) {
 	}
 }
 
-// TestRunRemove_UsesConfiguredGracefulTimeout: teardown.graceful_timeout_sec
-// reaches the plugin's Down when --graceful-timeout is left at 0 (as it is
-// on the WorktreeRemove hook path), and the flag wins when set.
-func TestRunRemove_UsesConfiguredGracefulTimeout(t *testing.T) {
+// TestRemove_GracefulTimeoutResolution: teardown.graceful_timeout_sec
+// reaches the plugin's Down on the command and hook paths when the flag is
+// not given; an explicit --graceful-timeout, 0 included, wins.
+func TestRemove_GracefulTimeoutResolution(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not on PATH")
 	}
@@ -265,29 +265,37 @@ func TestRunRemove_UsesConfiguredGracefulTimeout(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	for _, tc := range []struct {
-		name       string
-		configured int
-		flag       int
-		want       string
+		name string
+		args []string // nil = the WorktreeRemove hook path
+		want string
 	}{
-		{"config used when flag unset", 7, 0, "7"},
-		{"flag wins", 7, 3, "3"},
-		{"neither set leaves the plugin default", 0, 0, "0"},
+		{"flag not given uses the config", []string{"remove", "--name", "F-g"}, "7"},
+		{"explicit 0 means the plugin default", []string{"remove", "--name", "F-g", "--graceful-timeout", "0"}, "0"},
+		{"explicit value wins", []string{"remove", "--name", "F-g", "--graceful-timeout", "3"}, "3"},
+		{"hook path uses the config", nil, "7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			record := filepath.Join(t.TempDir(), "down.txt")
+			root := t.TempDir()
+			record := filepath.Join(root, "down.txt")
 			t.Setenv("BOUGH_MOCK_DOWN_RECORD", record)
-
+			if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(`schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: zzmock, version: "1", port_ranges: {main: [59800, 59899]}}
+registry: {path: .bough-ports.json}
+teardown: {graceful_timeout_sec: 7}
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
 			port := ln.Addr().(*net.TCPAddr).Port
 			_ = ln.Close()
-
-			root := t.TempDir()
-			regPath := filepath.Join(root, ".bough-ports.json")
-			store := registry.NewStore(regPath, "")
+			store := registry.NewStore(filepath.Join(root, ".bough-ports.json"), "")
 			reg, err := store.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -296,14 +304,20 @@ func TestRunRemove_UsesConfiguredGracefulTimeout(t *testing.T) {
 			if err := store.Save(reg, "seed"); err != nil {
 				t.Fatal(err)
 			}
-			cfg := &config.Config{
-				Engines:  []config.Engine{{Kind: "zzmock"}},
-				Registry: config.RegistryConfig{Path: regPath},
-				Teardown: config.TeardownConfig{GracefulTimeoutSec: tc.configured},
+			t.Chdir(root)
+
+			rootCmd := NewRootCmd("0.0.0-test")
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			if tc.args == nil {
+				rootCmd.SetContext(context.Background()) // Execute sets it on the command path
+				err = dispatchWorktreeRemove(rootCmd, []byte(`{"name":"F-g"}`))
+			} else {
+				rootCmd.SetArgs(tc.args)
+				err = rootCmd.Execute()
 			}
-			wt := filepath.Join(root, "worktrees", "F-g")
-			if err := runRemove(context.Background(), io.Discard, cfg, root, "F-g", wt, tc.flag); err != nil {
-				t.Fatalf("runRemove: %v", err)
+			if err != nil {
+				t.Fatalf("remove: %v", err)
 			}
 			got, err := os.ReadFile(record)
 			if err != nil {

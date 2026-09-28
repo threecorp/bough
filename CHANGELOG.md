@@ -5,12 +5,18 @@
 ### Fixed
 
 - `teardown.graceful_timeout_sec` now reaches each engine's `Down`. It was
-  parsed and never used; `--graceful-timeout` still wins when set, and the
-  `WorktreeRemove` hook path uses the configured value.
-- `bough config validate` with no path printed every load warning twice.
+  parsed and never used. **If your `.bough.yaml` already sets it, that value
+  now replaces each plugin's own stop budget** (mysql 30 s, elasticsearch
+  60 s, postgres 15 s); delete the key to keep those. An explicit
+  `--graceful-timeout`, `0` included, still wins, and the `WorktreeRemove`
+  hook uses the configured value. `kind: compose` now passes it to
+  `docker compose stop -t`.
+- `bough config validate` with no path printed every load warning twice, and
+  with `monorepo_root` set it named a file under the new root that it had
+  not read.
 - `bough create` / `bough remove` reject a positional argument instead of
-  ignoring it (`bough remove foo` used to fail with "removal needs a
-  worktree path or name").
+  ignoring it. A call that passed both a flag and a stray argument
+  (`bough create --name F-x extra`) used to succeed and now fails.
 - The `.worktree-isolation.yaml` warning no longer says the file was
   removed in v0.5.0; it is still read.
 - The Nix flake builds `bough-plugin-compose` too, and stamps the commit as
