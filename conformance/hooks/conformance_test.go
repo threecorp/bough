@@ -86,7 +86,7 @@ func TestHooks_EndToEnd_InstallHandleDoctorUninstall(t *testing.T) {
 		if strings.TrimSpace(out.String()) != "" {
 			t.Errorf("a retired event must print nothing to stdout, got: %q", out.String())
 		}
-		for _, want := range []string{retired, "hook install", "hook uninstall", "claude plugin update"} {
+		for _, want := range []string{retired, "hook install", "--scope user", "hook uninstall", "bough-hooks or bough-all is enabled", "claude plugin update"} {
 			if !strings.Contains(errOut.String(), want) {
 				t.Errorf("stderr for %s should contain %q, got: %q", retired, want, errOut.String())
 			}
