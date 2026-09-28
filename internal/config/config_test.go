@@ -553,14 +553,10 @@ registry: {path: .worktree-ports.json}
 	}
 }
 
-// TestLoad_retiredSectionsToleratedWithWarning is the compatibility
-// contract for the v0.28.x line. A `.bough.yaml` still carrying any of
-// the four sections that configured the removed continuous-learning
-// loop must keep loading: the decoder is strict, so a rejected key here
-// would take `claude --worktree` down for anyone who has not yet edited
-// their config. Each present section earns exactly one warning naming
-// it, which is the only way an operator learns to delete the lines.
-func TestLoad_retiredSectionsToleratedWithWarning(t *testing.T) {
+// TestLoad_retiredSectionsRejected: since v0.29.0 a `.bough.yaml` still
+// carrying a section retired in v0.28.x fails to load, and the error names
+// the section so the operator knows which lines to delete.
+func TestLoad_retiredSectionsRejected(t *testing.T) {
 	base := `schema_version: 2
 monorepo_root: "."
 repositories:
@@ -581,21 +577,12 @@ registry:
 		{"mcp", "mcp:\n  enabled: true\n  source_of_truth: \"~/.claude.json\"\n", "mcp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, warnings, err := loadForTest(t, base+tc.section)
-			if err != nil {
-				t.Fatalf("a retired %q section must not fail the load: %v", tc.key, err)
+			_, _, err := loadForTest(t, base+tc.section)
+			if err == nil {
+				t.Fatalf("a retired %q section must fail the load since v0.29.0", tc.key)
 			}
-			if c == nil {
-				t.Fatal("no config returned")
-			}
-			var found int
-			for _, w := range warnings {
-				if strings.Contains(w, "'"+tc.key+":'") && strings.Contains(w, "retired") {
-					found++
-				}
-			}
-			if found != 1 {
-				t.Errorf("warnings naming %q: got %d want 1\nall warnings: %v", tc.key, found, warnings)
+			if !strings.Contains(err.Error(), "'"+tc.key+":'") || !strings.Contains(err.Error(), "delete") {
+				t.Errorf("error should name %q and say to delete it: %v", tc.key, err)
 			}
 		})
 	}
