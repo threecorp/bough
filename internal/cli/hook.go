@@ -33,8 +33,9 @@ the operator added by mouse stay put; only bough's canonical
 entries get reconciled.
 
 install also prunes the six events bough wired for the
-continuous-learning loop it carried until v0.27.0. Until it is re-run,
-those keep firing a no-op shim (see ` + "`bough claude doctor`" + `).`,
+continuous-learning loop it carried until v0.27.0. Until then each one
+fails when it fires, which Claude Code shows as a non-blocking error
+(see ` + "`bough claude doctor`" + ` for the fix).`,
 	}
 	cmd.AddCommand(
 		newHookInstallCmd(),
@@ -247,10 +248,11 @@ func newHookHandleCmd() *cobra.Command {
 			// named because `hook install` only edits settings.json; wiring
 			// cached in a bough-hooks / bough-all plugin needs a plugin update.
 			if hooks.IsRetired(event) {
+				// Exit 1, not 2: Claude Code shows it without blocking the call.
 				return fmt.Errorf("hook event %s was retired in v0.28.0 and is no longer handled; "+
-					"run `bough claude hook install` to prune it from settings.json, "+
-					"or `claude plugin update bough-hooks` (or bough-all) if the wiring "+
-					"comes from the plugin", event)
+					"prune it with `bough claude hook install` (add --scope user for ~/.claude/settings.json; "+
+					"use `bough claude hook uninstall` instead if bough-hooks or bough-all is enabled), "+
+					"or run `claude plugin update bough-hooks` (or bough-all) if the wiring comes from the plugin", event)
 			}
 			if !hooks.IsWired(event) {
 				return fmt.Errorf("unknown hook event %q (wired: %s)", event, hooks.WiredEventNames())

@@ -185,3 +185,19 @@ func TestRenderRetiredConfig_CleanState(t *testing.T) {
 		t.Errorf("clean state must read as none:\n%s", out.String())
 	}
 }
+
+// TestRenderRetiredConfig_RetiredSectionWarns: since v0.29.0 a retired
+// section stops every load, so the section is a warning, not a note.
+func TestRenderRetiredConfig_RetiredSectionWarns(t *testing.T) {
+	t.Setenv("BOUGH_HOMUNCULUS_DIR", filepath.Join(t.TempDir(), "absent"))
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bough.yaml"), []byte("schema_version: 2\ninstinct: {enabled: true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	renderRetiredConfig(&cobra.Command{}, &out)
+	if !strings.Contains(out.String(), "[!] Retired state") || !strings.Contains(out.String(), "'instinct:' is no longer accepted") {
+		t.Errorf("a retired section must be a warning naming it:\n%s", out.String())
+	}
+}
