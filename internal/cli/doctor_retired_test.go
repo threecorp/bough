@@ -29,6 +29,7 @@ func TestRetiredConfigKeys(t *testing.T) {
 		"flow document":       {"{quality_gates: [], memory_backends: {}}\n", []string{"memory_backends", "quality_gates"}},
 		"nested name not top": {"engines:\n  - kind: mysql\n    extras: {export: x}\n", nil},
 		"nested block key":    {"registry:\n  export: x\n", nil},
+		"retired mcp":         {"mcp: {enabled: true}\n", []string{"mcp"}},
 		"none":                {"schema_version: 2\n", nil},
 	}
 	for name, tc := range cases {
