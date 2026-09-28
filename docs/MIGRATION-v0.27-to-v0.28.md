@@ -74,11 +74,19 @@ away from its cause.
 ## `.bough.yaml`
 
 Four top-level sections are retired: `instinct:`, `quality_gates:`,
-`memory_backends:` and `export:`. They are read and discarded, and each
-one present prints one line per load:
+`memory_backends:` and `export:`; v0.28.1 retired `mcp:` too, which no
+version ever read. On v0.28.x they are read and discarded, and each one
+present prints one line per load:
 
 ```text
 bough: WARNING YAML section 'instinct:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)
+```
+
+Since v0.29.0 each of the five fails the load instead, so delete them
+before upgrading:
+
+```text
+bough: parse .bough.yaml: YAML section 'instinct:' is no longer accepted (the continuous-learning loop it configured was removed in v0.28.0); delete it
 ```
 
 Delete the sections. Everything else in the file is unchanged, and an
