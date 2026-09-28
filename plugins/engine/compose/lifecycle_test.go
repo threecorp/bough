@@ -273,9 +273,10 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
 			record := filepath.Join(t.TempDir(), "calls.txt")
-			fake := "#!/bin/sh\necho \"$*\" >> " + record + "\ncase \"$*\" in *\" stop \"*) sleep 2;; esac\n"
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 2;; esac\n"
 			if tc.grace == 0 {
-				fake = "#!/bin/sh\necho \"$*\" >> " + record + "\n"
+				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n"
 			}
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
 				t.Fatal(err)
