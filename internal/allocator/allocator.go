@@ -17,7 +17,7 @@
 // per-(name, role) seed. Single-port engines (mysql / postgres /
 // redis / elasticsearch) pass role="main" or "" (treated identically)
 // and the seed reduces to `crc32(name)` — bit-for-bit the v0.3 result,
-// so an auba deployment migrated from v0.3 to v0.4 sees zero port
+// so a production monorepo migrated from v0.3 to v0.4 sees zero port
 // drift on its existing engines.
 package allocator
 

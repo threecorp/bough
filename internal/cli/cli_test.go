@@ -30,7 +30,7 @@ func TestNewRootCmd_smoke(t *testing.T) {
 	}
 }
 
-func TestConfigValidate_acceptsAubaLikeFixture(t *testing.T) {
+func TestConfigValidate_acceptsDemoLikeFixture(t *testing.T) {
 	// The example fixture lives next to the config package; just
 	// point `bough config validate` at it.
 	fix := filepath.Join("..", "config", "testdata", "example.yaml")
