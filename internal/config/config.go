@@ -102,10 +102,12 @@ type Engine struct {
 	InitialResources []InitialResource `yaml:"initial_resources" validate:"dive"`
 	// Backend selects the lifecycle implementation inside the plugin.
 	// "docker" is the only one the bundled plugins register, and the
-	// one an omitted field resolves to. Validated here (the literal
-	// mirrors engineapi.DefaultBackend, which a struct tag cannot
-	// reference) so a stale value fails at load rather than at Up.
-	Backend string `yaml:"backend" validate:"omitempty,oneof=docker"`
+	// one an omitted field resolves to. Validated in validateSemantic
+	// rather than by a struct tag, because the set of valid tokens
+	// depends on Kind: a `oneof=docker` tag here also rejected the
+	// backends a third-party plugin registers, which extras.backend —
+	// the very channel this field is meant to supersede — allows.
+	Backend string `yaml:"backend"`
 	// ReadyTimeoutSec caps how long the host waits for the plugin's
 	// ReadyCheck loop to report ready. Zero means use the plugin's
 	// own default (typically 300-600 s). Capped well under int32 max:

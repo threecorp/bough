@@ -381,7 +381,7 @@ engines:
   - {kind: mysql, version: "8.4", backend: nix, port_ranges: {main: [42000, 42999]}}
 registry: {path: .bough-ports.json}
 `,
-			wantInErr: "Backend",
+			wantInErr: "engines[0].backend",
 		},
 		{
 			name: "backend: nix is refused in the v0.3 shape too",
@@ -393,7 +393,7 @@ databases:
   - {kind: mysql, version: "8.4", backend: nix, port_range: [42000, 42999]}
 registry: {path: .bough-ports.json}
 `,
-			wantInErr: "Backend",
+			wantInErr: "engines[0].backend",
 		},
 		{
 			// The same token through extras is copied to the plugin
@@ -428,6 +428,18 @@ repositories:
   - {name: a, branch_strategy: develop, role: engine-provider}
 engines:
   - {kind: rabbitmq, version: "3", extras: {backend: podman}, port_ranges: {main: [43000, 43999]}}
+registry: {path: .bough-ports.json}
+`,
+		// The same token on the dedicated field must be accepted too. It
+		// was refused while `backend:` carried a `oneof=docker` tag, so the
+		// field a third-party plugin is told to use was the one channel its
+		// own backends could not travel on.
+		"third-party kind keeps its own backend on the field": `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: rabbitmq, version: "3", backend: podman, port_ranges: {main: [43000, 43999]}}
 registry: {path: .bough-ports.json}
 `,
 	} {

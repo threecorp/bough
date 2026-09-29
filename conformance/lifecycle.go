@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -270,6 +272,45 @@ func runDownPhase(t *testing.T, prov engineapi.EngineProvider, worktreeRoot stri
 	if err != nil {
 		t.Fatalf("Down (iter %d): %v", iter, err)
 	}
+	// A nil return is not the contract — the engine actually being
+	// stopped is. Without this a plugin whose Down does nothing passes
+	// the whole suite, and `bough remove`'s port guard (which refuses
+	// to delete a datadir while any port still answers) is built on
+	// Down being real.
+	if still := portsStillAnswering(ports, downPortReleaseWait); len(still) > 0 {
+		t.Fatalf("Down (iter %d) returned nil but port(s) %v still accept connections after %s — "+
+			"Down must stop the engine, not just report success", iter, still, downPortReleaseWait)
+	}
+}
+
+// downPortReleaseWait is how long the Down post-condition lets a
+// stopped engine's host port actually close. Docker unpublishes the
+// port as the container is removed, which is not instantaneous.
+const downPortReleaseWait = 10 * time.Second
+
+// portsStillAnswering returns the subset of ports that still accept a
+// TCP connection on 127.0.0.1 after wait has elapsed. Only a port that
+// keeps answering for the whole window counts, so a slow unpublish is
+// not reported as a contract violation.
+func portsStillAnswering(ports []int, wait time.Duration) []int {
+	deadline := time.Now().Add(wait)
+	for {
+		var still []int
+		for _, port := range ports {
+			if port <= 0 {
+				continue
+			}
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				still = append(still, port)
+			}
+		}
+		if len(still) == 0 || time.Now().After(deadline) {
+			return still
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // assertCleanup runs the two terminal Cleanup sub-tests (initial +
@@ -296,6 +337,15 @@ func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string,
 	defer cancel()
 	err := prov.Cleanup(ctx, datadir, ports)
 	if err == nil {
+		// CONTRACT: "Cleanup — host wipes the datadir after Down
+		// confirmed exit". Checking only the error let a Cleanup that
+		// wipes nothing pass, and newDatadir's own t.Cleanup then
+		// removed the leftovers so no trace survived the run.
+		if _, statErr := os.Stat(datadir); statErr == nil {
+			t.Fatalf("%s returned nil but %s is still present — Cleanup must remove the datadir", label, datadir)
+		} else if !os.IsNotExist(statErr) {
+			t.Fatalf("%s: cannot confirm %s was removed: %v", label, datadir, statErr)
+		}
 		return
 	}
 	if isPermissionDeniedFromContainerUID(err) {
@@ -456,11 +506,20 @@ func isPermissionDeniedFromContainerUID(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, fs.ErrPermission) {
-		return true
+	// Only a filesystem permission error on a path counts. A bare
+	// substring match on "permission denied" also swallowed errors that
+	// are not this case at all — a docker-socket permission error, an
+	// SELinux denial, a plugin bug whose message happens to carry the
+	// phrase — turning a real contract violation into a Skip the parent
+	// test still reports as a pass.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return errors.Is(pathErr, fs.ErrPermission)
 	}
-	// The plugin wraps os.RemoveAll's PathError; check the textual
-	// signature too since `errors.Is` does not traverse fmt.Errorf %w
-	// chains that aren't explicit wrap points.
-	return strings.Contains(err.Error(), "permission denied")
+	// A plugin may render the PathError with fmt.Errorf("%v"), which
+	// drops the chain; fall back to matching the textual signature
+	// os.RemoveAll produces, which names the syscall and the path.
+	msg := err.Error()
+	return strings.Contains(msg, "permission denied") &&
+		(strings.Contains(msg, "unlinkat") || strings.Contains(msg, "remove ") || strings.Contains(msg, "RemoveAll"))
 }

@@ -68,8 +68,13 @@ func TestPostgresProbe_AcceptsSAndN(t *testing.T) {
 		if err != nil {
 			t.Errorf("PostgresProbe with reply %q = %v, want nil", reply, err)
 		}
-		if got := firstReq(); !bytes.Equal(got, pgSSLRequest) {
-			t.Errorf("probe sent %#x, want the SSLRequest %#x", got, pgSSLRequest)
+		// Spelled out rather than compared against pgSSLRequest: the
+		// probe sends that same var, so comparing to it passed whatever
+		// bytes it held. int32(80877103) = 0x04d2162f is the protocol
+		// constant, prefixed by the 4-byte length 8.
+		wantSSLRequest := []byte{0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f}
+		if got := firstReq(); !bytes.Equal(got, wantSSLRequest) {
+			t.Errorf("probe sent %#x, want the SSLRequest %#x", got, wantSSLRequest)
 		}
 		closeFn()
 	}

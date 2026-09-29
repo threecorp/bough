@@ -306,13 +306,22 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 // mount and refuse to start; an image whose PGDATA is the mount or a
 // subdirectory of it (a common custom layout) is left alone.
 func pgdataPin(imageEnv []string) string {
+	// Last match wins, as Docker itself resolves a duplicated key. An
+	// image assembled by a tool that appends rather than replaces
+	// (buildah, `docker commit`) can carry PGDATA twice, and reading the
+	// first would override the layout the image actually uses.
+	effective := ""
+	found := false
 	for _, kv := range imageEnv {
 		if v, ok := strings.CutPrefix(kv, "PGDATA="); ok {
-			v = path.Clean(v) // container paths are slash-separated on every host
-			if v == dockerDataDir || strings.HasPrefix(v, dockerDataDir+"/") {
-				return ""
-			}
-			break
+			effective = v
+			found = true
+		}
+	}
+	if found {
+		v := path.Clean(effective) // container paths are slash-separated on every host
+		if v == dockerDataDir || strings.HasPrefix(v, dockerDataDir+"/") {
+			return ""
 		}
 	}
 	return "PGDATA=" + dockerDataDir

@@ -155,9 +155,20 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 			return fmt.Errorf("remove %s: could not confirm the engine ports are free (%w); "+
 				"no datadir, worktree or registry entry was deleted", name, err)
 		}
-		return fmt.Errorf("remove %s: port(s) %v still accept connections after the engines were stopped; "+
-			"a process bough did not start still owns them (find it with `lsof -nP -iTCP:%d -sTCP:LISTEN`). "+
-			"Stop it and run remove again; no datadir, worktree or registry entry was deleted", name, busy, busy[0])
+		// Naming the registry keys, not only the numbers: the port may
+		// belong to a process bough never started, but it may equally be
+		// bough's own container that Down could not reach — a plugin
+		// binary Discover no longer finds, or a kind since dropped from
+		// `engines:` and therefore never passed to Down at all. A key
+		// that is neither an engine nor a current `ports:` entry (a
+		// renamed `ports:` kind) points at the operator's own app
+		// server, which the guard cannot tell apart from a dropped
+		// engine.
+		return fmt.Errorf("remove %s: %s still accept connections after the engines were stopped. "+
+			"Find the owner with `lsof -nP -iTCP:%d -sTCP:LISTEN` (a docker-published port shows the docker "+
+			"daemon — `docker ps --filter publish=%d` names the container). Stop it, or stop it from a "+
+			"`pre_remove` hook, and run remove again; no datadir, worktree or registry entry was deleted",
+			name, describeBusyPorts(reg[name], busy), busy[0], busy[0])
 	}
 
 	for _, d := range downed {
@@ -233,7 +244,7 @@ func guardedPorts(entry map[string]int, cfg *config.Config) []int {
 	}
 	var out []int
 	for key, port := range entry {
-		kind, _, _ := strings.Cut(key, ".")
+		kind := engineKindFromRegistryKey(key)
 		if _, isAppPort := cfg.Ports[kind]; isAppPort && !engineKinds[kind] {
 			continue
 		}
@@ -243,6 +254,26 @@ func guardedPorts(entry map[string]int, cfg *config.Config) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+// describeBusyPorts renders the blocked ports with the registry key
+// each one came from ("mysql.main port 42001"), so the operator can see
+// which engine — or which `ports:` kind — is holding remove up instead
+// of only a bare number.
+func describeBusyPorts(entry map[string]int, busy []int) string {
+	keyOf := make(map[int]string, len(entry))
+	for key, port := range entry {
+		keyOf[port] = key
+	}
+	parts := make([]string, 0, len(busy))
+	for _, port := range busy {
+		if key := keyOf[port]; key != "" {
+			parts = append(parts, fmt.Sprintf("%s port %d", key, port))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("port %d", port))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // portsStillServing returns the ports that still accept a TCP connection on
