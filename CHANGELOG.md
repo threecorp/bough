@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A running container is no longer reused for a different
+  `engines[].version`.** `UpOrReuse` matched on the container name
+  alone, so editing `version:` and running `bough create` again left the
+  old engine serving while the rendered `.env.local` and `bough status`
+  named the new version — the one thing v0.27.0 shipped `version:` for.
+  An image that differs from the resolved ref now fails with both refs
+  named and says to `bough remove` the worktree first, because swapping
+  an image under an existing data directory is not something bough can
+  do safely. `compose` is unaffected: the wrapped file owns its image.
+- **`bough remove` says when it cannot check the engine ports.** The
+  v0.27.0 guard probes the ports the registry holds, and a worktree
+  registered by `bough backfill` has none, so the check passed on an
+  empty set and read as "every engine is stopped". It now names that
+  gap on stderr.
+- **`engines[].backend` is judged by kind, like `extras.backend`.** The
+  `oneof=docker` struct tag also refused the backends a third-party
+  plugin registers, while `extras.backend` — the channel the field
+  supersedes — allowed them. Both are now checked in `validateSemantic`
+  and only for the bundled kinds, so the v0.27.0 message for a stale
+  `backend: nix` changes from the `oneof` tag text to
+  `config: engines[N].backend="nix" is not a backend the bundled plugins provide (docker); delete the line`.
+- **`teardown.remove_datadir: false` documents what it does.** It skips
+  each plugin's `Cleanup`; it cannot keep a datadir, because the bundled
+  engines put theirs under the worktree that `remove` deletes either way.
+- Conformance suite false-greens: `Down` was asserted only on a nil
+  error, so a plugin whose `Down` did nothing passed all 15 sub-tests;
+  `Cleanup` likewise, with `newDatadir`'s own `t.Cleanup` erasing the
+  evidence; and a Docker-socket permission error turned a contract
+  violation into a skip the parent still reported as a pass. Each now
+  checks the effect — the port stops answering, the datadir is gone —
+  and the permission test narrowed to a filesystem error on a path.
+
 ## v0.28.2
 
 ### Fixed

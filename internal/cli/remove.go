@@ -148,7 +148,15 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	// registry holds for this worktree is checked — an engine since dropped
 	// from .bough.yaml included — except the non-engine `ports:` ones, which
 	// an app server may legitimately still hold.
-	busy, err := portsStillServing(ctx, guardedPorts(reg[name], cfg), portReleaseWait)
+	guarded := guardedPorts(reg[name], cfg)
+	// `bough backfill` registers a worktree dir with no ports at all, and an
+	// entry can also predate an engine added later. The check below then has
+	// nothing to probe and passes on an empty set, so say that rather than
+	// let a silent pass read as "every engine is confirmed stopped".
+	if len(guarded) == 0 && len(cfg.Engines) > 0 {
+		logf(stderr, "[bough] %s: registry holds no engine port, so remove cannot confirm the engines are stopped", name)
+	}
+	busy, err := portsStillServing(ctx, guarded, portReleaseWait)
 	if err != nil || len(busy) > 0 {
 		killAll()
 		if err != nil {

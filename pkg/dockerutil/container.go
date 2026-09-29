@@ -96,15 +96,21 @@ func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool
 
 // UpOrReuse implements the --resume idempotency contract for Up.
 //
-// Returns skip=true if a container with `name` is already running, so
-// the caller can early-return without recreating. If the container
-// exists but is stopped (a previous Up partially failed), the stale
-// container is removed and skip=false is returned so the caller
-// proceeds with a fresh create + start.
+// Returns skip=true if a container with `name` is already running the
+// image in wantImage, so the caller can early-return without
+// recreating. If the container exists but is stopped (a previous Up
+// partially failed), the stale container is removed and skip=false is
+// returned so the caller proceeds with a fresh create + start.
+//
+// A running container on another image is an error rather than a reuse:
+// engines[].version picks the image, so reusing whatever answers to the
+// name would leave one version serving while the rendered .env.local
+// and `bough status` name the other. wantImage == "" skips that
+// comparison, for a caller whose image is not bough's to choose.
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
-func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
+func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) (bool, error) {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return false, err
@@ -113,6 +119,15 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, erro
 		return false, nil
 	}
 	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
+		have := ""
+		if info.Config != nil {
+			have = info.Config.Image
+		}
+		if imageSwapped(wantImage, have) {
+			return false, fmt.Errorf("container %s already runs %s, not the %s this config asks for; "+
+				"bough does not swap an image under an existing data directory — `bough remove` this worktree "+
+				"(or docker rm -f %s) and create it again", name, have, wantImage, name)
+		}
 		return true, nil
 	}
 	// The container LookupByName just found stopped can vanish before
@@ -127,6 +142,15 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, erro
 		return false, err
 	}
 	return false, nil
+}
+
+// imageSwapped reports whether a running container's image ref differs
+// from the one the caller resolved. An empty side means the comparison
+// cannot be made — no wanted ref, or a daemon that reported no Config —
+// and is never a swap, so an unknown never blocks a reuse that used to
+// work.
+func imageSwapped(want, have string) bool {
+	return want != "" && have != "" && want != have
 }
 
 // StartOrCleanup starts a just-created container; on failure it

@@ -113,7 +113,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	name := dockerContainerName(port)
 
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
 	if err != nil {
 		return fmt.Errorf("redis docker: reuse check %s: %w", name, err)
 	}

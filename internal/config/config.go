@@ -184,7 +184,12 @@ type RegistryConfig struct {
 
 // TeardownConfig governs `bough remove` behaviour.
 type TeardownConfig struct {
-	RemoveBranch       bool `yaml:"remove_branch"`
+	RemoveBranch bool `yaml:"remove_branch"`
+	// RemoveDatadir decides whether remove calls each plugin's Cleanup.
+	// It does not keep a datadir: the bundled engines put theirs under
+	// the worktree (.local/<kind>-data), which remove deletes with the
+	// worktree either way. False leaves the plugin's own teardown (a
+	// docker volume it made elsewhere, say) in place.
 	RemoveDatadir      bool `yaml:"remove_datadir"`
 	GracefulTimeoutSec int  `yaml:"graceful_timeout_sec" validate:"omitempty,min=1"`
 }
