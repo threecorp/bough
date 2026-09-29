@@ -38,15 +38,12 @@ written registry.`,
 
 // runBackfill walks the monorepo's worktrees dir, adds any unregistered
 // name to the registry with an empty entry, and relinks every discovered
-// worktree's root CLAUDE.md and project-scoped .claude/{skills,agents,commands}
-// symlinks. The follow-up `bough create <name>` is what actually allocates
-// ports — backfill alone is the "stop allocator from re-issuing this name's
-// slot" pass, plus a non-destructive repair for worktrees that predate a
-// link being wired only into `bough create` (a hand-created / pre-move /
-// already-backfilled worktree never got the link and silently missed the
-// linked content — #61 for .claude/{skills,agents,commands}; the same gap
-// applied to CLAUDE.md, wired into `create` by #106 but never into backfill
-// until now). The relink runs for every worktree dir, not just
+// worktree's CLAUDE.md and CLAUDE.local.md to the monorepo root's copies.
+// The follow-up `bough create <name>` is what actually allocates ports —
+// backfill alone is the "stop allocator from re-issuing this name's slot"
+// pass, plus a non-destructive repair for worktrees that predate the link
+// (a hand-created or pre-move worktree never got it and silently missed the
+// root's guidance). The relink runs for every worktree dir, not just
 // newly-registered ones, since ensureSymlink is idempotent and a no-op on an
 // already-correct link.
 func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) error {
@@ -84,7 +81,7 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) erro
 		added++
 	}
 	if relinked > 0 {
-		fmt.Fprintf(stderr, "[backfill] relinked CLAUDE.md and project-scoped .claude artifacts for %d worktree dir(s)\n", relinked)
+		fmt.Fprintf(stderr, "[backfill] relinked CLAUDE.md / CLAUDE.local.md for %d worktree dir(s)\n", relinked)
 	}
 	if added == 0 {
 		fmt.Fprintln(stderr, "[backfill] all worktree dirs already registered — no changes")

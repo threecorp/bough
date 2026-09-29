@@ -202,8 +202,8 @@ func renderArtifactList(w io.Writer, k artifactKind, dst string, names []string)
 //
 // Project scope lands at the monorepo root's own .claude/<subdir>, so a
 // worktree session sees what is installed there only when the operator's own
-// wiring points at it — bough itself symlinks CLAUDE.md into a worktree and
-// nothing else (linkWorktreeClaudeMd, create.go).
+// wiring points at it — bough itself symlinks only CLAUDE.md and
+// CLAUDE.local.md into a worktree (linkWorktreeClaudeMd, create.go).
 func artifactDir(k artifactKind, scope HookScope) (string, error) {
 	dir, err := claudeDir(scope)
 	if err != nil {
