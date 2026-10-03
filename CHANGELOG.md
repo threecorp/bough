@@ -22,6 +22,9 @@
 - The Nix flake builds `bough-plugin-compose` too, and stamps the commit as
   the version instead of a fixed `0.1.1`.
 - Added the `LICENSE` file (MIT) the README already referred to.
+- `docs/PLUGIN_CLAUDE_CODE.md` no longer tells you to install commands and
+  skills user-scoped for worktree sessions: Claude Code reads the main
+  checkout's `.claude/commands` and `.claude/skills` there.
 
 ### Deprecated
 

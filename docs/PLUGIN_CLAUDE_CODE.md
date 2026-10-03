@@ -85,9 +85,9 @@ bough claude <kind> list | uninstall           # same verbs for all three
   same name. `uninstall` removes those command files and the whole
   `skills/using-bough/` directory, including any file you added inside
   it. Other files are left alone.
-- `bough create` symlinks only `CLAUDE.md` and `CLAUDE.local.md` into a worktree, so a worktree
-  session does not see project-scoped commands or skills; install them
-  user-scoped if you want them there.
+- A worktree session sees project-scoped commands and skills too: Claude
+  Code reads the main checkout's `.claude/commands` and `.claude/skills`
+  when the worktree has none (skills need Claude Code v2.1.277 or later).
 
 ## Pick one wiring for hooks, not both
 
