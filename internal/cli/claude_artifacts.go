@@ -200,9 +200,9 @@ func renderArtifactList(w io.Writer, k artifactKind, dst string, names []string)
 // artifactDir resolves .claude/<subdir> for the scope, reusing the same scope
 // vocabulary (project | user) `bough claude hook` uses so the two never drift.
 //
-// Project scope lands at the monorepo root's own .claude/<subdir>; a worktree
-// session reads it from there, since Claude Code falls back to the main
-// checkout's .claude/{commands,skills,agents} when the worktree has none.
+// Project scope lands at the monorepo root's own .claude/<subdir>. When that
+// root is the git main checkout, a worktree session reads it too: Claude Code
+// falls back to the main checkout's .claude/{commands,skills,agents}.
 func artifactDir(k artifactKind, scope HookScope) (string, error) {
 	dir, err := claudeDir(scope)
 	if err != nil {
