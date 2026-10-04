@@ -45,7 +45,7 @@ func worktreeCreateHook(t *testing.T, root, name string) string {
 // present) was already true when the failure happened.
 func TestWorktreeRootIsAnIsolatedWorkTree(t *testing.T) {
 	root := t.TempDir()
-	gitInitMain(t, root) // the monorepo root is itself a repo — auba's shape
+	gitInitMain(t, root) // the monorepo root is itself a repo — the shape of a real monorepo
 	gitInitMain(t, filepath.Join(root, "demo"))
 	writeMinimalBoughYAML(t, root)
 

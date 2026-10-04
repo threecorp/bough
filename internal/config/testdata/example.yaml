@@ -52,7 +52,3 @@ teardown:
   remove_branch: true
   remove_datadir: true
   graceful_timeout_sec: 10
-
-mcp:
-  enabled: false
-  source_of_truth: "~/.claude/mcp-servers-source.json"

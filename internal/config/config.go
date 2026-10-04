@@ -48,7 +48,6 @@ type Config struct {
 	Ports         map[string]PortRange `yaml:"ports" validate:"dive"`
 	Registry      RegistryConfig       `yaml:"registry" validate:"required"`
 	Teardown      TeardownConfig       `yaml:"teardown"`
-	MCP           MCPConfig            `yaml:"mcp"`
 }
 
 // Repository declares one git sub-repo that hangs off
@@ -67,7 +66,7 @@ type Repository struct {
 	// Name is the sub-directory under the monorepo root (and under each
 	// worktree) this repo lives in. Optional when Source is set — it is
 	// then derived from the Source basename (e.g. source
-	// git@github.com:org/auba-proto → name "auba-proto"). At least one of
+	// git@github.com:org/demo-proto → name "demo-proto"). At least one of
 	// Name / Source must be present.
 	Name string `yaml:"name"`
 	// Source, when set, is where bough acquires the repo from if
@@ -188,15 +187,6 @@ type TeardownConfig struct {
 	GracefulTimeoutSec int  `yaml:"graceful_timeout_sec" validate:"omitempty,min=1"`
 }
 
-// MCPConfig wires `~/.claude.json` projects-entry bootstrap so a
-// Claude Code session opened inside a new worktree sees the same MCP
-// servers as the parent monorepo. Disabled by default — opt in by
-// setting `enabled: true`.
-type MCPConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	SourceOfTruth string `yaml:"source_of_truth"`
-}
-
 // SymlinkSpec declares one symlink to drop into the worktree root
 // after `git worktree add` (typically used to re-expose CLAUDE.md so
 // edits in the worktree reflect back to the monorepo root copy).
@@ -229,7 +219,6 @@ type LegacyConfig struct {
 	Ports         map[string]PortRange `yaml:"ports"`
 	Registry      RegistryConfig       `yaml:"registry"`
 	Teardown      TeardownConfig       `yaml:"teardown"`
-	MCP           MCPConfig            `yaml:"mcp"`
 
 	// Sections that configured the continuous-learning loop bough
 	// carried until v0.27.0. Decoded as opaque nodes and never read:
@@ -243,6 +232,8 @@ type LegacyConfig struct {
 	RetiredMemoryBackends yaml.Node `yaml:"memory_backends"`
 	RetiredExport         yaml.Node `yaml:"export"`
 	RetiredQualityGates   yaml.Node `yaml:"quality_gates"`
+	// `mcp:` parsed into a struct nothing ever read. Removed in v0.29.0.
+	RetiredMCP yaml.Node `yaml:"mcp"`
 }
 
 // LegacyDatabase is the v0.3 shape of one `databases:` entry. The
@@ -334,23 +325,25 @@ func migrateLegacy(lc *LegacyConfig) (*Config, []string) {
 		Ports:         lc.Ports,
 		Registry:      lc.Registry,
 		Teardown:      lc.Teardown,
-		MCP:           lc.MCP,
 	}
 	// One line per retired section the file still carries. Written here
 	// rather than in deprecationWarnings() because only the legacy decode
 	// sees these nodes — Config has no field for them by design.
+	const loop = "the continuous-learning loop it configured was removed in v0.28.0"
 	for _, r := range []struct {
 		node yaml.Node
 		key  string
+		why  string
 	}{
-		{lc.RetiredInstinct, "instinct"},
-		{lc.RetiredMemoryBackends, "memory_backends"},
-		{lc.RetiredExport, "export"},
-		{lc.RetiredQualityGates, "quality_gates"},
+		{lc.RetiredInstinct, "instinct", loop},
+		{lc.RetiredMemoryBackends, "memory_backends", loop},
+		{lc.RetiredExport, "export", loop},
+		{lc.RetiredQualityGates, "quality_gates", loop},
+		{lc.RetiredMCP, "mcp", "no version of bough ever read it"},
 	} {
 		if !r.node.IsZero() {
 			warnings = append(warnings, fmt.Sprintf(
-				"YAML section '%s:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)", r.key))
+				"YAML section '%s:' is retired and does nothing: %s; delete the section (the key stops parsing in v0.29.0)", r.key, r.why))
 		}
 	}
 	if lc.SchemaVersion == 1 {

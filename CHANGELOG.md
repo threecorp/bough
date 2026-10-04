@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `teardown.graceful_timeout_sec` now reaches each engine's `Down`. It was
+  parsed and never used. **If your `.bough.yaml` already sets it, that value
+  now replaces each plugin's own stop budget** (mysql 30 s, elasticsearch
+  60 s, postgres 15 s); delete the key to keep those. An explicit
+  `--graceful-timeout`, `0` included, still wins, and the `WorktreeRemove`
+  hook uses the configured value. `kind: compose` now passes it to
+  `docker compose stop -t`.
+- `bough config validate` with no path printed every load warning twice, and
+  with `monorepo_root` set it named a file under the new root that it had
+  not read.
+- `bough create` / `bough remove` reject a positional argument instead of
+  ignoring it. A call that passed both a flag and a stray argument
+  (`bough create --name F-x extra`) used to succeed and now fails.
+- The `.worktree-isolation.yaml` warning no longer says the file was
+  removed in v0.5.0; it is still read.
+- The Nix flake builds `bough-plugin-compose` too, and stamps the commit as
+  the version instead of a fixed `0.1.1`.
+- Added the `LICENSE` file (MIT) the README already referred to.
+- `docs/PLUGIN_CLAUDE_CODE.md` no longer tells you to install commands and
+  skills user-scoped for worktree sessions: when the monorepo root is the
+  git main checkout, Claude Code reads its `.claude/commands` and
+  `.claude/skills` there.
+
+### Deprecated
+
+- The `mcp:` section of `.bough.yaml` is retired: it parsed into a struct no
+  code read. It now loads with a warning, `bough claude doctor` names it,
+  and it stops parsing in v0.29.0 with the other retired sections.
+
 ## v0.28.1
 
 ### Added
@@ -1194,7 +1227,7 @@ replacement) are contained entirely inside the plugin.
 ## v0.9.29
 
 Fixes a mysql:8.4 docker-backend readiness race reported via an
-external handover (threecorp extremo config, no `initial_resources`):
+external handover (a real project's config, no `initial_resources`):
 `bough create` could declare the mysql engine ready ~1-2s before the
 real server's TCP listener existed, deterministically breaking
 `post_create` hooks (e.g. `make create-database`) that connect over
@@ -1219,7 +1252,7 @@ handshake`.
   `--skip-networking` refuses that outright, so the check can only
   pass once the real server is actually listening on TCP.
 - The docker readiness auto-shift now also honors
-  `AUBA_API_DISABLE_PORT_FALLBACK`-style `netx.IsFallbackDisabled()`,
+  `DEMO_API_DISABLE_PORT_FALLBACK`-style `netx.IsFallbackDisabled()`,
   matching the sibling gRPC-style listener check already present
   elsewhere — previously the mysql docker backend could silently
   rebind to a neighboring port even when the caller asked it not to.
@@ -1447,7 +1480,7 @@ review (#1/#2/#3/#4/#5/#6/#7/#8/#14/#16/#17). First installment covering wave
   `Elasticsearch` fields alongside the existing `Mysql` one.
 - `killStrayProcessCompose`'s cwd-prefix match had no path-separator
   boundary, so tearing down one worktree could SIGTERM a sibling whose name
-  is a literal prefix (`auba-api-139` vs `auba-api-1394`).
+  is a literal prefix (`demo-api-139` vs `demo-api-1394`).
 - postgres's `Up()` pre-created the datadir itself before invoking nix,
   defeating services-flake's init-detection check — `initdb` never ran, so
   the nix backend could never actually bring up postgres on a fresh
@@ -1628,7 +1661,7 @@ Retrospective `/review` follow-ups — bug fixes found by sweeping previously-me
 - The project `<repo>/.claude/skills/<slug>` entries are symlinks into your per-user homunculus
   (`~/.local/share/bough-homunculus/...`), so their targets are **machine- and user-specific**. If your
   monorepo root is under version control, do not commit them — add `.claude/skills/` to `.gitignore` (or
-  keep the bough root out of git, as the auba monorepo does). `bough evolve` regenerates them.
+  keep the bough root out of git, as a real monorepo does). `bough evolve` regenerates them.
 
 ## v0.9.19
 
@@ -1740,8 +1773,8 @@ Retrospective /review of merged PRs #44 / #46 / #47 (which shipped without a pre
   `https://…`, `ssh://…`, `file://…`) is cloned over its transport; a local
   path (`~/…`, `./…`, `../…`, `/abs`) is cloned with `--local`
   (hardlink-fast, offline). `name` is optional when `source` is set — it is
-  derived from the source basename (`source: git@github.com:org/auba-proto`
-  → name `auba-proto`). Clone is best-effort like the rest of the create
+  derived from the source basename (`source: git@github.com:org/demo-proto`
+  → name `demo-proto`). Clone is best-effort like the rest of the create
   loop (a failure logs + skips that repo; `--strict` turns the run
   non-zero). This lets a `.bough.yaml` be self-contained — no hand-cloning
   the sub-repos before the first `bough create`.

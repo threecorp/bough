@@ -41,7 +41,7 @@ func TestAllocate_seedMatchesCrc32(t *testing.T) {
 
 // TestAllocate_seedMatchesV03_roleMainEqualsEmpty is the v0.4
 // compatibility guard: role="" and role="main" MUST produce the same
-// seed so an auba deployment migrated from v0.3 sees zero port drift
+// seed so a production monorepo migrated from v0.3 sees zero port drift
 // on its existing engines.
 func TestAllocate_seedMatchesV03_roleMainEqualsEmpty(t *testing.T) {
 	const name = "F-Migrate"

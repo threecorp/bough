@@ -225,7 +225,7 @@ func writePluginsYAML(datadir string, plugins []api.PluginSpec) (string, error) 
 // path resolves relative to the RAW worktree root (the directory
 // containing every declared repository as a sibling) — req.WorktreeRoot
 // itself is the engine-provider repo's own worktree path, one level too
-// deep for a path like "auba-api/es-config/sudachi" that names a
+// deep for a path like "demo-api/es-config/sudachi" that names a
 // sibling repo. This mirrors kind: compose's identical resolution for
 // compose.file (see plugins/engine/compose/lifecycle.go) so an
 // operator who already understands that convention gets no surprises

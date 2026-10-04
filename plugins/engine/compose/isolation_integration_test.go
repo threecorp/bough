@@ -74,7 +74,7 @@ func assertContainerGone(t *testing.T, name string) {
 func TestWorktreeIsolation_TwoWorktreesSameComposeFile(t *testing.T) {
 	requireDockerCompose(t)
 
-	const repoName = "auba-api"
+	const repoName = "demo-api"
 	repoA := setupWorktree(t, repoName)
 	repoB := setupWorktree(t, repoName)
 

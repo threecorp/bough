@@ -15,7 +15,7 @@ func TestResolveMonorepoRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mono, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wt := filepath.Join(mono, ".worktrees", "F-feat", "auba-api")
+	wt := filepath.Join(mono, ".worktrees", "F-feat", "demo-api")
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestResolveMonorepoRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(monoNew, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	subNew := filepath.Join(monoNew, "worktrees", "F-feat", "auba-api")
+	subNew := filepath.Join(monoNew, "worktrees", "F-feat", "demo-api")
 	if err := os.MkdirAll(subNew, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestResolveMonorepoRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte("schema_version: 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sub := filepath.Join(root, "auba-api", "server")
+	sub := filepath.Join(root, "demo-api", "server")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}

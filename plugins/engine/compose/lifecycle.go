@@ -41,7 +41,7 @@ var composeURLSchemes = map[string]string{
 // directory containing every declared repository as a sibling) —
 // req.WorktreeRoot itself is the engine-provider repo's own worktree
 // path (create.go's engineProviderWorktree), one level too deep for a
-// path like "auba-api/compose.yml" that names a sibling repo. This is
+// path like "demo-api/compose.yml" that names a sibling repo. This is
 // a deliberate deviation from how the other four plugins use
 // WorktreeRoot (as their own base directory).
 func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
@@ -227,13 +227,19 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	}
 
 	timeoutSec := req.GracefulTimeoutSec
-	if timeoutSec <= 0 {
+	stopArgs := []string{"compose", "-f", composeFile, "-f", overridePath, "-p", st.Project, "stop"}
+	if timeoutSec > 0 {
+		// compose stop owns the grace and kills after it; the client
+		// deadline only has to outlast that.
+		stopArgs = append(stopArgs, "-t", strconv.Itoa(timeoutSec))
+		timeoutSec += 30
+	} else {
 		timeoutSec = 10
 	}
+	stopArgs = append(stopArgs, st.Service)
 	gctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
-	stopCmd := exec.CommandContext(gctx, "docker", "compose",
-		"-f", composeFile, "-f", overridePath, "-p", st.Project, "stop", st.Service)
+	stopCmd := exec.CommandContext(gctx, "docker", stopArgs...)
 	if out, err := stopCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compose: Down: docker compose stop failed: %w\n%s", err, out)
 	}

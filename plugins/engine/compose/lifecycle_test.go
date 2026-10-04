@@ -102,7 +102,7 @@ func TestParseBoundPort(t *testing.T) {
 func TestProvider_Up_RejectsMissingExtras(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestProvider_Up_RejectsMissingExtras(t *testing.T) {
 func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: 56123}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/does-not-exist.yml",
+			"compose.file":        "demo-api/does-not-exist.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -153,7 +153,7 @@ func TestProvider_Up_RejectsMissingComposeFile(t *testing.T) {
 func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: port}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -200,7 +200,7 @@ func TestProvider_Up_ReusesAlreadyRunningContainer(t *testing.T) {
 func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: port}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "6379",
 		},
@@ -235,23 +235,78 @@ func TestProvider_Up_RejectsPortAlreadyInUse(t *testing.T) {
 func TestProvider_Up_RejectsInvalidTargetPort(t *testing.T) {
 	p := New()
 	worktreeRoot := t.TempDir()
-	repoDir := filepath.Join(worktreeRoot, "auba-api")
+	repoDir := filepath.Join(worktreeRoot, "demo-api")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktreeRoot, "auba-api", "compose.yml"), []byte("services: {redis: {}}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "demo-api", "compose.yml"), []byte("services: {redis: {}}"), 0o644); err != nil {
 		t.Fatalf("seed compose.yml: %v", err)
 	}
 	err := p.Up(context.Background(), &api.UpReq{
 		WorktreeRoot: repoDir,
 		Ports:        []api.PortSpec{{Role: "main", Port: 56123}},
 		Extras: map[string]string{
-			"compose.file":        "auba-api/compose.yml",
+			"compose.file":        "demo-api/compose.yml",
 			"compose.service":     "redis",
 			"compose.target_port": "not-a-number",
 		},
 	})
 	if err == nil {
 		t.Fatal("Up with a non-numeric compose.target_port = nil error, want an error")
+	}
+}
+
+// TestProvider_Down_PassesGraceToComposeStop: a positive GracefulTimeoutSec
+// becomes `docker compose stop -t N`, and the client deadline outlasts N so
+// a stop that takes the full grace is not cut short. A fake docker on PATH
+// records its arguments and sleeps 2 s on stop, past a 1 s grace.
+func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		grace int
+		want  string // substring of the recorded stop call
+		avoid string
+	}{
+		{"positive grace", 1, "stop -t 1 redis", ""},
+		{"zero keeps the compose default", 0, "stop redis", " -t "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 2;; esac\n"
+			if tc.grace == 0 {
+				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n"
+			}
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56124}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			err := New().Down(context.Background(), &api.DownReq{
+				Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot, GracefulTimeoutSec: tc.grace,
+			})
+			if err != nil {
+				t.Fatalf("Down: %v", err)
+			}
+			b, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stop string
+			for _, line := range strings.Split(string(b), "\n") {
+				if strings.Contains(line, " stop ") {
+					stop = line
+				}
+			}
+			if !strings.Contains(stop, tc.want) || (tc.avoid != "" && strings.Contains(stop, tc.avoid)) {
+				t.Errorf("stop call = %q, want %q", stop, tc.want)
+			}
+		})
 	}
 }

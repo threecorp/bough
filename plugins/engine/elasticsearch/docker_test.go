@@ -18,7 +18,7 @@ import (
 // include `network.publish_host` / `http.publish_port`, so ES
 // advertised its container-internal bridge IP (e.g. 172.17.0.4:9200)
 // via `_nodes/http`. Sniffing clients (olivere/elastic et al.) then
-// dialed 172.17.0.4 from the host and crashed auba-api at boot with
+// dialed 172.17.0.4 from the host and crashed demo-api at boot with
 // `no Elasticsearch node available`.
 //
 // The fix injects both lines verbatim; this test will fail loudly if
@@ -199,8 +199,8 @@ func TestWritePluginsYAML_RendersOfficialAndUnofficialPlugins(t *testing.T) {
 func TestResolveConfigMount(t *testing.T) {
 	base := t.TempDir()
 	rawWorktreeRoot := filepath.Join(base, "F-Feature")
-	engineProviderWorktree := filepath.Join(rawWorktreeRoot, "auba-api")
-	sudachiDir := filepath.Join(rawWorktreeRoot, "auba-api", "es-config", "sudachi")
+	engineProviderWorktree := filepath.Join(rawWorktreeRoot, "demo-api")
+	sudachiDir := filepath.Join(rawWorktreeRoot, "demo-api", "es-config", "sudachi")
 	if err := os.MkdirAll(sudachiDir, 0o755); err != nil {
 		t.Fatalf("mkdir fixture: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestResolveConfigMount(t *testing.T) {
 	t.Run("relative path resolves against the raw worktree root", func(t *testing.T) {
 		req := &api.UpReq{
 			WorktreeRoot: engineProviderWorktree,
-			Extras:       map[string]string{"es.config_mount": "auba-api/es-config/sudachi"},
+			Extras:       map[string]string{"es.config_mount": "demo-api/es-config/sudachi"},
 		}
 		got, err := resolveConfigMount(req)
 		if err != nil {
@@ -275,7 +275,7 @@ func TestResolveConfigMount(t *testing.T) {
 
 	t.Run("relative path with empty WorktreeRoot errors", func(t *testing.T) {
 		req := &api.UpReq{
-			Extras: map[string]string{"es.config_mount": "auba-api/es-config/sudachi"},
+			Extras: map[string]string{"es.config_mount": "demo-api/es-config/sudachi"},
 		}
 		if _, err := resolveConfigMount(req); err == nil {
 			t.Error("resolveConfigMount(relative, no WorktreeRoot) = nil error, want an error")

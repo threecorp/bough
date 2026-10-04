@@ -53,8 +53,8 @@ func TestComposeProjectName(t *testing.T) {
 		{
 			name:         "mixed case worktree name and nested path",
 			worktreeName: "F-Feature",
-			file:         "auba-api/compose.yml",
-			want:         "bough-f-feature-auba-api-compose-yml",
+			file:         "demo-api/compose.yml",
+			want:         "bough-f-feature-demo-api-compose-yml",
 		},
 		{
 			name:         "underscores and dots collapse to single dashes",
@@ -91,8 +91,8 @@ func isLowerAlnum(r rune) bool {
 // the SAME project name, so a Down call can locate what Up started
 // without any extra state beyond the sidecar file's own File field.
 func TestComposeProjectName_Deterministic(t *testing.T) {
-	a := composeProjectName("F-Feature", "auba-api/compose.yml")
-	b := composeProjectName("F-Feature", "auba-api/compose.yml")
+	a := composeProjectName("F-Feature", "demo-api/compose.yml")
+	b := composeProjectName("F-Feature", "demo-api/compose.yml")
 	if a != b {
 		t.Errorf("composeProjectName is not deterministic: %q != %q", a, b)
 	}
@@ -104,8 +104,8 @@ func TestComposeProjectName_Deterministic(t *testing.T) {
 // or docker compose's own up-or-reuse would silently hand worktree B
 // a container actually owned by worktree A.
 func TestComposeProjectName_DifferentWorktreesDiffer(t *testing.T) {
-	a := composeProjectName("F-WorktreeA", "auba-api/compose.yml")
-	b := composeProjectName("F-WorktreeB", "auba-api/compose.yml")
+	a := composeProjectName("F-WorktreeA", "demo-api/compose.yml")
+	b := composeProjectName("F-WorktreeB", "demo-api/compose.yml")
 	if a == b {
 		t.Errorf("two different worktrees derived the same project name %q — isolation is broken", a)
 	}
