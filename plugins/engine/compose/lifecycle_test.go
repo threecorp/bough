@@ -323,12 +323,16 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 
 // TestProvider_Down_BoundsHungCommands: a `compose stop` or `rm` that never
 // returns (a pre_stop hook, a stuck daemon) gives up after cmdWait instead
-// of holding the remove forever.
+// of holding the remove forever, even when a leftover child keeps the
+// output pipe open.
 func TestProvider_Down_BoundsHungCommands(t *testing.T) {
 	for _, hang := range []string{"stop", "rm"} {
 		t.Run(hang, func(t *testing.T) {
 			bin := t.TempDir()
-			fake := "#!/bin/sh\ncase \"$*\" in *\" " + hang + " \"*) exec sleep 60;; esac\n"
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
+				"case \"$*\" in *\" " + hang + " \"*) sleep 60 & exec sleep 60;; esac\n"
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -341,13 +345,18 @@ func TestProvider_Down_BoundsHungCommands(t *testing.T) {
 			}
 			p := New()
 			p.cmdWait = 5 * time.Second // spawning the fake docker can take seconds under load
+			p.pipeWait = time.Second
 			start := time.Now()
 			err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			if d := time.Since(start); d > 30*time.Second {
+				t.Errorf("Down took %v, want it bounded by cmdWait + pipeWait", d)
+			}
+			b, _ := os.ReadFile(record)
+			if !strings.Contains(string(b), " "+hang+" ") {
+				t.Fatalf("the fake never saw %s; calls:\n%s", hang, b)
+			}
 			if err == nil || !strings.Contains(err.Error(), "docker compose "+hang+" failed") {
 				t.Fatalf("Down = %v, want the hung %s to be cut off", err, hang)
-			}
-			if d := time.Since(start); d > 30*time.Second {
-				t.Errorf("Down took %v, want it bounded by cmdWait", d)
 			}
 		})
 	}

@@ -241,6 +241,7 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	gctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	stopCmd := exec.CommandContext(gctx, "docker", stopArgs...)
+	stopCmd.WaitDelay = p.pipeWait
 	if out, err := stopCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compose: Down: docker compose stop failed: %w\n%s", err, out)
 	}
@@ -257,6 +258,7 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	defer rcancel()
 	rmCmd := exec.CommandContext(rctx, "docker", "compose",
 		"-f", composeFile, "-f", overridePath, "-p", st.Project, "rm", "-f", st.Service)
+	rmCmd.WaitDelay = p.pipeWait
 	if out, err := rmCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compose: Down: docker compose rm failed: %w\n%s", err, out)
 	}

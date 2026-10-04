@@ -21,7 +21,9 @@
   `stop_grace_period` (up to 5 minutes); a longer one used to fail the
   remove and leave the container running. `docker compose stop` and `rm`
   also give up after 5 minutes instead of waiting forever on a stuck
-  daemon or `pre_stop` hook.
+  daemon or `pre_stop` hook; for a service that needs longer, set
+  `teardown.graceful_timeout_sec`, which raises the limit to that value
+  plus 30 s.
 - The release archives carry the `LICENSE` file.
 
 ## v0.28.3
