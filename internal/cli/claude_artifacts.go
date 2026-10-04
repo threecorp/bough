@@ -202,7 +202,7 @@ func renderArtifactList(w io.Writer, k artifactKind, dst string, names []string)
 //
 // Project scope lands at the monorepo root's own .claude/<subdir>. When that
 // root is the git main checkout, a worktree session reads it too: Claude Code
-// falls back to the main checkout's .claude/{commands,skills,agents}.
+// falls back to the main checkout's .claude/<subdir> when the worktree has none.
 func artifactDir(k artifactKind, scope HookScope) (string, error) {
 	dir, err := claudeDir(scope)
 	if err != nil {
