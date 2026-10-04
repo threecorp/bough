@@ -29,8 +29,8 @@ test-short:  ## Run unit tests only (skip integration / -tags=integration).
 
 
 .PHONY: integration-test
-integration-test: build  ## Run the real-mysqld E2E on Docker (needs a docker daemon; first run pulls mysql:8.4).
-	PATH=$(CURDIR)/dist:$$PATH go test -tags=integration -timeout=10m -v ./tests/integration/...
+integration-test: build  ## Run the real-mysqld E2E and the dockerutil daemon tests on Docker (needs a docker daemon; first run pulls mysql:8.4).
+	PATH=$(CURDIR)/dist:$$PATH go test -tags=integration -timeout=10m -v ./tests/integration/... ./pkg/dockerutil/...
 
 
 .PHONY: lint

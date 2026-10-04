@@ -110,8 +110,14 @@ type Config struct {
 	// which is the v0.2.5 guard.
 	AllowShellMetachars bool
 
-	// JUnitFile, when set, writes a JUnit XML report on suite exit
-	// for CI artifact upload. Implemented in Λ-6.2.
+	// SkipDatadirRemovalCheck drops the check that the datadir is gone
+	// once Cleanup returns nil. Set it only for a plugin that owns no
+	// datadir — compose wraps an operator's project and its Cleanup is a
+	// documented no-op; every other plugin must remove what it stored.
+	SkipDatadirRemovalCheck bool
+
+	// JUnitFile is reserved and currently ignored: no JUnit report is
+	// written. Use `go test -json` (or gotestsum) for CI artifacts.
 	JUnitFile string
 
 	// NativeProbe runs after EnvVars succeed. It receives the host:port
@@ -141,7 +147,7 @@ type Config struct {
 // Run executes the conformance suite against the plugin binary
 // declared in cfg. It assumes a testing.T context — most plugin
 // authors call it directly from their `Test<X>PluginConformance`
-// func. For ginkgo-based suites see RunGinkgo (Λ-6.2).
+// func. There is no ginkgo entry point; wrap Run in a testing.T.
 //
 // Run will t.Skip if cfg.PluginBinary is empty so that running
 // `go test ./...` without the conformance build tag does not

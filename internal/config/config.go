@@ -102,10 +102,12 @@ type Engine struct {
 	InitialResources []InitialResource `yaml:"initial_resources" validate:"dive"`
 	// Backend selects the lifecycle implementation inside the plugin.
 	// "docker" is the only one the bundled plugins register, and the
-	// one an omitted field resolves to. Validated here (the literal
-	// mirrors engineapi.DefaultBackend, which a struct tag cannot
-	// reference) so a stale value fails at load rather than at Up.
-	Backend string `yaml:"backend" validate:"omitempty,oneof=docker"`
+	// one an omitted field resolves to. Validated in validateSemantic
+	// rather than by a struct tag, because the set of valid tokens
+	// depends on Kind: a `oneof=docker` tag here also rejected the
+	// backends a third-party plugin registers, which extras.backend —
+	// the very channel this field is meant to supersede — allows.
+	Backend string `yaml:"backend"`
 	// ReadyTimeoutSec caps how long the host waits for the plugin's
 	// ReadyCheck loop to report ready. Zero means use the plugin's
 	// own default (typically 300-600 s). Capped well under int32 max:
@@ -182,7 +184,12 @@ type RegistryConfig struct {
 
 // TeardownConfig governs `bough remove` behaviour.
 type TeardownConfig struct {
-	RemoveBranch       bool `yaml:"remove_branch"`
+	RemoveBranch bool `yaml:"remove_branch"`
+	// RemoveDatadir decides whether remove calls each plugin's Cleanup.
+	// It does not keep a datadir: the bundled engines put theirs under
+	// the worktree (.local/<kind>-data), which remove deletes with the
+	// worktree either way. False leaves the plugin's own teardown (a
+	// docker volume it made elsewhere, say) in place.
 	RemoveDatadir      bool `yaml:"remove_datadir"`
 	GracefulTimeoutSec int  `yaml:"graceful_timeout_sec" validate:"omitempty,min=1"`
 }

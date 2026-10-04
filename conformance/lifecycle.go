@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -83,7 +85,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 		}
 	}
 
-	assertCleanup(t, prov, datadir, portInts)
+	assertCleanup(t, prov, datadir, portInts, !cfg.SkipDatadirRemovalCheck)
 
 	// Faults run in their own freshly-spawned plugin processes so a
 	// panic in one cannot poison the next; each fault is gated by a
@@ -270,32 +272,84 @@ func runDownPhase(t *testing.T, prov engineapi.EngineProvider, worktreeRoot stri
 	if err != nil {
 		t.Fatalf("Down (iter %d): %v", iter, err)
 	}
+	// A nil return is not the contract — the engine actually being
+	// stopped is. Without this a plugin whose Down does nothing passes
+	// the whole suite, and `bough remove`'s port guard (which refuses
+	// to delete a datadir while any port still answers) is built on
+	// Down being real.
+	if still := portsStillAnswering(ports, downPortReleaseWait); len(still) > 0 {
+		t.Fatalf("Down (iter %d) returned nil but port(s) %v still accept connections after %s — "+
+			"Down must stop the engine, not just report success", iter, still, downPortReleaseWait)
+	}
+}
+
+// downPortReleaseWait is how long the Down post-condition lets a
+// stopped engine's host port actually close. Docker unpublishes the
+// port as the container is removed, which is not instantaneous.
+const downPortReleaseWait = 10 * time.Second
+
+// portsStillAnswering returns the subset of ports that still accept a
+// TCP connection on 127.0.0.1 after wait has elapsed. Only a port that
+// keeps answering for the whole window counts, so a slow unpublish is
+// not reported as a contract violation.
+func portsStillAnswering(ports []int, wait time.Duration) []int {
+	deadline := time.Now().Add(wait)
+	for {
+		var still []int
+		for _, port := range ports {
+			if port <= 0 {
+				continue
+			}
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				still = append(still, port)
+			}
+		}
+		if len(still) == 0 || time.Now().After(deadline) {
+			return still
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // assertCleanup runs the two terminal Cleanup sub-tests (initial +
 // idempotent). The container-uid permission case is a Skip, not a
 // Fail, because the underlying chown follow-up is plugin-side.
-func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int) {
+func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, checkRemoved bool) {
 	t.Helper()
 	t.Run("Cleanup", func(t *testing.T) {
-		runCleanupCall(t, prov, datadir, ports, "Cleanup",
+		runCleanupCall(t, prov, datadir, ports, checkRemoved, "Cleanup",
 			"Cleanup hit permission-denied — typical when the container "+
 				"writes as a non-host uid (e.g. mysql/redis run as their own user "+
 				"and host non-root cannot rm -rf the result). Not a contract "+
 				"violation per se; tracked as a plugin-side follow-up. Raw: %v")
 	})
 	t.Run("Cleanup_idempotent", func(t *testing.T) {
-		runCleanupCall(t, prov, datadir, ports, "Cleanup (2nd call)",
+		runCleanupCall(t, prov, datadir, ports, checkRemoved, "Cleanup (2nd call)",
 			"Cleanup (2nd call) hit permission-denied — see above. Raw: %v")
 	})
 }
 
-func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, label, skipFmt string) {
+func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, checkRemoved bool, label, skipFmt string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), quickPhaseTimeout)
 	defer cancel()
 	err := prov.Cleanup(ctx, datadir, ports)
 	if err == nil {
+		// CONTRACT: "Cleanup — host wipes the datadir after Down
+		// confirmed exit". Checking only the error let a Cleanup that
+		// wipes nothing pass, and newDatadir's own t.Cleanup then
+		// removed the leftovers so no trace survived the run. A plugin
+		// that owns no datadir (compose) opts out via the Config knob.
+		if !checkRemoved {
+			return
+		}
+		if _, statErr := os.Stat(datadir); statErr == nil {
+			t.Fatalf("%s returned nil but %s is still present — Cleanup must remove the datadir", label, datadir)
+		} else if !os.IsNotExist(statErr) {
+			t.Fatalf("%s: cannot confirm %s was removed: %v", label, datadir, statErr)
+		}
 		return
 	}
 	if isPermissionDeniedFromContainerUID(err) {
@@ -456,11 +510,30 @@ func isPermissionDeniedFromContainerUID(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, fs.ErrPermission) {
-		return true
+	// Only a filesystem permission error on a path counts. A bare
+	// substring match on "permission denied" also swallowed errors that
+	// are not this case at all — a docker-socket permission error, an
+	// SELinux denial, a plugin bug whose message happens to carry the
+	// phrase — turning a real contract violation into a Skip the parent
+	// test still reports as a pass.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return errors.Is(pathErr, fs.ErrPermission)
 	}
-	// The plugin wraps os.RemoveAll's PathError; check the textual
-	// signature too since `errors.Is` does not traverse fmt.Errorf %w
-	// chains that aren't explicit wrap points.
-	return strings.Contains(err.Error(), "permission denied")
+	// A plugin may render the PathError with fmt.Errorf("%v"), which
+	// drops the chain; fall back to matching the textual signature
+	// os.RemoveAll produces, which names the syscall and the path.
+	msg := err.Error()
+	// The ops are every PathError.Op os.RemoveAll returns (removeall_at.go)
+	// plus os.Remove's "remove"; an error crossing the plugin RPC arrives as
+	// this text only, because the client rebuilds it with errors.New.
+	if !strings.Contains(msg, "permission denied") {
+		return false
+	}
+	for _, op := range []string{"unlinkat ", "openfdat ", "readdirnames ", "RemoveAll ", "remove "} {
+		if strings.Contains(msg, op) {
+			return true
+		}
+	}
+	return false
 }

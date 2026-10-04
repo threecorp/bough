@@ -85,11 +85,12 @@ func buildStatus(reg registry.Registry, cfg *config.Config) []statusEntry {
 			out = append(out, statusEntry{
 				Name: name, Kind: kind, Port: port,
 				Listening: pid > 0, PID: pid,
-				// Registry stores engine entries under composite keys
+				// Registry stores every entry under a composite key
 				// `<kind>.<role>` (e.g. `mysql.main`), so split on the
 				// first dot before looking up the backend keyed by raw
-				// engine kind. Non-engine kinds (api / gateway) have no
-				// dot and pass through unchanged.
+				// engine kind. Non-engine kinds (api / gateway) are
+				// written the same way, and are simply absent from
+				// engineBackend.
 				Backend: engineBackend[engineKindFromRegistryKey(kind)],
 			})
 		}
@@ -98,9 +99,12 @@ func buildStatus(reg registry.Registry, cfg *config.Config) []statusEntry {
 }
 
 // engineKindFromRegistryKey extracts the engine kind from a registry
-// composite key. v0.4 registry keys engine entries as `<kind>.<role>`;
-// non-engine port kinds (api / gateway / view / ...) carry no role
-// suffix. Legacy v0.3 keys (no dot) pass through.
+// composite key. Since v0.4 every entry is keyed `<kind>.<role>` —
+// engines via allocateEngines and the non-engine `ports:` kinds (api /
+// gateway / view / ...) via allocateNonEnginePorts, both as
+// `<kind>.main`. Load() rewrites legacy v0.3 bare keys to that form, so
+// a dotless key reaches this only from an in-memory Registry; it passes
+// through unchanged.
 func engineKindFromRegistryKey(key string) string {
 	if i := strings.IndexByte(key, '.'); i >= 0 {
 		return key[:i]

@@ -149,7 +149,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	// Idempotency: claude --resume re-fires WorktreeCreate, so an
 	// already-running container is a successful no-op.
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
 	if err != nil {
 		return fmt.Errorf("mysql docker: reuse check %s: %w", name, err)
 	}
@@ -315,5 +315,5 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 		// fall through to Remove unconditionally.
 		_ = err
 	}
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	return dockerutil.RemoveOwned(ctx, cli, id)
 }

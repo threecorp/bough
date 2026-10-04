@@ -187,9 +187,11 @@ to a variant tag such as `mysql:8.4-oracle`.
 
 Changing the version of a running engine wants a fresh worktree: an
 Elasticsearch 7 data directory does not open under 9, and the same holds
-across PostgreSQL majors. `bough remove --name <name>` first — a
-still-running container is reused by name, so a new `version:` is not
-picked up until that container is gone.
+across PostgreSQL majors. `bough remove --name <name>` first: while the
+worktree's container exists, running or stopped, `bough create` refuses
+a `version:` (or `docker.image`) that resolves to another image reference
+and names both, rather than start it on the old data directory. A tag
+rebuilt in place keeps its name, so it is not compared.
 
 ### Wire it into `claude --worktree`
 
@@ -232,7 +234,9 @@ teardown → `git worktree remove` per sub-repo → registry cleanup. If a port
 still answers, remove stops before the datadir step, so the datadir,
 worktree and registry entry are kept (Down and `pre_remove` have already
 run). A failed `git worktree remove` or branch delete is printed and remove
-carries on.
+carries on. The check covers every port the registry holds except those of
+a `ports:` entry, so a kind moved from `engines:` to `ports:` under the
+same name is no longer checked — stop that engine before removing.
 
 ## Workspace layout & resumable worktree sessions
 

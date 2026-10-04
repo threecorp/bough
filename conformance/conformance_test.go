@@ -222,16 +222,22 @@ func TestAssertNonEmpty_DetectsEmptyValue(t *testing.T) {
 // drive the Skip path via a sub-test and assert that the sub-test
 // ended Skipped, not Failed.
 func TestRun_EmptyPluginBinary_Skips(t *testing.T) {
+	var skipped bool
 	t.Run("skip-path", func(sub *testing.T) {
+		// SkipNow unwinds via runtime.Goexit, so a statement after Run
+		// never executes. Registering the observation as a Cleanup
+		// first works because cleanups do run during that unwind —
+		// which is what lets this test assert the Skip actually
+		// happened instead of only that nothing failed.
+		sub.Cleanup(func() { skipped = sub.Skipped() })
 		conformance.Run(sub, conformance.Config{PluginBinary: ""})
-		// `defer` only runs after Run returns normally; on Skip the
-		// goroutine unwinds via runtime.Goexit from SkipNow, so the
-		// post-check has to live in t.Cleanup of the OUTER t below.
 	})
-	// If `skip-path` Skip'd, the outer t.Run returns true and the
-	// sub-test's Skipped() reflects that. Go's testing package
-	// reports skipped sub-tests as not-failed at the parent level.
 	if t.Failed() {
 		t.Errorf("Run with empty PluginBinary marked outer test as failed")
+	}
+	// Without this the test also passed when Run returned immediately
+	// without skipping — i.e. when the gate it exists to guard was gone.
+	if !skipped {
+		t.Errorf("Run with empty PluginBinary did not Skip; the gate that keeps plain `go test` usable is gone")
 	}
 }

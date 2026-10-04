@@ -96,15 +96,22 @@ func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool
 
 // UpOrReuse implements the --resume idempotency contract for Up.
 //
-// Returns skip=true if a container with `name` is already running, so
-// the caller can early-return without recreating. If the container
-// exists but is stopped (a previous Up partially failed), the stale
-// container is removed and skip=false is returned so the caller
-// proceeds with a fresh create + start.
+// Returns skip=true if a container with `name` is already running the
+// image in wantImage, so the caller can early-return without
+// recreating. If the container exists but is stopped (a previous Up
+// partially failed), the stale container is removed and skip=false is
+// returned so the caller proceeds with a fresh create + start.
+//
+// A container created from another image — running or stopped — is an
+// error rather than a reuse or a recreate: engines[].version picks the
+// image, and either path would leave the new version serving, or about to
+// serve, a data directory the old one wrote, while .bough.yaml names the
+// new one. wantImage == "" skips the comparison, for a caller whose image
+// is not bough's to choose.
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
-func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, error) {
+func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) (bool, error) {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return false, err
@@ -112,8 +119,17 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, erro
 	if id == "" {
 		return false, nil
 	}
-	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
-		return true, nil
+	info, ierr := cli.ContainerInspect(ctx, id)
+	if ierr == nil {
+		have := configImage(info.Config)
+		if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
+			return false, fmt.Errorf("container %s was created from %s, not the %s this config asks for; "+
+				"bough does not start another image on the data directory the first one wrote — "+
+				"`bough remove` this worktree (or docker rm -f %s) and create it again", name, have, wantImage, name)
+		}
+		if info.State != nil && info.State.Running {
+			return true, nil
+		}
 	}
 	// The container LookupByName just found stopped can vanish before
 	// this call reaches the daemon — a concurrent `bough create` retry
@@ -123,10 +139,62 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, erro
 	// "nothing there" state the id == "" branch above already treats
 	// as success, so a NotFound here must not fail Up — only a genuine
 	// remove error (permissions, daemon down, in-use) should.
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil && !errdefs.IsNotFound(err) {
+	// An image bough chose may declare a VOLUME its bind mount does not
+	// cover (postgres 18+ moved it to the parent of PGDATA), and that
+	// anonymous volume outlives the container unless removed with it. A
+	// compose service's image is the operator's, and a same-named
+	// container bough did not label is someone else's: both keep theirs.
+	removeVolumes := wantImage != "" && ierr == nil && ownedByBough(info.Config)
+	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil && !errdefs.IsNotFound(err) {
 		return false, err
 	}
 	return false, nil
+}
+
+// RemoveOwned force-removes a container, taking its anonymous volumes
+// with it only when bough created it. The engines' Down use it so a
+// postgres 18+ worktree does not leave one dangling volume behind.
+func RemoveOwned(ctx context.Context, cli *client.Client, id string) error {
+	owned := false
+	if info, err := cli.ContainerInspect(ctx, id); err == nil {
+		owned = ownedByBough(info.Config)
+	}
+	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: owned})
+}
+
+// ownedByBough reports whether a container carries the label every bough
+// plugin stamps on what it creates (Labels), so deleting its anonymous
+// volumes cannot reach a same-named container someone else made.
+func ownedByBough(cfg *container.Config) bool {
+	return cfg != nil && cfg.Labels[LabelManaged] == "true"
+}
+
+func configImage(cfg *container.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Image
+}
+
+// sameImageID reports whether ref resolves in the local image store to the
+// image a container was created from: the same image spelled another way
+// (with the docker.io/library/ prefix, or by digest). An image not pulled
+// yet cannot be compared and counts as different.
+func sameImageID(ctx context.Context, cli *client.Client, ref, containerImageID string) bool {
+	if containerImageID == "" {
+		return false
+	}
+	img, err := cli.ImageInspect(ctx, ref)
+	return err == nil && img.ID == containerImageID
+}
+
+// imageSwapped reports whether a running container's image ref differs
+// from the one the caller resolved. An empty side means the comparison
+// cannot be made — no wanted ref, or a daemon that reported no Config —
+// and is never a swap, so an unknown never blocks a reuse that used to
+// work.
+func imageSwapped(want, have string) bool {
+	return want != "" && have != "" && want != have
 }
 
 // StartOrCleanup starts a just-created container; on failure it
@@ -138,7 +206,9 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name string) (bool, erro
 // pre-check it reliably.
 func StartOrCleanup(ctx context.Context, cli *client.Client, containerID, engineName string, port int) error {
 	if err := cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: false})
+		// Only the bundled engines call this, so any anonymous volume is
+		// one their image declared — see UpOrReuse.
+		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 		if isPortConflictError(err) {
 			return fmt.Errorf("%s docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", engineName, port, port, err)
 		}

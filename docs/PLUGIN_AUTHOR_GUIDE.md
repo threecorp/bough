@@ -66,8 +66,8 @@ image pull failure).
 | `EnvVars` | every `*_HOST` + `*_PORT` pair (including multi-port `*_<ROLE>_PORT`) and every `*_URL` with a host and a known or explicit port is dialable from the host (`AssertReachable`); other URLs are skipped |
 | `EnvVars` | no value contains shell metachars unless `AllowShellMetachars=true` (`AssertShellSafe`) |
 | `EnvVars` | `Config.NativeProbe(ctx, hostPort)` returns nil for every dialable address — only when you set `NativeProbe` |
-| `Down` | returns nil |
-| `Cleanup` × 2 | idempotent — second call must not error (a permission error from a container-owned datadir is skipped, not failed) |
+| `Down` | returns nil, and every port stops accepting connections on 127.0.0.1 within 10 s |
+| `Cleanup` × 2 | the datadir is gone after a nil return (opt out with `SkipDatadirRemovalCheck` if you own none), and the second call must not error (a permission error from a container-owned datadir is skipped, not failed) |
 
 See [`plugins/engine/api/CONTRACT.md`](../plugins/engine/api/CONTRACT.md) for
 the prose contract every invariant traces back to.

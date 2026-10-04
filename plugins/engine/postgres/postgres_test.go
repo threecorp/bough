@@ -137,6 +137,10 @@ func TestPgdataPin(t *testing.T) {
 		"no PGDATA at all gets the mount":     {[]string{"PATH=/usr/bin"}, "PGDATA=/var/lib/postgresql/data"},
 		"a sibling prefix is not the mount":   {[]string{"PGDATA=/var/lib/postgresql/data2"}, "PGDATA=/var/lib/postgresql/data"},
 		"a dot-dot escape is not the mount":   {[]string{"PGDATA=/var/lib/postgresql/data/../outside"}, "PGDATA=/var/lib/postgresql/data"},
+		// Docker resolves a duplicated key by the last entry, so both orders
+		// are pinned: a first-match reading flips each of these.
+		"duplicate, last is inside the mount":  {[]string{"PGDATA=/var/lib/postgresql/18/docker", "PGDATA=/var/lib/postgresql/data"}, ""},
+		"duplicate, last is outside the mount": {[]string{"PGDATA=/var/lib/postgresql/data", "PGDATA=/var/lib/postgresql/18/docker"}, "PGDATA=/var/lib/postgresql/data"},
 	}
 	for name, tc := range cases {
 		if got := pgdataPin(tc.env); got != tc.want {

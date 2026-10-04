@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	engineapi "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 // deprecationWarnings lists the keys a config still sets that no longer
@@ -94,13 +96,19 @@ func (c *Config) validateSemantic() error {
 		if eng.Kind == "compose" && eng.Compose == nil {
 			errs = append(errs, fmt.Errorf("config: engines[%d].kind=compose requires a compose: block (file, service, target_port)", i))
 		}
-		// extras.backend reaches the plugin verbatim when `backend:` is empty
-		// (the field wins otherwise), so for the bundled plugins the rule the
-		// `backend:` tag enforces is repeated here; otherwise a stale token
-		// fails only at Up, after earlier engines are already running. A
-		// third-party plugin may register other backends, so it is left to it.
-		if b := eng.Extras["backend"]; eng.Backend == "" && bundledKinds[eng.Kind] && b != "" && b != "docker" {
-			errs = append(errs, fmt.Errorf("config: engines[%d].extras.backend=%q is not a backend the bundled plugins provide (docker); delete the key", i, b))
+		// `backend:` and extras.backend are the same token on two
+		// channels — buildEngineExtras copies whichever is set into
+		// extras["backend"], the field winning — so both are checked the
+		// same way: for a bundled kind a stale token is refused here
+		// rather than at Up, after earlier engines are already running,
+		// and for a third-party kind neither is judged, because only
+		// that plugin knows which backends it registers.
+		if bundledKinds[eng.Kind] {
+			if b := eng.Backend; b != "" && b != engineapi.DefaultBackend {
+				errs = append(errs, fmt.Errorf("config: engines[%d].backend=%q is not a backend the bundled plugins provide (%s); delete the line", i, b, engineapi.DefaultBackend))
+			} else if b := eng.Extras["backend"]; eng.Backend == "" && b != "" && b != engineapi.DefaultBackend {
+				errs = append(errs, fmt.Errorf("config: engines[%d].extras.backend=%q is not a backend the bundled plugins provide (%s); delete the key", i, b, engineapi.DefaultBackend))
+			}
 		}
 	}
 

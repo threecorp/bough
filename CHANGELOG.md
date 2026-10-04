@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`bough create` no longer keeps, or quietly replaces, a container
+  built from another `engines[].version`.** `UpOrReuse` matched on the
+  container name alone: editing `version:` and running `bough create`
+  again left a running old engine serving while `.bough.yaml` named the
+  new one — the one thing v0.27.0 shipped `version:` for — and a
+  stopped one was recreated on the new image over the data directory
+  the old version wrote. A container created from a different image,
+  running or stopped, now fails with both refs named and says to
+  `bough remove` the worktree first. The same image spelled another way
+  (with the `docker.io/library/` prefix, or by digest) still matches by
+  image ID once that spelling is in the local image store; a tag rebuilt
+  in place keeps its name and is not compared. `compose` is unaffected:
+  the wrapped file owns its image.
+- **`bough remove` says when it cannot check the engine ports.** The
+  v0.27.0 guard probes the ports the registry holds, and a worktree
+  registered by `bough backfill` has none, so the check passed on an
+  empty set and read as "every engine is stopped". It now names that
+  gap on stderr.
+- **`engines[].backend` is judged by kind, like `extras.backend`.** The
+  `oneof=docker` struct tag also refused the backends a third-party
+  plugin registers, while `extras.backend` — the channel the field
+  supersedes — allowed them. Both are now checked in `validateSemantic`
+  and only for the bundled kinds, so the v0.27.0 message for a stale
+  `backend: nix` changes from the `oneof` tag text to
+  `config: engines[N].backend="nix" is not a backend the bundled plugins provide (docker); delete the line`.
+- **Postgres 18 no longer leaks an anonymous volume per worktree.** Its
+  official image moved `VOLUME` from `/var/lib/postgresql/data` to the
+  parent `/var/lib/postgresql`, which bough's bind mount on the child does
+  not cover, so Docker created an anonymous volume there and every
+  `remove` left it dangling. The engines' `Down`, and the cleanup of a
+  stale or failed container, now remove a container's anonymous volumes
+  with it — only for a container carrying bough's `com.bough.managed`
+  label, so a same-named container bough did not create keeps its own.
+  The datadir is a bind mount and is untouched; the other bundled images
+  declare no `VOLUME` outside their bind, so nothing changes for them. A
+  wrapped compose service keeps its volumes.
+- **`teardown.remove_datadir: false` documents what it does.** It skips
+  each plugin's `Cleanup`; it cannot keep a datadir, because the bundled
+  engines put theirs under the worktree that `remove` deletes either way.
+- Conformance suite false-greens: `Down` was asserted only on a nil
+  error, so a plugin whose `Down` did nothing passed all 15 sub-tests;
+  `Cleanup` likewise, with `newDatadir`'s own `t.Cleanup` erasing the
+  evidence; and a Docker-socket permission error turned a contract
+  violation into a skip the parent still reported as a pass. Each now
+  checks the effect — the port stops answering, the datadir is gone —
+  and the permission test narrowed to a filesystem error on a path
+  (every op `os.RemoveAll` reports, matched in the text because errors
+  cross the plugin RPC as strings). **For plugin authors:** a plugin
+  that owns no datadir sets the new `conformance.Config.SkipDatadirRemovalCheck`
+  (compose does); `Config.JUnitFile` was never implemented and is now
+  documented as ignored.
+
 ## v0.28.2
 
 ### Fixed

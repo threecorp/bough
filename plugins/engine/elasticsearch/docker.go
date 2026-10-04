@@ -354,7 +354,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	name := dockerContainerName(port)
 
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
 	if err != nil {
 		return fmt.Errorf("elasticsearch docker: reuse check %s: %w", name, err)
 	}
@@ -590,5 +590,5 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 		timeout = req.GracefulTimeoutSec
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	return dockerutil.RemoveOwned(ctx, cli, id)
 }

@@ -17,6 +17,7 @@ package dockerutil
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,12 +131,195 @@ func TestUpOrReuse_SkipsRunning(t *testing.T) {
 	name := fmt.Sprintf("bough-test-reuse-%d", time.Now().UnixNano())
 	_ = createSleepContainer(t, cli, name, true)
 
-	skip, err := UpOrReuse(context.Background(), cli, name)
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage)
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}
 	if !skip {
 		t.Errorf("UpOrReuse skip = false, want true (container is running)")
+	}
+}
+
+// TestUpOrReuse_RefusesARunningContainerOnAnotherImage is the daemon
+// half of TestImageSwapped: editing engines[].version used to leave the
+// old engine serving because reuse matched the name alone. The refusal
+// must name both refs and leave the container running, and an empty
+// wanted image (compose) must still reuse.
+func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+
+	name := fmt.Sprintf("bough-test-swap-%d", time.Now().UnixNano())
+	id := createSleepContainer(t, cli, name, true)
+	ctx := context.Background()
+
+	_, err := UpOrReuse(ctx, cli, name, "alpine:3.19")
+	if err == nil {
+		t.Fatal("UpOrReuse reused a container running alpine:3.20 for a config asking for alpine:3.19")
+	}
+	for _, want := range []string{testImage, "alpine:3.19", name} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %q", err, want)
+		}
+	}
+	if info, ierr := cli.ContainerInspect(ctx, id); ierr != nil || !info.State.Running {
+		t.Errorf("the refused container must keep running untouched (inspect err=%v)", ierr)
+	}
+
+	skip, err := UpOrReuse(ctx, cli, name, "")
+	if err != nil || !skip {
+		t.Errorf("UpOrReuse with no wanted image = (%v, %v), want (true, nil): compose owns its image", skip, err)
+	}
+}
+
+// TestRemoveOwned_VolumesFollowTheLabel is the Down half of the postgres
+// 18 leak fix: a container bough labelled loses its anonymous volume with
+// it, while a same-named container bough did not create keeps its own.
+func TestRemoveOwned_VolumesFollowTheLabel(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name       string
+		labels     map[string]string
+		volumeGone bool
+	}{
+		{"bough-labelled container", map[string]string{LabelManaged: "true", "com.bough.test": "dockerutil"}, true},
+		{"unlabelled container", testLabels, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := cli.ContainerCreate(ctx, &container.Config{
+				Image: testImage, Cmd: []string{"sleep", "3600"}, Labels: tc.labels,
+				Volumes: map[string]struct{}{"/probe": {}},
+			}, &container.HostConfig{}, nil, nil, fmt.Sprintf("bough-test-rmown-%d", time.Now().UnixNano()))
+			if err != nil {
+				t.Fatalf("ContainerCreate: %v", err)
+			}
+			info, err := cli.ContainerInspect(ctx, resp.ID)
+			if err != nil {
+				t.Fatalf("ContainerInspect: %v", err)
+			}
+			volume := ""
+			for _, m := range info.Mounts {
+				if m.Type == "volume" {
+					volume = m.Name
+				}
+			}
+			t.Cleanup(func() {
+				_ = cli.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+				_ = cli.VolumeRemove(context.Background(), volume, true)
+			})
+
+			if err := RemoveOwned(ctx, cli, resp.ID); err != nil {
+				t.Fatalf("RemoveOwned: %v", err)
+			}
+			_, verr := cli.VolumeInspect(ctx, volume)
+			if gone := errdefs.IsNotFound(verr); gone != tc.volumeGone {
+				t.Errorf("volume %s gone = %v, want %v (inspect err=%v)", volume, gone, tc.volumeGone, verr)
+			}
+		})
+	}
+}
+
+// TestUpOrReuse_SameImageAnotherSpellingReuses guards the string compare
+// against a false refusal: "docker.io/library/alpine:3.20" and
+// "alpine:3.20" are one image, so an operator re-spelling docker.image
+// must not be told to remove the worktree.
+func TestUpOrReuse_SameImageAnotherSpellingReuses(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+
+	name := fmt.Sprintf("bough-test-spell-%d", time.Now().UnixNano())
+	_ = createSleepContainer(t, cli, name, true)
+
+	skip, err := UpOrReuse(context.Background(), cli, name, "docker.io/library/"+testImage)
+	if err != nil || !skip {
+		t.Errorf("UpOrReuse = (%v, %v), want (true, nil) for the same image spelled with its registry prefix", skip, err)
+	}
+}
+
+// TestUpOrReuse_RefusesAStoppedContainerOnAnotherImage closes the gap the
+// running-only check left: recreating a stopped container would start
+// the new version on the datadir the old one wrote (a postgres 17 dir
+// under 18 does not even start). The stopped container must survive.
+func TestUpOrReuse_RefusesAStoppedContainerOnAnotherImage(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+
+	name := fmt.Sprintf("bough-test-stopswap-%d", time.Now().UnixNano())
+	_ = createSleepContainer(t, cli, name, false)
+
+	if _, err := UpOrReuse(context.Background(), cli, name, "alpine:3.19"); err == nil {
+		t.Fatal("UpOrReuse recreated a stopped alpine:3.20 container for a config asking for alpine:3.19")
+	}
+	if id, _ := LookupByName(context.Background(), cli, name); id == "" {
+		t.Error("the refused stopped container was removed; it must be left for the operator")
+	}
+}
+
+// TestUpOrReuse_StoppedContainerVolumes pins whose anonymous volumes go
+// with a stale container. postgres 18 declares VOLUME on the parent of
+// the bind mount, so a volume left behind leaked one per worktree. Only a
+// container bough labelled, for an image bough chose, loses its volume.
+func TestUpOrReuse_StoppedContainerVolumes(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+	ctx := context.Background()
+
+	owned := map[string]string{LabelManaged: "true", "com.bough.test": "dockerutil"}
+	for _, tc := range []struct {
+		name       string
+		wantImage  string
+		labels     map[string]string
+		volumeGone bool
+	}{
+		{"bough-labelled, bough-chosen image removes its volume", testImage, owned, true},
+		{"same-named container bough did not label keeps its volume", testImage, testLabels, false},
+		{"compose image keeps its volume", "", owned, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := fmt.Sprintf("bough-test-vol-%d", time.Now().UnixNano())
+			resp, err := cli.ContainerCreate(ctx, &container.Config{
+				Image:   testImage,
+				Cmd:     []string{"sleep", "3600"},
+				Labels:  tc.labels,
+				Volumes: map[string]struct{}{"/probe": {}},
+			}, &container.HostConfig{}, nil, nil, name)
+			if err != nil {
+				t.Fatalf("ContainerCreate: %v", err)
+			}
+			info, err := cli.ContainerInspect(ctx, resp.ID)
+			if err != nil {
+				t.Fatalf("ContainerInspect: %v", err)
+			}
+			volume := ""
+			for _, m := range info.Mounts {
+				if m.Type == "volume" {
+					volume = m.Name
+				}
+			}
+			if volume == "" {
+				t.Fatal("expected Docker to create an anonymous volume for /probe")
+			}
+			t.Cleanup(func() {
+				_ = cli.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+				_ = cli.VolumeRemove(context.Background(), volume, true)
+			})
+
+			if _, err := UpOrReuse(ctx, cli, name, tc.wantImage); err != nil {
+				t.Fatalf("UpOrReuse: %v", err)
+			}
+			_, verr := cli.VolumeInspect(ctx, volume)
+			if gone := errdefs.IsNotFound(verr); gone != tc.volumeGone {
+				t.Errorf("volume %s gone = %v, want %v (inspect err=%v)", volume, gone, tc.volumeGone, verr)
+			}
+		})
 	}
 }
 
@@ -149,7 +333,7 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 	// Up failure.
 	_ = createSleepContainer(t, cli, name, false)
 
-	skip, err := UpOrReuse(context.Background(), cli, name)
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage)
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}

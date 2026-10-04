@@ -39,6 +39,14 @@ func (p *Provider) ReadyCheck(ctx context.Context, ports []int, timeoutSec int) 
 			return false, err
 		}
 		if !time.Now().Before(deadline) {
+			// probeOnce can report not-ready with a nil error (a
+			// well-formed but wrong reply, e.g. redis answering
+			// something other than +PONG), so %w would render
+			// "%!w(<nil>)" in the one message the operator reads.
+			if err == nil {
+				return false, fmt.Errorf("compose: ReadyCheck: port %d not ready within %ds (probe=%s): the service answered but not as %s expects",
+					port, timeoutSec, probe, probe)
+			}
 			return false, fmt.Errorf("compose: ReadyCheck: port %d not ready within %ds (probe=%s): %w", port, timeoutSec, probe, err)
 		}
 		select {
