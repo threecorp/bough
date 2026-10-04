@@ -13,6 +13,15 @@
   prunes them from `settings.json`, and `bough claude doctor` still names
   both.
 
+### Fixed
+
+- `kind: compose` no longer cuts `docker compose stop` off at 10 s when no
+  grace is given (`--graceful-timeout 0`, or no
+  `teardown.graceful_timeout_sec`). It waits for the service's own
+  `stop_grace_period`; a longer one used to fail the remove and leave the
+  container running.
+- The release archives carry the `LICENSE` file.
+
 ## v0.28.3
 
 ### Fixed
@@ -81,8 +90,10 @@
   hook uses the configured value. `kind: compose` now passes it to
   `docker compose stop -t`.
 - `bough config validate` with no path printed every load warning twice, and
-  with `monorepo_root` set it named a file under the new root that it had
-  not read.
+  with `monorepo_root` set it also loaded the `.bough.yaml` under the new
+  root, which no other command reads, and failed when that file was
+  missing. It now validates only the file it resolved from the current
+  directory.
 - `bough create` / `bough remove` reject a positional argument instead of
   ignoring it. A call that passed both a flag and a stray argument
   (`bough create --name F-x extra`) used to succeed and now fails.
@@ -99,8 +110,9 @@
 ### Deprecated
 
 - The `mcp:` section of `.bough.yaml` is retired: it parsed into a struct no
-  code read. It now loads with a warning, `bough claude doctor` names it,
-  and it stops parsing in v0.29.0 with the other retired sections.
+  code read. It now loads with a warning and its contents are no longer
+  checked, `bough claude doctor` names it, and it stops parsing in v0.29.0
+  with the other retired sections.
 
 ## v0.28.1
 
