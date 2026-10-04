@@ -232,7 +232,9 @@ teardown → `git worktree remove` per sub-repo → registry cleanup. If a port
 still answers, remove stops before the datadir step, so the datadir,
 worktree and registry entry are kept (Down and `pre_remove` have already
 run). A failed `git worktree remove` or branch delete is printed and remove
-carries on.
+carries on. The check covers every port the registry holds except those of
+a `ports:` entry, so a kind moved from `engines:` to `ports:` under the
+same name is no longer checked — stop that engine before removing.
 
 ## Workspace layout & resumable worktree sessions
 

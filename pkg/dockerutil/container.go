@@ -138,7 +138,11 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	// "nothing there" state the id == "" branch above already treats
 	// as success, so a NotFound here must not fail Up — only a genuine
 	// remove error (permissions, daemon down, in-use) should.
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil && !errdefs.IsNotFound(err) {
+	// An image bough chose may declare a VOLUME its bind mount does not
+	// cover (postgres 18+ moved it to the parent of PGDATA), and that
+	// anonymous volume outlives the container unless removed with it. A
+	// compose service's image is the operator's, so its volumes are left.
+	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: wantImage != ""}); err != nil && !errdefs.IsNotFound(err) {
 		return false, err
 	}
 	return false, nil
@@ -162,7 +166,9 @@ func imageSwapped(want, have string) bool {
 // pre-check it reliably.
 func StartOrCleanup(ctx context.Context, cli *client.Client, containerID, engineName string, port int) error {
 	if err := cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: false})
+		// Only the bundled engines call this, so any anonymous volume is
+		// one their image declared — see UpOrReuse.
+		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 		if isPortConflictError(err) {
 			return fmt.Errorf("%s docker: host port %d is already published by another container — `docker ps --filter publish=%d` to find it; raw: %w", engineName, port, port, err)
 		}

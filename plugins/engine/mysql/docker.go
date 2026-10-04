@@ -315,5 +315,5 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 		// fall through to Remove unconditionally.
 		_ = err
 	}
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true})
 }

@@ -25,6 +25,15 @@
   and only for the bundled kinds, so the v0.27.0 message for a stale
   `backend: nix` changes from the `oneof` tag text to
   `config: engines[N].backend="nix" is not a backend the bundled plugins provide (docker); delete the line`.
+- **Postgres 18 no longer leaks an anonymous volume per worktree.** Its
+  official image moved `VOLUME` from `/var/lib/postgresql/data` to the
+  parent `/var/lib/postgresql`, which bough's bind mount on the child does
+  not cover, so Docker created an anonymous volume there and every
+  `remove` left it dangling. The engines' `Down`, and the cleanup of a
+  stale or failed container, now remove a container's anonymous volumes
+  with it. The datadir is a bind mount and is untouched; the other
+  bundled images declare no `VOLUME` outside their bind, so nothing
+  changes for them. A wrapped compose service keeps its volumes.
 - **`teardown.remove_datadir: false` documents what it does.** It skips
   each plugin's `Cleanup`; it cannot keep a datadir, because the bundled
   engines put theirs under the worktree that `remove` deletes either way.

@@ -590,5 +590,5 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 		timeout = req.GracefulTimeoutSec
 	}
 	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
-	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true})
 }
