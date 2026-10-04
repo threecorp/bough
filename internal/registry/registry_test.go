@@ -68,8 +68,8 @@ func TestStore_RoundTrip(t *testing.T) {
 
 // TestStore_LoadUpgradesLegacyKeys is the v0.4 compat guard. A
 // v0.3-era registry file (single-port DB keys like `{mysql: 33144}`)
-// must load as `{mysql.main: 33144}` in memory, so the same auba
-// deployment migrating from v0.3 sees zero port drift on its existing
+// must load as `{mysql.main: 33144}` in memory, so the same production monorepo
+// migrating from v0.3 sees zero port drift on its existing
 // engines.
 func TestStore_LoadUpgradesLegacyKeys(t *testing.T) {
 	tmp := t.TempDir()

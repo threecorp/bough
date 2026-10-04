@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,5 +245,87 @@ func TestGuardedPorts_EngineWinsOverSameNamedAppPort(t *testing.T) {
 	}
 	if got := guardedPorts(map[string]int{"redis.main": 53001}, cfg); len(got) != 1 || got[0] != 53001 {
 		t.Fatalf("guardedPorts = %v, want [53001]", got)
+	}
+}
+
+// TestRemove_GracefulTimeoutResolution: teardown.graceful_timeout_sec
+// reaches the plugin's Down on the command and hook paths when the flag is
+// not given; an explicit --graceful-timeout, 0 included, wins.
+func TestRemove_GracefulTimeoutResolution(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not on PATH")
+	}
+	binDir := t.TempDir()
+	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "bough-plugin-zzmock"),
+		"github.com/ikeikeikeike/bough/conformance/mock_plugin")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build mock plugin: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name string
+		args []string // nil = the WorktreeRemove hook path
+		want string
+	}{
+		{"flag not given uses the config", []string{"remove", "--name", "F-g"}, "7"},
+		{"explicit 0 means the plugin default", []string{"remove", "--name", "F-g", "--graceful-timeout", "0"}, "0"},
+		{"explicit value wins", []string{"remove", "--name", "F-g", "--graceful-timeout", "3"}, "3"},
+		{"hook path uses the config", nil, "7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			record := filepath.Join(root, "down.txt")
+			t.Setenv("BOUGH_MOCK_DOWN_RECORD", record)
+			if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(`schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - {kind: zzmock, version: "1", port_ranges: {main: [59800, 59899]}}
+registry: {path: .bough-ports.json}
+teardown: {graceful_timeout_sec: 7}
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := ln.Addr().(*net.TCPAddr).Port
+			_ = ln.Close()
+			store := registry.NewStore(filepath.Join(root, ".bough-ports.json"), "")
+			reg, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry.Set(reg, "F-g", "zzmock.main", port)
+			if err := store.Save(reg, "seed"); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(root)
+
+			rootCmd := NewRootCmd("0.0.0-test")
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			if tc.args == nil {
+				rootCmd.SetContext(context.Background()) // Execute sets it on the command path
+				err = dispatchWorktreeRemove(rootCmd, []byte(`{"name":"F-g"}`))
+			} else {
+				rootCmd.SetArgs(tc.args)
+				err = rootCmd.Execute()
+			}
+			if err != nil {
+				t.Fatalf("remove: %v", err)
+			}
+			got, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatalf("plugin Down was not called: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("Down GracefulTimeoutSec = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

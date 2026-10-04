@@ -13,10 +13,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// defaultRemoveGracefulSecs is the seconds runRemove waits for plugin
-// Down() before SIGKILL. It backs both newRemoveCmd's --graceful-timeout
-// flag default and the flagless WorktreeRemove hook dispatch, so the two
-// removal paths cannot drift.
+// defaultRemoveGracefulSecs is the --graceful-timeout flag default. Both
+// removal paths use teardown.graceful_timeout_sec instead when the flag is
+// not given (the WorktreeRemove hook never gives it).
 //
 // Zero, not a positive number: every engine plugin's Down() only
 // falls back to its own tuned budget (e.g. 30s for mysql's InnoDB
@@ -123,7 +122,7 @@ func dispatchWorktreeRemove(cmd *cobra.Command, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, path, defaultRemoveGracefulSecs)
+	return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, path, cfg.Teardown.GracefulTimeoutSec)
 }
 
 // resolveConfigPath answers "where does the bough YAML live?" in the
@@ -142,7 +141,7 @@ func resolveConfigPath(cmd *cobra.Command, monorepoRoot string) string {
 	}
 	legacy := filepath.Join(monorepoRoot, ".worktree-isolation.yaml")
 	if _, err := os.Stat(legacy); err == nil {
-		fmt.Fprintln(os.Stderr, "bough: WARNING .worktree-isolation.yaml is deprecated, rename to .bough.yaml (removed in v0.5.0)")
+		fmt.Fprintln(os.Stderr, "bough: WARNING .worktree-isolation.yaml is deprecated (still read); rename to .bough.yaml")
 		return legacy
 	}
 	// Both absent — Load will surface the missing-file error against

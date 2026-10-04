@@ -127,7 +127,7 @@ func TestRunner_AddOrAttach_fetchUsesOriginBase(t *testing.T) {
 		t.Errorf("HeadSHA after fetched create: sha=%q err=%v", sha, err)
 	}
 	// --no-track guard: branching off remote-tracking origin/main must NOT
-	// set the new branch's upstream, or auba's bare `git push`
+	// set the new branch's upstream, or a production monorepo's bare `git push`
 	// (push.default=simple) would refuse (upstream=origin/main != origin/F-Fetch).
 	up, _ := exec.Command("git", "-C", dst, "config", "--get", "branch.F-Fetch.merge").CombinedOutput()
 	if strings.TrimSpace(string(up)) != "" {

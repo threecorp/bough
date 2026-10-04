@@ -34,6 +34,7 @@ func newRemoveCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "remove",
+		Args:  cobra.NoArgs,
 		Short: "Tear down a per-worktree environment created by `bough create`",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stdinJSON {
@@ -54,13 +55,16 @@ func newRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !cmd.Flags().Changed("graceful-timeout") {
+				gracefulSecs = cfg.Teardown.GracefulTimeoutSec
+			}
 			return runRemove(cmd.Context(), cmd.ErrOrStderr(), cfg, abs, wtName, resolvedPath, gracefulSecs)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (when --path is not provided)")
 	cmd.Flags().StringVar(&path, "path", "", "absolute worktree path (typical Claude Code stdin payload)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {worktree_path} from stdin")
-	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback (0 = let each engine plugin use its own tuned default)")
+	cmd.Flags().IntVar(&gracefulSecs, "graceful-timeout", defaultRemoveGracefulSecs, "seconds to wait for plugin Down() before SIGKILL fallback (default: teardown.graceful_timeout_sec; 0 = let each engine plugin use its own tuned default)")
 	return cmd
 }
 

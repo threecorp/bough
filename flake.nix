@@ -6,6 +6,7 @@
 
   outputs =
     {
+      self,
       flake-utils,
       nixpkgs,
       ...
@@ -17,13 +18,16 @@
         go = pkgs.go_1_25;
         formatter = pkgs.nixfmt-tree;
 
-        # buildGoModule produces all 5 binaries (host + 4 plugin) into one
+        # A flake has no release tag, so the version names the commit.
+        version = "0.0.0-" + (self.shortRev or self.dirtyShortRev or "dev");
+
+        # buildGoModule produces all 6 binaries (host + 5 plugins) into one
         # store path. `nix run github:threecorp/bough` invokes the host
         # binary; nix profile install drops every binary into the user's
         # profile so `bough-plugin-*` are discoverable on PATH.
         bough = pkgs.buildGoModule {
           pname = "bough";
-          version = "0.1.1";
+          inherit version;
           src = ./.;
           # Must be re-derived whenever go.mod's require list changes, or
           # `nix build` fails on a vendor dir that no longer matches. Get the
@@ -35,13 +39,14 @@
             "cmd/bough-plugin-postgres"
             "cmd/bough-plugin-redis"
             "cmd/bough-plugin-elasticsearch"
+            "cmd/bough-plugin-compose"
           ];
           # Mirror .goreleaser.yaml host flags so `nix run` reports the
           # same version string as the GitHub-Release tarball binaries.
           ldflags = [
             "-s"
             "-w"
-            "-X main.version=0.1.1"
+            "-X main.version=${version}"
           ];
           meta = {
             description = "Per-worktree isolation orchestrator for monorepos";

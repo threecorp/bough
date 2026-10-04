@@ -7,7 +7,7 @@
 // v0.4.0 onward (e.g. `"mysql.main": 42345`, `"rabbitmq.amqp": 60123`,
 // `"rabbitmq.management": 60556`). A v0.3 entry written as
 // `{F-Auth: {mysql: 42345}}` (no dot, single-port DB) is auto-upgraded
-// to `{F-Auth: {"mysql.main": 42345}}` on Load, so an auba deployment
+// to `{F-Auth: {"mysql.main": 42345}}` on Load, so a production monorepo
 // migrating from v0.3 sees zero port drift on its existing engines.
 //
 // All writes go through atomicWriteJSON (tempfile + os.Rename) so a

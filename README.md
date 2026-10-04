@@ -66,9 +66,8 @@ go install github.com/ikeikeikeike/bough/cmd/bough-plugin-redis@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-elasticsearch@latest
 go install github.com/ikeikeikeike/bough/cmd/bough-plugin-compose@latest
 
-# 3. Nix flake: builds bough + the four native plugins only (no
-#    bough-plugin-compose), and `bough --version` reports 0.1.1
-#    whatever the commit.
+# 3. Nix flake: builds all 6 binaries; `bough --version` names the
+#    commit (0.0.0-<rev>) rather than a release tag.
 nix profile install github:threecorp/bough
 ```
 
@@ -162,6 +161,7 @@ registry:
 teardown:
   remove_branch: false     # true also deletes the feature branch on remove
   remove_datadir: true
+  # graceful_timeout_sec: 30   # how long remove waits for each engine's Down (unset = the plugin's own default)
 ```
 
 Each engine takes one host port, from its `main` range. A v0.3

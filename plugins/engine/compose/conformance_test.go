@@ -6,7 +6,7 @@
 // compose.yml, a single redis:7-alpine service) — so Config.Image is
 // left unset and the compose.* extras carry everything instead.
 //
-// compose.file is an ABSOLUTE path, not the "auba-api/compose.yml"
+// compose.file is an ABSOLUTE path, not the "demo-api/compose.yml"
 // relative-to-raw-worktree-root style production configs use: the
 // conformance harness gives each phase an independent t.TempDir() as
 // WorktreeRoot with no sibling-repo structure around it (see

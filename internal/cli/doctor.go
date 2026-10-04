@@ -103,7 +103,7 @@ func retiredConfigKeys(path string) ([]string, error) {
 		return nil, err
 	}
 	var found []string
-	for _, key := range []string{"instinct", "memory_backends", "export", "quality_gates"} {
+	for _, key := range []string{"instinct", "memory_backends", "export", "quality_gates", "mcp"} {
 		if _, ok := top[key]; ok {
 			found = append(found, key)
 		}

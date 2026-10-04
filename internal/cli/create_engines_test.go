@@ -119,14 +119,14 @@ func TestBuildEngineExtras_FlattensCompose(t *testing.T) {
 		Kind:    "compose",
 		Version: "7-alpine",
 		Compose: &config.ComposeSpec{
-			File:       "auba-api/compose.yml",
+			File:       "demo-api/compose.yml",
 			Service:    "redis",
 			TargetPort: 6379,
 		},
 	}
 	extras := buildEngineExtras(eng)
 	want := map[string]string{
-		"compose.file":        "auba-api/compose.yml",
+		"compose.file":        "demo-api/compose.yml",
 		"compose.service":     "redis",
 		"compose.target_port": "6379",
 		"version":             "7-alpine",

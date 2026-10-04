@@ -111,7 +111,7 @@ func mysqlHandshakeOnce(ctx context.Context, hostPort string) error {
 
 // TestDockerReadyCheck_NoRaceWithTemporaryServer is the regression
 // guard for the mysql:8.4 two-phase-init race (bough handover
-// 2026-07-04, threecorp extremo config): the official image runs a
+// 2026-07-04, a real project's config): the official image runs a
 // socket-only "temporary server" (--skip-networking) to bootstrap
 // the datadir/grant tables before restarting as the real,
 // network-enabled server. Before the fix, dockerReadyCheck's
