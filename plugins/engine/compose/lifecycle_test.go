@@ -367,35 +367,39 @@ func TestProvider_Down_BoundsHungCommands(t *testing.T) {
 	}
 }
 
-// TestProvider_Down_StopExitsZeroWithChildHoldingPipe: a `compose stop`
-// that exits 0 while a child still holds its output reaches `rm` instead
-// of failing on ErrWaitDelay.
-func TestProvider_Down_StopExitsZeroWithChildHoldingPipe(t *testing.T) {
-	bin := t.TempDir()
-	record := filepath.Join(t.TempDir(), "calls.txt")
-	child := filepath.Join(t.TempDir(), "child.pid")
-	t.Setenv("FAKE_DOCKER_RECORD", record)
-	t.Setenv("FAKE_DOCKER_CHILD", child)
-	t.Cleanup(func() { killPIDFile(child) })
-	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
-		"case \"$*\" in *\" stop \"*) sleep 30 & echo $! > \"$FAKE_DOCKER_CHILD\";; esac\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+// TestProvider_Down_ExitsZeroWithChildHoldingPipe: a `compose stop` or `rm`
+// that exits 0 while a child still holds its output counts as success
+// instead of failing on ErrWaitDelay.
+func TestProvider_Down_ExitsZeroWithChildHoldingPipe(t *testing.T) {
+	for _, cmd := range []string{"stop", "rm"} {
+		t.Run(cmd, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			child := filepath.Join(t.TempDir(), "child.pid")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			t.Setenv("FAKE_DOCKER_CHILD", child)
+			t.Cleanup(func() { killPIDFile(child) })
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
+				"case \"$*\" in *\" " + cmd + " \"*) sleep 30 & echo $! > \"$FAKE_DOCKER_CHILD\";; esac\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	worktreeRoot := t.TempDir()
-	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56126}
-	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
-		t.Fatal(err)
-	}
-	p := New()
-	p.pipeWait = time.Second
-	if err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
-		t.Fatalf("Down: %v", err)
-	}
-	if b, _ := os.ReadFile(record); !strings.Contains(string(b), " rm ") {
-		t.Fatalf("rm never ran; calls:\n%s", b)
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56126}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			p := New()
+			p.pipeWait = time.Second
+			if err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
+				t.Fatalf("Down: %v", err)
+			}
+			if b, _ := os.ReadFile(record); !strings.Contains(string(b), " rm ") {
+				t.Fatalf("rm never ran; calls:\n%s", b)
+			}
+		})
 	}
 }
 
