@@ -189,8 +189,9 @@ Changing the version of a running engine wants a fresh worktree: an
 Elasticsearch 7 data directory does not open under 9, and the same holds
 across PostgreSQL majors. `bough remove --name <name>` first: while the
 worktree's container exists, running or stopped, `bough create` refuses
-a `version:` (or `docker.image`) that resolves to a different image and
-names both, rather than start the new one on the old data directory.
+a `version:` (or `docker.image`) that resolves to another image reference
+and names both, rather than start it on the old data directory. A tag
+rebuilt in place keeps its name, so it is not compared.
 
 ### Wire it into `claude --worktree`
 

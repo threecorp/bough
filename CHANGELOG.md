@@ -13,8 +13,10 @@
   the old version wrote. A container created from a different image,
   running or stopped, now fails with both refs named and says to
   `bough remove` the worktree first. The same image spelled another way
-  (with the `docker.io/library/` prefix, or by digest) still matches,
-  by image ID. `compose` is unaffected: the wrapped file owns its image.
+  (with the `docker.io/library/` prefix, or by digest) still matches by
+  image ID once that spelling is in the local image store; a tag rebuilt
+  in place keeps its name and is not compared. `compose` is unaffected:
+  the wrapped file owns its image.
 - **`bough remove` says when it cannot check the engine ports.** The
   v0.27.0 guard probes the ports the registry holds, and a worktree
   registered by `bough backfill` has none, so the check passed on an
