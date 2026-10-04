@@ -62,6 +62,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
@@ -73,6 +74,10 @@ type Provider struct {
 	PortLow  int
 	PortHigh int
 
+	// cmdWait caps one `docker compose stop` (when no grace bounds it) or
+	// `rm`: pre_stop hooks and a stuck daemon outlast any stop_grace_period.
+	cmdWait time.Duration
+
 	// mu guards cache, populated by Up() and read by EnvVars()/
 	// ReadyCheck() — see state.go's cacheState/cachedState doc.
 	mu    sync.Mutex
@@ -80,7 +85,7 @@ type Provider struct {
 }
 
 // New returns a Provider with production defaults.
-func New() *Provider { return &Provider{} }
+func New() *Provider { return &Provider{cmdWait: 5 * time.Minute} }
 
 const (
 	// No engine-specific default makes sense for an arbitrary wrapped

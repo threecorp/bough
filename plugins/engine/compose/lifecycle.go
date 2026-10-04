@@ -228,15 +228,17 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: %w", err)
 	}
 
-	// compose stop owns the grace and kills after it. Without -t that grace
-	// is the service's own stop_grace_period, so no client deadline is added.
+	// compose stop owns the grace and kills after it; the deadline only
+	// bounds the whole command. Without -t the grace is the service's own
+	// stop_grace_period, which can exceed 10 s, so cmdWait applies instead.
 	stopArgs := []string{"compose", "-f", composeFile, "-f", overridePath, "-p", st.Project, "stop"}
-	gctx, cancel := ctx, context.CancelFunc(func() {})
+	wait := p.cmdWait
 	if req.GracefulTimeoutSec > 0 {
 		stopArgs = append(stopArgs, "-t", strconv.Itoa(req.GracefulTimeoutSec))
-		gctx, cancel = context.WithTimeout(ctx, time.Duration(req.GracefulTimeoutSec+30)*time.Second)
+		wait = time.Duration(req.GracefulTimeoutSec+30) * time.Second
 	}
 	stopArgs = append(stopArgs, st.Service)
+	gctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	stopCmd := exec.CommandContext(gctx, "docker", stopArgs...)
 	if out, err := stopCmd.CombinedOutput(); err != nil {
@@ -251,7 +253,9 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	// cleanly reusing the name. `rm` (no -v) removes only the
 	// container instance, never the compose-managed volumes Cleanup
 	// intentionally leaves alone.
-	rmCmd := exec.CommandContext(ctx, "docker", "compose",
+	rctx, rcancel := context.WithTimeout(ctx, p.cmdWait)
+	defer rcancel()
+	rmCmd := exec.CommandContext(rctx, "docker", "compose",
 		"-f", composeFile, "-f", overridePath, "-p", st.Project, "rm", "-f", st.Service)
 	if out, err := rmCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compose: Down: docker compose rm failed: %w\n%s", err, out)

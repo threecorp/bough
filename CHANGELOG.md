@@ -18,8 +18,10 @@
 - `kind: compose` no longer cuts `docker compose stop` off at 10 s when no
   grace is given (`--graceful-timeout 0`, or no
   `teardown.graceful_timeout_sec`). It waits for the service's own
-  `stop_grace_period`; a longer one used to fail the remove and leave the
-  container running.
+  `stop_grace_period` (up to 5 minutes); a longer one used to fail the
+  remove and leave the container running. `docker compose stop` and `rm`
+  also give up after 5 minutes instead of waiting forever on a stuck
+  daemon or `pre_stop` hook.
 - The release archives carry the `LICENSE` file.
 
 ## v0.28.3

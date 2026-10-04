@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
@@ -315,6 +316,38 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 			}
 			if !strings.Contains(stop, tc.want) || (tc.avoid != "" && strings.Contains(stop, tc.avoid)) {
 				t.Errorf("stop call = %q, want %q", stop, tc.want)
+			}
+		})
+	}
+}
+
+// TestProvider_Down_BoundsHungCommands: a `compose stop` or `rm` that never
+// returns (a pre_stop hook, a stuck daemon) gives up after cmdWait instead
+// of holding the remove forever.
+func TestProvider_Down_BoundsHungCommands(t *testing.T) {
+	for _, hang := range []string{"stop", "rm"} {
+		t.Run(hang, func(t *testing.T) {
+			bin := t.TempDir()
+			fake := "#!/bin/sh\ncase \"$*\" in *\" " + hang + " \"*) exec sleep 60;; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56125}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			p := New()
+			p.cmdWait = 5 * time.Second // spawning the fake docker can take seconds under load
+			start := time.Now()
+			err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			if err == nil || !strings.Contains(err.Error(), "docker compose "+hang+" failed") {
+				t.Fatalf("Down = %v, want the hung %s to be cut off", err, hang)
+			}
+			if d := time.Since(start); d > 30*time.Second {
+				t.Errorf("Down took %v, want it bounded by cmdWait", d)
 			}
 		})
 	}
