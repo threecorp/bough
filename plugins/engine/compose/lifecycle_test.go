@@ -7,8 +7,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
@@ -269,13 +272,22 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 	}{
 		{"positive grace", 1, "stop -t 1 redis", ""},
 		{"zero keeps the compose default", 0, "stop redis", " -t "},
+		// A service's stop_grace_period can exceed 10 s; zero must not cut
+		// compose stop short of it.
+		{"zero waits out a long compose grace", 0, "stop redis", " -t "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
 			record := filepath.Join(t.TempDir(), "calls.txt")
 			t.Setenv("FAKE_DOCKER_RECORD", record)
 			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 2;; esac\n"
-			if tc.grace == 0 {
+			switch {
+			case strings.Contains(tc.name, "long"):
+				if testing.Short() {
+					t.Skip("sleeps 11 s")
+				}
+				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 11;; esac\n"
+			case tc.grace == 0:
 				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n"
 			}
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
@@ -308,5 +320,96 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 				t.Errorf("stop call = %q, want %q", stop, tc.want)
 			}
 		})
+	}
+}
+
+// TestProvider_Down_BoundsHungCommands: a `compose stop` or `rm` that never
+// returns (a pre_stop hook, a stuck daemon) gives up after cmdWait instead
+// of holding the remove forever, even when a leftover child keeps the
+// output pipe open.
+func TestProvider_Down_BoundsHungCommands(t *testing.T) {
+	for _, hang := range []string{"stop", "rm"} {
+		t.Run(hang, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			child := filepath.Join(t.TempDir(), "child.pid")
+			t.Setenv("FAKE_DOCKER_CHILD", child)
+			t.Cleanup(func() { killPIDFile(child) })
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
+				"case \"$*\" in *\" " + hang + " \"*) sleep 60 & echo $! > \"$FAKE_DOCKER_CHILD\"; exec sleep 60;; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56125}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			p := New()
+			p.cmdWait = 5 * time.Second // spawning the fake docker can take seconds under load
+			p.pipeWait = time.Second
+			start := time.Now()
+			err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			if d := time.Since(start); d > 30*time.Second {
+				t.Errorf("Down took %v, want it bounded by cmdWait + pipeWait", d)
+			}
+			b, _ := os.ReadFile(record)
+			if !strings.Contains(string(b), " "+hang+" ") {
+				t.Fatalf("the fake never saw %s; calls:\n%s", hang, b)
+			}
+			if err == nil || !strings.Contains(err.Error(), "docker compose "+hang+" failed") {
+				t.Fatalf("Down = %v, want the hung %s to be cut off", err, hang)
+			}
+		})
+	}
+}
+
+// TestProvider_Down_ExitsZeroWithChildHoldingPipe: a `compose stop` or `rm`
+// that exits 0 while a child still holds its output counts as success
+// instead of failing on ErrWaitDelay.
+func TestProvider_Down_ExitsZeroWithChildHoldingPipe(t *testing.T) {
+	for _, cmd := range []string{"stop", "rm"} {
+		t.Run(cmd, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			child := filepath.Join(t.TempDir(), "child.pid")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			t.Setenv("FAKE_DOCKER_CHILD", child)
+			t.Cleanup(func() { killPIDFile(child) })
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
+				"case \"$*\" in *\" " + cmd + " \"*) sleep 30 & echo $! > \"$FAKE_DOCKER_CHILD\";; esac\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56126}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			p := New()
+			p.pipeWait = time.Second
+			if err := p.Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
+				t.Fatalf("Down: %v", err)
+			}
+			if b, _ := os.ReadFile(record); !strings.Contains(string(b), " rm ") {
+				t.Fatalf("rm never ran; calls:\n%s", b)
+			}
+		})
+	}
+}
+
+// killPIDFile stops the background child a fake docker recorded.
+func killPIDFile(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
 }

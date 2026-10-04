@@ -30,9 +30,9 @@ time.
 | Scripts calling `bough instinct …` / `bough evolve` / `bough ops` | `unknown command` | Pin v0.27.0, or drop the call |
 | The `bough-hooks` / `bough-all` Claude Code plugin | Updates to two events when you update the plugin | `/plugin update`, or nothing |
 
-The compatibility shims above last one minor series. **v0.29.0 makes a
-retired `.bough.yaml` key a hard validation error and drops the hook
-shim**, so a retired event would then exit non-zero.
+The compatibility shims above lasted one minor series. **Since v0.29.0 a
+retired `.bough.yaml` section fails the load and a retired hook event
+exits non-zero**, so finish these steps before upgrading past v0.28.x.
 
 ## Hook wiring
 
@@ -74,11 +74,19 @@ away from its cause.
 ## `.bough.yaml`
 
 Four top-level sections are retired: `instinct:`, `quality_gates:`,
-`memory_backends:` and `export:`. They are read and discarded, and each
-one present prints one line per load:
+`memory_backends:` and `export:`; v0.28.1 retired `mcp:` too, which no
+version ever read. On v0.28.x they are read and discarded, and each one
+present prints one line per load:
 
 ```text
 bough: WARNING YAML section 'instinct:' is retired and does nothing: the continuous-learning loop it configured was removed in v0.28.0; delete the section (the key stops parsing in v0.29.0)
+```
+
+Since v0.29.0 each of the five fails the load instead, so delete them
+before upgrading:
+
+```text
+bough: parse .bough.yaml: YAML section 'instinct:' is no longer accepted (the continuous-learning loop it configured was removed in v0.28.0); delete it
 ```
 
 Delete the sections. Everything else in the file is unchanged, and an

@@ -47,6 +47,7 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 	fmt.Fprintln(w)
 
 	var notes []string
+	broken := false // a retired section or unreadable config stops every load
 	cwd, err := os.Getwd()
 	if err == nil {
 		if path := resolveConfigPath(c, resolveMonorepoRoot(cwd)); path != "" {
@@ -59,11 +60,13 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 				}
 			}
 			if err != nil {
+				broken = true
 				notes = append(notes, fmt.Sprintf("%s: could not check for retired sections: %v", path, err))
 			}
 			for _, k := range keys {
+				broken = true
 				notes = append(notes, fmt.Sprintf(
-					"%s: section '%s:' is retired and does nothing (delete it; the key stops parsing in v0.29.0)",
+					"%s: section '%s:' is no longer accepted, so bough cannot load this file until you delete it",
 					path, k))
 			}
 		}
@@ -83,7 +86,11 @@ func renderRetiredConfig(c *cobra.Command, w io.Writer) {
 			st.Mark(termio.StatusOK))
 		return
 	}
-	fmt.Fprintf(w, "%s Retired state\n", st.Section(termio.StatusNeutral))
+	section := termio.StatusNeutral
+	if broken {
+		section = termio.StatusWarn
+	}
+	fmt.Fprintf(w, "%s Retired state\n", st.Section(section))
 	for _, n := range notes {
 		fmt.Fprintf(w, "    %s %s\n", st.Mark(termio.StatusNeutral), n)
 	}
