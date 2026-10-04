@@ -54,5 +54,8 @@ func TestComposeConformance(t *testing.T) {
 		// forcing a bogus docker.image value here would not be
 		// exercised either.
 		SkipImagePullFailure: true,
+		// Cleanup is a documented no-op (see compose.go): the wrapped
+		// project's storage is the operator's, so the datadir stays.
+		SkipDatadirRemovalCheck: true,
 	})
 }

@@ -84,6 +84,19 @@ func TestIsPermissionDeniedFromContainerUID_OnlyFilesystemErrors(t *testing.T) {
 			true,
 		},
 		{
+			// os.RemoveAll's other ops, as they arrive over the plugin
+			// RPC: the client rebuilds the error with errors.New, so only
+			// the text is left to match.
+			"openfdat over RPC (non-empty container-owned dir on Linux)",
+			errors.New("mysql: cleanup /d: openfdat /d/mysql: permission denied"),
+			true,
+		},
+		{
+			"readdirnames over RPC",
+			errors.New("redis: cleanup /d: readdirnames /d/appendonlydir: permission denied"),
+			true,
+		},
+		{
 			"docker socket permission error must NOT skip",
 			errors.New("Cannot connect to the Docker daemon at unix:///var/run/docker.sock: permission denied"),
 			false,

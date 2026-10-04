@@ -102,11 +102,12 @@ func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool
 // partially failed), the stale container is removed and skip=false is
 // returned so the caller proceeds with a fresh create + start.
 //
-// A running container on another image is an error rather than a reuse:
-// engines[].version picks the image, so reusing whatever answers to the
-// name would leave one version serving while the rendered .env.local
-// and `bough status` name the other. wantImage == "" skips that
-// comparison, for a caller whose image is not bough's to choose.
+// A container created from another image — running or stopped — is an
+// error rather than a reuse or a recreate: engines[].version picks the
+// image, and either path would leave the new version serving, or about to
+// serve, a data directory the old one wrote, while .bough.yaml names the
+// new one. wantImage == "" skips the comparison, for a caller whose image
+// is not bough's to choose.
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
@@ -118,17 +119,17 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	if id == "" {
 		return false, nil
 	}
-	if info, ierr := cli.ContainerInspect(ctx, id); ierr == nil && info.State != nil && info.State.Running {
-		have := ""
-		if info.Config != nil {
-			have = info.Config.Image
+	info, ierr := cli.ContainerInspect(ctx, id)
+	if ierr == nil {
+		have := configImage(info.Config)
+		if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
+			return false, fmt.Errorf("container %s was created from %s, not the %s this config asks for; "+
+				"bough does not start another image on the data directory the first one wrote — "+
+				"`bough remove` this worktree (or docker rm -f %s) and create it again", name, have, wantImage, name)
 		}
-		if imageSwapped(wantImage, have) {
-			return false, fmt.Errorf("container %s already runs %s, not the %s this config asks for; "+
-				"bough does not swap an image under an existing data directory — `bough remove` this worktree "+
-				"(or docker rm -f %s) and create it again", name, have, wantImage, name)
+		if info.State != nil && info.State.Running {
+			return true, nil
 		}
-		return true, nil
 	}
 	// The container LookupByName just found stopped can vanish before
 	// this call reaches the daemon — a concurrent `bough create` retry
@@ -141,11 +142,50 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	// An image bough chose may declare a VOLUME its bind mount does not
 	// cover (postgres 18+ moved it to the parent of PGDATA), and that
 	// anonymous volume outlives the container unless removed with it. A
-	// compose service's image is the operator's, so its volumes are left.
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: wantImage != ""}); err != nil && !errdefs.IsNotFound(err) {
+	// compose service's image is the operator's, and a same-named
+	// container bough did not label is someone else's: both keep theirs.
+	removeVolumes := wantImage != "" && ierr == nil && ownedByBough(info.Config)
+	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil && !errdefs.IsNotFound(err) {
 		return false, err
 	}
 	return false, nil
+}
+
+// RemoveOwned force-removes a container, taking its anonymous volumes
+// with it only when bough created it. The engines' Down use it so a
+// postgres 18+ worktree does not leave one dangling volume behind.
+func RemoveOwned(ctx context.Context, cli *client.Client, id string) error {
+	owned := false
+	if info, err := cli.ContainerInspect(ctx, id); err == nil {
+		owned = ownedByBough(info.Config)
+	}
+	return cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: owned})
+}
+
+// ownedByBough reports whether a container carries the label every bough
+// plugin stamps on what it creates (Labels), so deleting its anonymous
+// volumes cannot reach a same-named container someone else made.
+func ownedByBough(cfg *container.Config) bool {
+	return cfg != nil && cfg.Labels[LabelManaged] == "true"
+}
+
+func configImage(cfg *container.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Image
+}
+
+// sameImageID reports whether ref resolves in the local image store to the
+// image a container was created from: the same image spelled another way
+// (with the docker.io/library/ prefix, or by digest). An image not pulled
+// yet cannot be compared and counts as different.
+func sameImageID(ctx context.Context, cli *client.Client, ref, containerImageID string) bool {
+	if containerImageID == "" {
+		return false
+	}
+	img, err := cli.ImageInspect(ctx, ref)
+	return err == nil && img.ID == containerImageID
 }
 
 // imageSwapped reports whether a running container's image ref differs

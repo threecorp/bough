@@ -85,7 +85,7 @@ func runLifecycle(t *testing.T, cfg Config) {
 		}
 	}
 
-	assertCleanup(t, prov, datadir, portInts)
+	assertCleanup(t, prov, datadir, portInts, !cfg.SkipDatadirRemovalCheck)
 
 	// Faults run in their own freshly-spawned plugin processes so a
 	// panic in one cannot poison the next; each fault is gated by a
@@ -316,22 +316,22 @@ func portsStillAnswering(ports []int, wait time.Duration) []int {
 // assertCleanup runs the two terminal Cleanup sub-tests (initial +
 // idempotent). The container-uid permission case is a Skip, not a
 // Fail, because the underlying chown follow-up is plugin-side.
-func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int) {
+func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, checkRemoved bool) {
 	t.Helper()
 	t.Run("Cleanup", func(t *testing.T) {
-		runCleanupCall(t, prov, datadir, ports, "Cleanup",
+		runCleanupCall(t, prov, datadir, ports, checkRemoved, "Cleanup",
 			"Cleanup hit permission-denied — typical when the container "+
 				"writes as a non-host uid (e.g. mysql/redis run as their own user "+
 				"and host non-root cannot rm -rf the result). Not a contract "+
 				"violation per se; tracked as a plugin-side follow-up. Raw: %v")
 	})
 	t.Run("Cleanup_idempotent", func(t *testing.T) {
-		runCleanupCall(t, prov, datadir, ports, "Cleanup (2nd call)",
+		runCleanupCall(t, prov, datadir, ports, checkRemoved, "Cleanup (2nd call)",
 			"Cleanup (2nd call) hit permission-denied — see above. Raw: %v")
 	})
 }
 
-func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, label, skipFmt string) {
+func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, checkRemoved bool, label, skipFmt string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), quickPhaseTimeout)
 	defer cancel()
@@ -340,7 +340,11 @@ func runCleanupCall(t *testing.T, prov engineapi.EngineProvider, datadir string,
 		// CONTRACT: "Cleanup — host wipes the datadir after Down
 		// confirmed exit". Checking only the error let a Cleanup that
 		// wipes nothing pass, and newDatadir's own t.Cleanup then
-		// removed the leftovers so no trace survived the run.
+		// removed the leftovers so no trace survived the run. A plugin
+		// that owns no datadir (compose) opts out via the Config knob.
+		if !checkRemoved {
+			return
+		}
 		if _, statErr := os.Stat(datadir); statErr == nil {
 			t.Fatalf("%s returned nil but %s is still present — Cleanup must remove the datadir", label, datadir)
 		} else if !os.IsNotExist(statErr) {
@@ -520,6 +524,16 @@ func isPermissionDeniedFromContainerUID(err error) bool {
 	// drops the chain; fall back to matching the textual signature
 	// os.RemoveAll produces, which names the syscall and the path.
 	msg := err.Error()
-	return strings.Contains(msg, "permission denied") &&
-		(strings.Contains(msg, "unlinkat") || strings.Contains(msg, "remove ") || strings.Contains(msg, "RemoveAll"))
+	// The ops are every PathError.Op os.RemoveAll returns (removeall_at.go)
+	// plus os.Remove's "remove"; an error crossing the plugin RPC arrives as
+	// this text only, because the client rebuilds it with errors.New.
+	if !strings.Contains(msg, "permission denied") {
+		return false
+	}
+	for _, op := range []string{"unlinkat ", "openfdat ", "readdirnames ", "RemoveAll ", "remove "} {
+		if strings.Contains(msg, op) {
+			return true
+		}
+	}
+	return false
 }

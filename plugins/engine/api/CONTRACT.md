@@ -33,7 +33,10 @@ and the suite will treat the clause as not-applicable rather than failed.
    a silent substitution. The host expands `{{ .Version }}` in each
    `PluginSpec.Location` before `Up`, so a plugin sees a finished URL.
 3. **`Up` is up-or-reuse**: if a container with the canonical name is
-   already running, `Up` returns nil without recreating it. The suite
+   already running the image `Up` resolved, `Up` returns nil without
+   recreating it. One created from a different image, running or
+   stopped, is refused with both refs named: starting the new image on
+   the data directory the old one wrote is never safe. The suite
    asserts this in the `UpReuse` phase — it calls `Up` a second time
    while the service is up, requires a nil return, then re-checks
    readiness. It does not compare container identity, so a plugin that
@@ -50,8 +53,10 @@ and the suite will treat the clause as not-applicable rather than failed.
    exception: it defaults to a TCP dial unless the operator sets
    `extras.compose.ready_probe`.
 6. **`Down` is graceful within `GracefulTimeoutSec`**. After that
-   deadline the plugin must SIGKILL the workload. The suite checks that
-   `Down` returns nil, not how long it took. `Down` and `ReadyCheck`
+   deadline the plugin must SIGKILL the workload. `Down` returns only
+   once the engine is stopped (the host's `Cleanup` and `bough remove`
+   rely on it): the suite checks that it returns nil and that every port
+   stops accepting connections on 127.0.0.1 within 10 s. `Down` and `ReadyCheck`
    carry no backend token, so a plugin that registers more than one
    backend must pick the one whose resource is actually *running* (a
    stopped container with the canonical name does not count);
@@ -61,9 +66,12 @@ and the suite will treat the clause as not-applicable rather than failed.
    second backend resolves to the wrong one: registering a second
    backend also means carrying the backend token on
    `DownRequest` / `ReadyCheckRequest`.
-7. **`Cleanup` is idempotent.** A second `Cleanup` on the same
+7. **`Cleanup` removes the datadir and is idempotent.** After a nil
+   return the datadir must be gone, and a second `Cleanup` on the same
    `datadir` + `ports` must return nil. The suite skips, rather than
    fails, a permission error from a datadir the container's user owns.
+   A plugin that owns no datadir (compose) sets
+   `conformance.Config.SkipDatadirRemovalCheck`.
 
 ## EnvVars
 

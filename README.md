@@ -187,9 +187,10 @@ to a variant tag such as `mysql:8.4-oracle`.
 
 Changing the version of a running engine wants a fresh worktree: an
 Elasticsearch 7 data directory does not open under 9, and the same holds
-across PostgreSQL majors. `bough remove --name <name>` first — a
-still-running container is reused by name, so a new `version:` is not
-picked up until that container is gone.
+across PostgreSQL majors. `bough remove --name <name>` first: while the
+worktree's container exists, running or stopped, `bough create` refuses
+a `version:` (or `docker.image`) that resolves to a different image and
+names both, rather than start the new one on the old data directory.
 
 ### Wire it into `claude --worktree`
 

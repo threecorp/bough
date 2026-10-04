@@ -4,15 +4,17 @@
 
 ### Fixed
 
-- **A running container is no longer reused for a different
-  `engines[].version`.** `UpOrReuse` matched on the container name
-  alone, so editing `version:` and running `bough create` again left the
-  old engine serving while the rendered `.env.local` and `bough status`
-  named the new version — the one thing v0.27.0 shipped `version:` for.
-  An image that differs from the resolved ref now fails with both refs
-  named and says to `bough remove` the worktree first, because swapping
-  an image under an existing data directory is not something bough can
-  do safely. `compose` is unaffected: the wrapped file owns its image.
+- **`bough create` no longer keeps, or quietly replaces, a container
+  built from another `engines[].version`.** `UpOrReuse` matched on the
+  container name alone: editing `version:` and running `bough create`
+  again left a running old engine serving while `.bough.yaml` named the
+  new one — the one thing v0.27.0 shipped `version:` for — and a
+  stopped one was recreated on the new image over the data directory
+  the old version wrote. A container created from a different image,
+  running or stopped, now fails with both refs named and says to
+  `bough remove` the worktree first. The same image spelled another way
+  (with the `docker.io/library/` prefix, or by digest) still matches,
+  by image ID. `compose` is unaffected: the wrapped file owns its image.
 - **`bough remove` says when it cannot check the engine ports.** The
   v0.27.0 guard probes the ports the registry holds, and a worktree
   registered by `bough backfill` has none, so the check passed on an
@@ -31,9 +33,11 @@
   not cover, so Docker created an anonymous volume there and every
   `remove` left it dangling. The engines' `Down`, and the cleanup of a
   stale or failed container, now remove a container's anonymous volumes
-  with it. The datadir is a bind mount and is untouched; the other
-  bundled images declare no `VOLUME` outside their bind, so nothing
-  changes for them. A wrapped compose service keeps its volumes.
+  with it — only for a container carrying bough's `com.bough.managed`
+  label, so a same-named container bough did not create keeps its own.
+  The datadir is a bind mount and is untouched; the other bundled images
+  declare no `VOLUME` outside their bind, so nothing changes for them. A
+  wrapped compose service keeps its volumes.
 - **`teardown.remove_datadir: false` documents what it does.** It skips
   each plugin's `Cleanup`; it cannot keep a datadir, because the bundled
   engines put theirs under the worktree that `remove` deletes either way.
@@ -43,7 +47,12 @@
   evidence; and a Docker-socket permission error turned a contract
   violation into a skip the parent still reported as a pass. Each now
   checks the effect — the port stops answering, the datadir is gone —
-  and the permission test narrowed to a filesystem error on a path.
+  and the permission test narrowed to a filesystem error on a path
+  (every op `os.RemoveAll` reports, matched in the text because errors
+  cross the plugin RPC as strings). **For plugin authors:** a plugin
+  that owns no datadir sets the new `conformance.Config.SkipDatadirRemovalCheck`
+  (compose does); `Config.JUnitFile` was never implemented and is now
+  documented as ignored.
 
 ## v0.28.2
 
