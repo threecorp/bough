@@ -17,6 +17,7 @@ package dockerutil
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,12 +131,104 @@ func TestUpOrReuse_SkipsRunning(t *testing.T) {
 	name := fmt.Sprintf("bough-test-reuse-%d", time.Now().UnixNano())
 	_ = createSleepContainer(t, cli, name, true)
 
-	skip, err := UpOrReuse(context.Background(), cli, name)
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage)
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}
 	if !skip {
 		t.Errorf("UpOrReuse skip = false, want true (container is running)")
+	}
+}
+
+// TestUpOrReuse_RefusesARunningContainerOnAnotherImage is the daemon
+// half of TestImageSwapped: editing engines[].version used to leave the
+// old engine serving because reuse matched the name alone. The refusal
+// must name both refs and leave the container running, and an empty
+// wanted image (compose) must still reuse.
+func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+
+	name := fmt.Sprintf("bough-test-swap-%d", time.Now().UnixNano())
+	id := createSleepContainer(t, cli, name, true)
+	ctx := context.Background()
+
+	_, err := UpOrReuse(ctx, cli, name, "alpine:3.19")
+	if err == nil {
+		t.Fatal("UpOrReuse reused a container running alpine:3.20 for a config asking for alpine:3.19")
+	}
+	for _, want := range []string{testImage, "alpine:3.19", name} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %q", err, want)
+		}
+	}
+	if info, ierr := cli.ContainerInspect(ctx, id); ierr != nil || !info.State.Running {
+		t.Errorf("the refused container must keep running untouched (inspect err=%v)", ierr)
+	}
+
+	skip, err := UpOrReuse(ctx, cli, name, "")
+	if err != nil || !skip {
+		t.Errorf("UpOrReuse with no wanted image = (%v, %v), want (true, nil): compose owns its image", skip, err)
+	}
+}
+
+// TestUpOrReuse_StoppedContainerVolumes pins whose anonymous volumes go
+// with a stale container. postgres 18 declares VOLUME on the parent of
+// the bind mount, so a volume left behind leaked one per worktree; an
+// image bough chose takes its volumes with it, a compose service's
+// image (no wanted ref) keeps them.
+func TestUpOrReuse_StoppedContainerVolumes(t *testing.T) {
+	cli := newTestClient(t)
+	defer cli.Close()
+	pullTestImage(t, cli)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name       string
+		wantImage  string
+		volumeGone bool
+	}{
+		{"bough-chosen image removes its volume", testImage, true},
+		{"compose image keeps its volume", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := fmt.Sprintf("bough-test-vol-%d", time.Now().UnixNano())
+			resp, err := cli.ContainerCreate(ctx, &container.Config{
+				Image:   testImage,
+				Cmd:     []string{"sleep", "3600"},
+				Labels:  testLabels,
+				Volumes: map[string]struct{}{"/probe": {}},
+			}, &container.HostConfig{}, nil, nil, name)
+			if err != nil {
+				t.Fatalf("ContainerCreate: %v", err)
+			}
+			info, err := cli.ContainerInspect(ctx, resp.ID)
+			if err != nil {
+				t.Fatalf("ContainerInspect: %v", err)
+			}
+			volume := ""
+			for _, m := range info.Mounts {
+				if m.Type == "volume" {
+					volume = m.Name
+				}
+			}
+			if volume == "" {
+				t.Fatal("expected Docker to create an anonymous volume for /probe")
+			}
+			t.Cleanup(func() {
+				_ = cli.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+				_ = cli.VolumeRemove(context.Background(), volume, true)
+			})
+
+			if _, err := UpOrReuse(ctx, cli, name, tc.wantImage); err != nil {
+				t.Fatalf("UpOrReuse: %v", err)
+			}
+			_, verr := cli.VolumeInspect(ctx, volume)
+			if gone := errdefs.IsNotFound(verr); gone != tc.volumeGone {
+				t.Errorf("volume %s gone = %v, want %v (inspect err=%v)", volume, gone, tc.volumeGone, verr)
+			}
+		})
 	}
 }
 
@@ -149,7 +242,7 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 	// Up failure.
 	_ = createSleepContainer(t, cli, name, false)
 
-	skip, err := UpOrReuse(context.Background(), cli, name)
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage)
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}
