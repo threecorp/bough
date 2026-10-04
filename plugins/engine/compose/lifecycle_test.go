@@ -269,13 +269,22 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 	}{
 		{"positive grace", 1, "stop -t 1 redis", ""},
 		{"zero keeps the compose default", 0, "stop redis", " -t "},
+		// A service's stop_grace_period can exceed 10 s; zero must not cut
+		// compose stop short of it.
+		{"zero waits out a long compose grace", 0, "stop redis", " -t "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
 			record := filepath.Join(t.TempDir(), "calls.txt")
 			t.Setenv("FAKE_DOCKER_RECORD", record)
 			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 2;; esac\n"
-			if tc.grace == 0 {
+			switch {
+			case strings.Contains(tc.name, "long"):
+				if testing.Short() {
+					t.Skip("sleeps 11 s")
+				}
+				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$*\" in *\" stop \"*) sleep 11;; esac\n"
+			case tc.grace == 0:
 				fake = "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n"
 			}
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
