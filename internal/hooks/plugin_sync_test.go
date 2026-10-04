@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -18,16 +17,16 @@ import (
 // tests are the guard: the committed plugin manifest must mirror the
 // canonical wiring exactly, in both directions.
 
-// repoRoot resolves the module root from this test file's own location,
-// so the tests are independent of the working directory `go test` runs in.
+// repoRoot resolves the module root from the package directory, where `go
+// test` always runs the binary; runtime.Caller breaks under -trimpath.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed; cannot locate repo root")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
 	}
-	// thisFile = <repoRoot>/internal/hooks/plugin_sync_test.go
-	return filepath.Join(filepath.Dir(thisFile), "..", "..")
+	// wd = <repoRoot>/internal/hooks
+	return filepath.Join(wd, "..", "..")
 }
 
 // pluginHooksPath points at the one committed copy of the manifest.
