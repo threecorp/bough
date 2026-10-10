@@ -87,9 +87,12 @@ func buildDockerEnv(initDB string, extras map[string]string) []string {
 		"MYSQL_ALLOW_EMPTY_PASSWORD=yes",
 		"MYSQL_DATABASE=" + initDB,
 	}
-	// Per-engine extras lift verbatim from YAML `engines[].extras` so
-	// projects can pin character_set_server, default_time_zone, etc.
-	// without a plugin change.
+	// Every other `engines[].extras` key becomes MYSQL_<KEY>. The
+	// official image reads only its own documented MYSQL_* variables
+	// (MYSQL_USER, MYSQL_PASSWORD, ...); server settings such as
+	// character_set_server are mysqld flags (--character-set-server=…),
+	// which this backend does not pass, so an extras key naming one
+	// lands in the env and changes nothing.
 	for k, v := range extras {
 		switch {
 		case strings.HasPrefix(k, "docker."),
