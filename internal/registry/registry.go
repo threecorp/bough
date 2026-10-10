@@ -12,7 +12,9 @@
 //
 // All writes go through atomicWriteJSON (tempfile + os.Rename) so a
 // concurrent `bough create` and `bough remove` can never observe a
-// partial JSON document. Every write is preceded by a copy of the
+// partial JSON document, and the CLI mutates through Store.Update so two
+// processes cannot both read the same snapshot and drop each other's
+// reservation on save. Every write is preceded by a copy of the
 // previous file to ${backupDir}/<basename>-pre-<action>-<ts>.json so
 // human mistakes (an accidental port collision the schema doesn't
 // catch, a corrupted file from a SIGKILL'd hook) can be recovered
@@ -30,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/fsutil"
+	"golang.org/x/sys/unix"
 )
 
 // Registry maps `worktree name → kind → port`. The outer map is keyed by
@@ -140,6 +143,40 @@ func (s *Store) Save(reg Registry, action string) error {
 	return nil
 }
 
+// Update serializes read-modify-write across processes. The sibling lock
+// file stays in place because Save replaces the registry inode atomically.
+func (s *Store) Update(action string, mutate func(Registry) (bool, error)) error {
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
+		return fmt.Errorf("registry: lock directory: %w", err)
+	}
+	lock, err := os.OpenFile(s.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("registry: open lock: %w", err)
+	}
+	defer lock.Close() // closing releases the process lock, including on errors
+	for {
+		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX)
+		if !errors.Is(err, unix.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("registry: lock: %w", err)
+	}
+	reg, err := s.Load()
+	if err != nil {
+		return err
+	}
+	changed, err := mutate(reg)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return s.Save(reg, action)
+}
+
 func (s *Store) backup(action string) error {
 	if s.BackupDir == "" {
 		return nil
@@ -215,10 +252,9 @@ func Get(reg Registry, name, kind string) (int, bool) {
 	return 0, false
 }
 
-// Set inserts or updates the (name, kind) → port mapping in place. The
-// caller passes the result of Load and is expected to invoke Save when
-// the desired mutations are done — bough never tries to keep an open
-// file handle on the registry to avoid cross-process locking.
+// Set inserts or updates the (name, kind) → port mapping in place.
+// Callers mutate the snapshot supplied by Store.Update so allocation
+// and persistence share the same cross-process lock.
 func Set(reg Registry, name, kind string, port int) {
 	if _, ok := reg[name]; !ok {
 		reg[name] = map[string]int{}

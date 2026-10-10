@@ -60,10 +60,6 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) erro
 		resolveRegistryPath(monorepoRoot, cfg.Registry.Path),
 		cfg.Registry.BackupDir,
 	)
-	reg, err := store.Load()
-	if err != nil {
-		return err
-	}
 	added := 0
 	relinked := 0
 	for _, e := range entries {
@@ -74,21 +70,28 @@ func runBackfill(stderr io.Writer, cfg *config.Config, monorepoRoot string) erro
 		wtRoot := filepath.Join(root, name)
 		linkWorktreeClaudeMd(stderr, monorepoRoot, wtRoot)
 		relinked++
-		if _, exists := reg[name]; exists {
-			continue
-		}
-		reg[name] = map[string]int{}
-		added++
 	}
 	if relinked > 0 {
 		fmt.Fprintf(stderr, "[backfill] relinked CLAUDE.md / CLAUDE.local.md for %d worktree dir(s)\n", relinked)
 	}
+	if err := store.Update("backfill", func(reg registry.Registry) (bool, error) {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if _, exists := reg[e.Name()]; exists {
+				continue
+			}
+			reg[e.Name()] = map[string]int{}
+			added++
+		}
+		return added > 0, nil
+	}); err != nil {
+		return err
+	}
 	if added == 0 {
 		fmt.Fprintln(stderr, "[backfill] all worktree dirs already registered — no changes")
 		return nil
-	}
-	if err := store.Save(reg, "backfill"); err != nil {
-		return err
 	}
 	fmt.Fprintf(stderr, "[backfill] registered %d worktree dir(s) (run `bough create <name>` to allocate ports)\n", added)
 	return nil

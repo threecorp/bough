@@ -244,8 +244,11 @@ background session):
 5. Runs any per-repo `post_create` commands
 
 A failed sub-repo, template or `post_create` step is printed as a
-warning and create still exits 0 once the worktree exists, because
-Claude Code needs its path. Pass `--strict` to make those failures fatal.
+warning. The WorktreeCreate hook exits nonzero for an incomplete
+environment; ordinary `bough create` remains best-effort unless passed
+`--strict`. A failing `post_create` command skips later commands of that
+repository, while independent repositories continue. Worktrees and port
+reservations remain available for a retry.
 
 `bough remove` (or the WorktreeRemove hook) reverses it: plugin Down →
 `pre_remove` commands → a check that no engine port still answers → datadir

@@ -78,7 +78,8 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, false)
+	// An incomplete environment must surface as a failed WorktreeCreate.
+	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, true)
 }
 
 // resolveRemoveTarget maps a (worktreePath OR name) removal request to

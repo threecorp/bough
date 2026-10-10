@@ -230,8 +230,12 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		logf(stderr, "[bough] rm -rf %s: %v", worktreePath, err)
 	}
 
-	registry.Delete(reg, name)
-	if err := store.Save(reg, "cleanup"); err != nil {
+	// Reload after teardown so cleanup cannot overwrite reservations
+	// allocated by another create while engines and hooks were stopping.
+	if err := store.Update("cleanup", func(latest registry.Registry) (bool, error) {
+		_, removed := registry.Delete(latest, name)
+		return removed, nil
+	}); err != nil {
 		return fmt.Errorf("save registry: %w", err)
 	}
 	logf(stderr, "[bough] remove %s: complete", name)

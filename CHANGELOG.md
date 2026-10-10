@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Concurrent `bough create` runs no longer lose each other's port
+  reservations.** Create, remove and backfill each loaded the registry,
+  changed it and saved it with nothing held in between, so the last save
+  won: eight creates started together kept as few as one of their eight
+  entries, and names sharing a hash offset were all handed the same
+  port. Every registry change now runs under an exclusive `flock` on
+  `<registry>.lock` from the load to the save. `bough remove` re-reads
+  the registry after teardown and deletes only its own entry, so a
+  create that ran during a slow teardown keeps its reservation.
+- **A failing `post_create` command skips the rest of that repo's
+  commands.** A failed migration used to be followed by its seed. Other
+  repos still run their commands.
+- **The `WorktreeCreate` hook fails when the environment is incomplete.**
+  It ran create best-effort and exited 0 after a failed sub-repo, template
+  or `post_create` step; it now reports the failure like `bough create
+  --strict`. The worktree and its ports stay, so the next attempt reuses
+  them. Plain `bough create` stays best-effort.
+
 ## v0.29.5
 
 ### Fixed

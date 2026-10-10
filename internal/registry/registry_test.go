@@ -2,6 +2,7 @@ package registry
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,5 +204,136 @@ func TestStore_JSONShape(t *testing.T) {
 	}
 	if got, want := parsed["F-Auth"]["mysql.main"], 33144; got != want {
 		t.Errorf("F-Auth.mysql.main: got %d want %d", got, want)
+	}
+}
+
+func TestStore_UpdateFailureDoesNotCommitAndReleasesLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ports.json")
+	store := NewStore(path, "")
+	if err := store.Save(Registry{"existing": {"api.main": 36000}}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("allocation failed")
+	if err := store.Update("allocate", func(reg Registry) (bool, error) {
+		Set(reg, "failed", "api.main", 36001)
+		return true, failure
+	}); !errors.Is(err, failure) {
+		t.Fatalf("Update error = %v, want allocation failure", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("failed update changed registry: %v\n%s", err, after)
+	}
+	// Another Store must acquire the same lock after the failed callback.
+	other := NewStore(path, "")
+	done := make(chan error, 1)
+	go func() {
+		done <- other.Update("allocate", func(reg Registry) (bool, error) {
+			Set(reg, "retry", "api.main", 36001)
+			return true, nil
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed update kept registry lock")
+	}
+	actual, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := actual["failed"]; exists {
+		t.Error("failed reservation persisted")
+	}
+	if p, ok := Get(actual, "retry", "api.main"); !ok || p != 36001 {
+		t.Errorf("retry reservation = (%d,%v), want (36001,true)", p, ok)
+	}
+}
+
+func TestStore_UpdateUnchangedDoesNotSave(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(filepath.Join(root, "ports.json"), filepath.Join(root, "backups"))
+	if err := store.Save(Registry{"existing": {"api.main": 36000}}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update("backfill", func(reg Registry) (bool, error) {
+		Set(reg, "not-saved", "api.main", 36001)
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actual) != 1 || actual["existing"]["api.main"] != 36000 {
+		t.Errorf("unchanged update persisted mutations: %v", actual)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(root, "backups/*.json")); len(matches) != 0 {
+		t.Errorf("unchanged update made backups: %v", matches)
+	}
+}
+
+func TestStore_UpdateInvalidRegistryReleasesLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ports.json")
+	if err := os.WriteFile(path, []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path, "")
+	called := false
+	if err := store.Update("allocate", func(Registry) (bool, error) {
+		called = true
+		return true, nil
+	}); err == nil || called {
+		t.Fatalf("invalid registry accepted: error=%v callback=%v", err, called)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- store.Update("allocate", func(reg Registry) (bool, error) {
+			Set(reg, "repaired", "api.main", 36000)
+			return true, nil
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid registry kept lock after repair")
+	}
+}
+
+func TestStore_UpdateLockFailureDoesNotMutate(t *testing.T) {
+	for _, mode := range []string{"parent-is-file", "lock-is-directory"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "ports.json")
+			if mode == "parent-is-file" {
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(path, "nested.json")
+			} else if err := os.Mkdir(path+".lock", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			if err := NewStore(path, "").Update("allocate", func(Registry) (bool, error) {
+				called = true
+				return true, nil
+			}); err == nil || called {
+				t.Fatalf("lock failure accepted: error=%v callback=%v", err, called)
+			}
+		})
 	}
 }

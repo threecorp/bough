@@ -173,10 +173,10 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		skipRepo[e.Repo] = true
 	}
 
-	// 5. post_create hooks. Best-effort: a failing migration here is
-	// reported to stderr but does not unwind the entire create — the
-	// operator usually wants the worktree materialised even when seed
-	// data is missing.
+	// 5. post_create hooks. A failing migration here is reported to
+	// stderr and skips that repo's later commands (its seed), but does
+	// not unwind the entire create — the operator usually wants the
+	// worktree materialised even when seed data is missing.
 	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
 	// 5b. Expose the monorepo's root CLAUDE.md and CLAUDE.local.md to the
@@ -193,14 +193,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can
-	// cd into it. Everything else goes to stderr. Emit it even on
-	// partial failure so the operator still lands in the worktree.
+	// cd into it. Everything else goes to stderr. On partial failure,
+	// retain the path for manual inspection and retry even if strict fails.
 	fmt.Fprintln(stdout, worktreeRoot)
 
-	// 7. Surface partial failures loudly. By default create still
-	// returns success once the worktree exists (the hook's cd
-	// contract); --strict turns any worktree-add or post_create
-	// failure into a non-zero exit for CI / scripted callers.
+	// 7. Surface partial failures loudly. Ordinary create remains
+	// best-effort; --strict and the WorktreeCreate dispatcher return
+	// nonzero when the materialised environment is incomplete.
 	if n := len(failedRepos) + len(failedEnv) + len(failedHooks); n > 0 {
 		logf(stderr, "[bough] WARNING: create finished with %d problem(s); the worktree exists but its environment may be incomplete:", n)
 		for _, r := range failedRepos {
@@ -213,7 +212,7 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 			logf(stderr, "[bough]   - post_create failed: %s", h)
 		}
 		if strict {
-			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d) with --strict",
+			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d); strict setup failed",
 				name, n, len(failedRepos), len(failedEnv), len(failedHooks))
 		}
 	}
@@ -232,20 +231,18 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 func allocateAllPorts(cfg *config.Config, monorepoRoot, name string) (map[string]int, map[string]int, error) {
 	registryPath := resolveRegistryPath(monorepoRoot, cfg.Registry.Path)
 	store := registry.NewStore(registryPath, cfg.Registry.BackupDir)
-	reg, err := store.Load()
+	var enginePorts, nonEnginePorts map[string]int
+	err := store.Update("allocate", func(reg registry.Registry) (bool, error) {
+		var err error
+		enginePorts, err = allocateEngines(reg, cfg, name)
+		if err != nil {
+			return false, err
+		}
+		nonEnginePorts, err = allocateNonEnginePorts(reg, cfg, name)
+		return true, err
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("load registry: %w", err)
-	}
-	enginePorts, err := allocateEngines(reg, cfg, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	nonEnginePorts, err := allocateNonEnginePorts(reg, cfg, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := store.Save(reg, "allocate"); err != nil {
-		return nil, nil, fmt.Errorf("save registry: %w", err)
+		return nil, nil, fmt.Errorf("allocate registry: %w", err)
 	}
 	return enginePorts, nonEnginePorts, nil
 }
@@ -814,9 +811,8 @@ func renderEnvLocals(
 }
 
 // runPostCreateHooks fires each repository's `post_create:` lines in
-// declaration order. Failures log to stderr and the loop continues —
-// a failed migration should not unwind the entire create, since the
-// worktree materialisation itself is still valuable to the operator.
+// declaration order. A failure skips later commands of that repository
+// so a failed migration cannot run its seed; independent repos continue.
 func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string, skip map[string]bool) []string {
 	// Hook children must inherit the raw fd, not the SyncWriter: a
 	// non-*os.File writer makes os/exec insert a pipe + copy goroutine
@@ -852,6 +848,7 @@ func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Confi
 			if err := c.Run(); err != nil {
 				logf(stderr, "[bough] %s post_create FAILED: %v", repo.Name, err)
 				failed = append(failed, fmt.Sprintf("%s: %s", repo.Name, line))
+				break
 			}
 		}
 	}
