@@ -95,7 +95,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
-	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "")
+	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", "")
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
 	}

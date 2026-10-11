@@ -95,13 +95,14 @@ func TestUpOrReuse_ImageMismatch(t *testing.T) {
 	for _, running := range []bool{true, false} {
 		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
 			name := "bough-mysql-42001"
-			dockertest.StartDaemon(t, name, "mysql:8.4", running)
+			worktree := filepath.Join(t.TempDir(), "repo")
+			dockertest.StartDaemon(t, name, "mysql:8.4", running, Labels("mysql", "mysql:8.4", 42001, worktree))
 			cli, err := NewClient()
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = cli.Close() })
-			skip, err := UpOrReuse(context.Background(), cli, name, "mysql:9")
+			skip, err := UpOrReuse(context.Background(), cli, name, "mysql:9", worktree)
 			var mismatch *ImageMismatchError
 			if !errors.As(fmt.Errorf("reuse: %w", err), &mismatch) {
 				t.Fatalf("UpOrReuse error = %v, want ImageMismatchError", err)

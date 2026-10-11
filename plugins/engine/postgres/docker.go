@@ -133,7 +133,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("postgres docker: data image check: %w", err)
 	}
 
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {
@@ -192,7 +192,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port, req.WorktreeRoot),
 		ExposedPorts: exposed,
 		// Dev-mode: fsync=off so cold-start initdb finishes faster.
 		// Per-worktree dev environments are throwaway; if a worktree
@@ -310,6 +310,9 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	}
 	if id == "" {
 		return nil
+	}
+	if err := dockerutil.CheckWorktree(ctx, cli, id, name, req.WorktreeRoot); err != nil {
+		return fmt.Errorf("postgres docker: %w", err)
 	}
 	timeout := dockerStopTimeoutSec
 	if req.GracefulTimeoutSec > 0 {

@@ -112,8 +112,9 @@ type dockerBackend struct{}
 var _ api.Backend = dockerBackend{}
 
 // Running answers ForPort's disambiguation question. A container named
-// `bough-mysql-<port>` is uniquely owned by this plugin (the bough port
-// allocator guarantees worktree-scoped uniqueness). See
+// `bough-mysql-<port>` belongs to this plugin (the bough port allocator
+// keeps ports unique within one registry; another checkout's container of
+// the same name is refused by UpOrReuse and CheckWorktree). See
 // dockerutil.IsBackendRunning for the stale-container rule all four
 // engine plugins share.
 func (dockerBackend) Running(ctx context.Context, port int) bool {
@@ -162,7 +163,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	}
 
 	// Repeated WorktreeCreate reuses a matching container and records its image.
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {
@@ -205,7 +206,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port, req.WorktreeRoot),
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
@@ -326,6 +327,9 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	}
 	if id == "" {
 		return nil // already gone — Down is idempotent
+	}
+	if err := dockerutil.CheckWorktree(ctx, cli, id, name, req.WorktreeRoot); err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
 	}
 	timeout := dockerStopTimeoutSec
 	if req.GracefulTimeoutSec > 0 {

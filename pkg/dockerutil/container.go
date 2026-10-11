@@ -4,7 +4,10 @@ package dockerutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -65,9 +68,10 @@ func RemoveIfExists(ctx context.Context, cli *client.Client, name string) error 
 
 // IsBackendRunning is the cheap self-detection every engine plugin's
 // Down/ReadyCheck uses when neither RPC carries an explicit backend
-// hint: a container named `name` is uniquely owned by one engine
-// instance (the bough port allocator guarantees worktree-scoped
-// uniqueness), so an actually-running one is sufficient evidence that
+// hint: a container named `name` belongs to one engine instance (the
+// bough port allocator keeps ports unique within one registry; another
+// checkout's container of the same name is refused by UpOrReuse and
+// CheckWorktree), so an actually-running one is sufficient evidence that
 // Up went via the Docker path.
 //
 // A stopped/leftover container must not count as "docker backend in
@@ -156,6 +160,12 @@ func shellQuote(s string) string {
 // partially failed), the stale container is removed and skip=false is
 // returned so the caller proceeds with a fresh create + start.
 //
+// A container another worktree created (LabelWorktreeRoot names a live
+// directory other than wantWorktree) is an error too, running or stopped:
+// reusing it would point this worktree at that one's database, and
+// removing it would delete that database's container. wantWorktree == ""
+// skips the check.
+//
 // A container created from another image — running or stopped — is an
 // error rather than a reuse or a recreate: engines[].version picks the
 // image, and either path would leave the new version serving, or about to
@@ -166,7 +176,7 @@ func shellQuote(s string) string {
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
-func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) (bool, error) {
+func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWorktree string) (bool, error) {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return false, err
@@ -174,15 +184,24 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	if id == "" {
 		return false, nil
 	}
-	info, ierr := cli.ContainerInspect(ctx, id)
-	if ierr == nil {
-		have := configImage(info.Config)
-		if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
-			return false, &ImageMismatchError{ContainerName: name, HaveImage: have, WantImage: wantImage}
+	// A failed inspect leaves the owner and image unchecked, so it must not
+	// fall through to the force remove below; only "already gone" may.
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
 		}
-		if info.State != nil && info.State.Running {
-			return true, nil
-		}
+		return false, err
+	}
+	if have := otherWorktree(info.Config, wantWorktree); have != "" {
+		return false, worktreeConflict(name, have, wantWorktree)
+	}
+	have := configImage(info.Config)
+	if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
+		return false, &ImageMismatchError{ContainerName: name, HaveImage: have, WantImage: wantImage}
+	}
+	if info.State != nil && info.State.Running {
+		return true, nil
 	}
 	// The container LookupByName just found stopped can vanish before
 	// this call reaches the daemon — a concurrent `bough create` retry
@@ -197,11 +216,67 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	// anonymous volume outlives the container unless removed with it. A
 	// compose service's image is the operator's, and a same-named
 	// container bough did not label is someone else's: both keep theirs.
-	removeVolumes := wantImage != "" && ierr == nil && ownedByBough(info.Config)
+	removeVolumes := wantImage != "" && ownedByBough(info.Config)
 	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil && !errdefs.IsNotFound(err) {
 		return false, err
 	}
 	return false, nil
+}
+
+// CheckWorktree is Down's half of the UpOrReuse owner check: stopping a
+// container another checkout's worktree created would take that
+// worktree's database down, so it is an error instead. A container that
+// vanished meanwhile is not; Down then has nothing to stop.
+func CheckWorktree(ctx context.Context, cli *client.Client, id, name, wantWorktree string) error {
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if have := otherWorktree(info.Config, wantWorktree); have != "" {
+		return worktreeConflict(name, have, wantWorktree)
+	}
+	return nil
+}
+
+// otherWorktree returns the worktree root a container's label names when
+// that is a live worktree other than want. Names are bough-<engine>-<port>
+// and the port is a hash of the worktree name, so a second clone of the
+// same monorepo with a same-named worktree lands on the same name. An
+// unlabelled container (made before the label existed), an empty want
+// (compose), or a labelled worktree that no longer exists is not a
+// conflict, so none of them blocks what worked before.
+func otherWorktree(cfg *container.Config, want string) string {
+	if cfg == nil || want == "" {
+		return ""
+	}
+	have := cfg.Labels[LabelWorktreeRoot]
+	if have == "" || samePath(have, want) {
+		return ""
+	}
+	if _, err := os.Stat(have); errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	return have
+}
+
+// samePath compares two spellings of a directory, resolving symlinks so a
+// worktree reached through /tmp and /private/tmp is still one worktree.
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
+func worktreeConflict(name, have, want string) error {
+	return fmt.Errorf("container %s belongs to the worktree at %s, not %s: another checkout of this monorepo "+
+		"has a worktree of the same name, so both were given the same port. bough leaves that container alone — "+
+		"name this worktree differently, or give this checkout its own port ranges", name, have, want)
 }
 
 // RemoveOwned force-removes a container, taking its anonymous volumes

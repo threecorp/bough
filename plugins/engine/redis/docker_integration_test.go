@@ -80,9 +80,10 @@ func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
 			t.Errorf("cleanup datadir: %v", err)
 		}
 	})
+	worktree := filepath.Join(filepath.Dir(datadir), "repo")
 	backend := dockerBackend{}
 	ports := []api.PortSpec{{Role: "main", Port: port}}
-	if err := backend.Up(ctx, &api.UpReq{Ports: ports, Datadir: datadir, Extras: map[string]string{"version": "7"}}); err != nil {
+	if err := backend.Up(ctx, &api.UpReq{Ports: ports, Datadir: datadir, WorktreeRoot: worktree, Extras: map[string]string{"version": "7"}}); err != nil {
 		t.Fatalf("Up redis:7-alpine: %v", err)
 	}
 	oldID := redisRecoveryContainer(t, ctx, cli, name)
@@ -104,7 +105,7 @@ func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
 		}
 	}
 
-	req := &api.UpReq{Ports: ports, Datadir: datadir, Extras: map[string]string{"version": "8"}}
+	req := &api.UpReq{Ports: ports, Datadir: datadir, WorktreeRoot: worktree, Extras: map[string]string{"version": "8"}}
 	err = backend.Up(ctx, req)
 	var mismatch *dockerutil.ImageMismatchError
 	if !errors.As(err, &mismatch) {

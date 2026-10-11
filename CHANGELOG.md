@@ -27,6 +27,18 @@
   refuse a name that resolves to the worktrees dir or outside it, and
   `remove --path` (and the `WorktreeRemove` hook) refuses a path whose
   parent is not a `worktrees/` or `.worktrees/` dir.
+- **A second clone no longer takes over the first clone's database.**
+  Engine containers are named `bough-<engine>-<port>` and the port is a
+  hash of the worktree name, so two checkouts of one monorepo with a
+  same-named worktree got the same container: create reused the running
+  one (pointing the second worktree at the first one's data) and remove
+  stopped it. Containers now carry a `com.bough.worktree-root` label, and
+  create and remove refuse a container whose label names another existing
+  worktree. Containers made before this release have no label and behave
+  as before.
+- **A container Docker cannot inspect is no longer force-removed.** Up
+  took a failed inspect as "stopped" and removed the container without
+  checking its image; it now reports the error.
 
 ## v0.29.5
 
