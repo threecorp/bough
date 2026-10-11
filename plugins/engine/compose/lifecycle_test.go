@@ -323,6 +323,36 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 	}
 }
 
+// TestProvider_Down_LeavesAnotherWorktreesContainerAlone: container_name is
+// bough-compose-<port> and the port is a hash of the worktree name, so a
+// second clone's same-named worktree reaches the first clone's container;
+// stopping it took that worktree's service down.
+func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
+	bin := t.TempDir()
+	record := filepath.Join(t.TempDir(), "calls.txt")
+	owner := t.TempDir()
+	t.Setenv("FAKE_DOCKER_RECORD", record)
+	t.Setenv("FAKE_DOCKER_OWNER", owner)
+	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in inspect) echo \"$FAKE_DOCKER_OWNER\";; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	worktreeRoot := t.TempDir()
+	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56127}
+	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+		t.Fatal(err)
+	}
+	err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+	if err == nil || !strings.Contains(err.Error(), owner) {
+		t.Errorf("Down = %v, want a refusal naming the owning worktree %s", err, owner)
+	}
+	if b, _ := os.ReadFile(record); strings.Contains(string(b), " stop ") || strings.Contains(string(b), " rm ") {
+		t.Errorf("Down stopped another worktree's container; calls:\n%s", b)
+	}
+}
+
 // TestProvider_Down_BoundsHungCommands: a `compose stop` or `rm` that never
 // returns (a pre_stop hook, a stuck daemon) gives up after cmdWait instead
 // of holding the remove forever, even when a leftover child keeps the

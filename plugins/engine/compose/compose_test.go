@@ -113,9 +113,10 @@ func TestComposeProjectName_DifferentWorktreesDiffer(t *testing.T) {
 
 func TestRenderOverride(t *testing.T) {
 	out, err := renderOverride(overrideSpec{
-		Service:    "redis",
-		TargetPort: 6379,
-		HostPort:   56123,
+		Service:      "redis",
+		TargetPort:   6379,
+		HostPort:     56123,
+		WorktreeRoot: "/w/F-Auth/demo-api",
 	})
 	if err != nil {
 		t.Fatalf("renderOverride: %v", err)
@@ -160,6 +161,7 @@ func TestRenderOverride(t *testing.T) {
 		"com.bough.engine":          "compose",
 		"com.bough.compose-service": "redis",
 		"com.bough.host-port":       "56123",
+		"com.bough.worktree-root":   "/w/F-Auth/demo-api",
 	}
 	for k, want := range wantLabels {
 		if got := svc.Labels[k]; got != want {

@@ -81,8 +81,10 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 
 	// container_name is deterministic by host port alone (see
 	// renderOverride's doc), so a container already running under this
-	// exact name IS this same worktree's own service — reuse it rather
-	// than treating its own published port as a foreign conflict.
+	// exact name is this worktree's own service — reuse it rather than
+	// treating its own published port as a foreign conflict — unless its
+	// worktree-root label names another checkout's worktree of the same
+	// name, which UpOrReuse refuses.
 	// UpOrReuse also removes a stale STOPPED container of this name
 	// (e.g. left over from an interrupted prior run) before signalling
 	// "not reusable," so the create path below never hits a stale
@@ -95,13 +97,13 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
-	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", "")
+	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
 	}
 
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
-		Service: service, TargetPort: targetPort, HostPort: port,
+		Service: service, TargetPort: targetPort, HostPort: port, WorktreeRoot: req.WorktreeRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("compose: Up: %w", err)
@@ -220,9 +222,13 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot); err != nil {
+		return fmt.Errorf("compose: Down: %w", err)
+	}
+
 	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
-		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort,
+		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort, WorktreeRoot: req.WorktreeRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
@@ -262,6 +268,27 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	rmCmd.WaitDelay = p.pipeWait
 	if out, err := rmCmd.CombinedOutput(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Errorf("compose: Down: docker compose rm failed: %w\n%s", err, out)
+	}
+	return nil
+}
+
+// checkOwner refuses to stop bough-compose-<port> when its worktree-root
+// label names another checkout's worktree of the same name. It asks the
+// docker CLI, like the rest of Down; a container docker cannot inspect
+// (already gone, or no daemon) is left to compose stop to report.
+func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot string) error {
+	name := fmt.Sprintf("bough-compose-%d", port)
+	ictx, cancel := context.WithTimeout(ctx, p.cmdWait)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, "docker", "inspect", "--format",
+		`{{index .Config.Labels "`+dockerutil.LabelWorktreeRoot+`"}}`, name)
+	cmd.WaitDelay = p.pipeWait
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	if have := dockerutil.OtherWorktree(strings.TrimSpace(string(out)), worktreeRoot); have != "" {
+		return dockerutil.WorktreeConflict(name, have, worktreeRoot)
 	}
 	return nil
 }

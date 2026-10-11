@@ -64,6 +64,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"gopkg.in/yaml.v3"
@@ -159,9 +160,10 @@ func sanitizeComposeToken(s string) string {
 // facts needed to isolate one worktree's use of one compose service
 // without editing the operator's own compose file.
 type overrideSpec struct {
-	Service    string
-	TargetPort int
-	HostPort   int
+	Service      string
+	TargetPort   int
+	HostPort     int
+	WorktreeRoot string
 }
 
 // composeOverrideDoc mirrors just enough of the compose file schema
@@ -197,16 +199,31 @@ type composePortSpec struct {
 }
 
 // com.bough.* label keys this plugin writes into the generated
-// override. Write-only today (nothing reads them back), mirroring
+// override. Write-only (nothing reads them back), mirroring
 // pkg/dockerutil/labels.go's own stated rationale: schema stability
-// for a future label-based discovery tool, not a load-bearing
-// dependency of this plugin's own Up/Down.
+// for a future label-based discovery tool. The one label Up and Down
+// do read, dockerutil.LabelWorktreeRoot, comes from that package.
 const (
 	labelManaged        = "com.bough.managed"
 	labelEngine         = "com.bough.engine"
 	labelComposeService = "com.bough.compose-service"
 	labelHostPort       = "com.bough.host-port"
 )
+
+// overrideLabels stamps the worktree root when known, so Up and Down can
+// tell this worktree's container from another checkout's of the same name.
+func overrideLabels(spec overrideSpec) map[string]string {
+	labels := map[string]string{
+		labelManaged:        "true",
+		labelEngine:         "compose",
+		labelComposeService: spec.Service,
+		labelHostPort:       strconv.Itoa(spec.HostPort),
+	}
+	if spec.WorktreeRoot != "" {
+		labels[dockerutil.LabelWorktreeRoot] = spec.WorktreeRoot
+	}
+	return labels
+}
 
 // renderOverride generates the worktree-scoped compose override
 // fragment for spec.Service: a fixed host port (never left to
@@ -229,12 +246,7 @@ func renderOverride(spec overrideSpec) ([]byte, error) {
 			spec.Service: {
 				ContainerName: fmt.Sprintf("bough-compose-%d", spec.HostPort),
 				Ports:         portsNode,
-				Labels: map[string]string{
-					labelManaged:        "true",
-					labelEngine:         "compose",
-					labelComposeService: spec.Service,
-					labelHostPort:       strconv.Itoa(spec.HostPort),
-				},
+				Labels:        overrideLabels(spec),
 			},
 		},
 	}

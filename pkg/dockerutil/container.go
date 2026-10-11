@@ -194,7 +194,7 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWor
 		return false, err
 	}
 	if have := otherWorktree(info.Config, wantWorktree); have != "" {
-		return false, worktreeConflict(name, have, wantWorktree)
+		return false, WorktreeConflict(name, have, wantWorktree)
 	}
 	have := configImage(info.Config)
 	if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
@@ -236,24 +236,27 @@ func CheckWorktree(ctx context.Context, cli *client.Client, id, name, wantWorktr
 		return err
 	}
 	if have := otherWorktree(info.Config, wantWorktree); have != "" {
-		return worktreeConflict(name, have, wantWorktree)
+		return WorktreeConflict(name, have, wantWorktree)
 	}
 	return nil
 }
 
-// otherWorktree returns the worktree root a container's label names when
-// that is a live worktree other than want. Names are bough-<engine>-<port>
-// and the port is a hash of the worktree name, so a second clone of the
-// same monorepo with a same-named worktree lands on the same name. An
-// unlabelled container (made before the label existed), an empty want
-// (compose), or a labelled worktree that no longer exists is not a
-// conflict, so none of them blocks what worked before.
 func otherWorktree(cfg *container.Config, want string) string {
-	if cfg == nil || want == "" {
+	if cfg == nil {
 		return ""
 	}
-	have := cfg.Labels[LabelWorktreeRoot]
-	if have == "" || samePath(have, want) {
+	return OtherWorktree(cfg.Labels[LabelWorktreeRoot], want)
+}
+
+// OtherWorktree returns have, a container's LabelWorktreeRoot, when it
+// names a live worktree other than want. Names are bough-<engine>-<port>
+// and the port is a hash of the worktree name, so a second clone of the
+// same monorepo with a same-named worktree lands on the same name. An
+// unlabelled container (made before the label existed), an empty want,
+// or a labelled worktree that no longer exists is not a conflict, so none
+// of them blocks what worked before.
+func OtherWorktree(have, want string) string {
+	if have == "" || want == "" || samePath(have, want) {
 		return ""
 	}
 	if _, err := os.Stat(have); errors.Is(err, fs.ErrNotExist) {
@@ -273,7 +276,8 @@ func samePath(a, b string) bool {
 	return errA == nil && errB == nil && ra == rb
 }
 
-func worktreeConflict(name, have, want string) error {
+// WorktreeConflict is the refusal for a container OtherWorktree flagged.
+func WorktreeConflict(name, have, want string) error {
 	return fmt.Errorf("container %s belongs to the worktree at %s, not %s: another checkout of this monorepo "+
 		"has a worktree of the same name, so both were given the same port. bough leaves that container alone — "+
 		"name this worktree differently, or give this checkout its own port ranges", name, have, want)
