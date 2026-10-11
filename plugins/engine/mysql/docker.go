@@ -105,6 +105,31 @@ func buildDockerEnv(initDB string, extras map[string]string) []string {
 	return env
 }
 
+// readyCheckEnv gives the in-container ready check root's password when
+// the container was started with one (extras root_password); the client
+// reads MYSQL_PWD, which keeps the password off the exec command line.
+func readyCheckEnv(containerEnv []string) []string {
+	for _, kv := range containerEnv {
+		if v, ok := strings.CutPrefix(kv, "MYSQL_ROOT_PASSWORD="); ok && v != "" {
+			return []string{"MYSQL_PWD=" + v}
+		}
+	}
+	return nil
+}
+
+// checkRootLogin refuses the extras that leave root's password unknown to
+// bough: the ready check logs in as root, so with either key create would
+// wait out the whole ready timeout on a server that is already up.
+func checkRootLogin(extras map[string]string) error {
+	for _, key := range []string{"random_root_password", "onetime_password"} {
+		if extras[key] != "" {
+			return fmt.Errorf("extras %s is not supported: bough's ready check logs in as root, "+
+				"so it needs root's password — set root_password instead", key)
+		}
+	}
+	return nil
+}
+
 // dockerBackend runs mysqld in a container. Stateless: the tunables
 // are the consts above and the image comes from dockerImage.
 type dockerBackend struct{}
@@ -143,6 +168,9 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	imageRef, err := dockerImage.Resolve(req.Extras)
 	if err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
+	}
+	if err := checkRootLogin(req.Extras); err != nil {
 		return fmt.Errorf("mysql docker: %w", err)
 	}
 
@@ -268,7 +296,8 @@ func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool
 }
 
 // mysqlTCPReady runs `mysql --protocol=TCP -h127.0.0.1 -uroot -e
-// 'SELECT 1'` inside the container via docker exec. --protocol=TCP
+// 'SELECT 1'` inside the container via docker exec, with root's password
+// from the container's own env when it has one (readyCheckEnv). --protocol=TCP
 // forces the network path (rather than the client's default socket
 // preference), so this fails cleanly during the mysql:8.4 image's
 // first-run "temporary server" phase, which runs mysqld with
@@ -287,8 +316,17 @@ func mysqlTCPReady(ctx context.Context, cli *client.Client, name string) error {
 	if id == "" {
 		return fmt.Errorf("container %s not found", name)
 	}
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	var containerEnv []string
+	if info.Config != nil {
+		containerEnv = info.Config.Env
+	}
 	exec, err := cli.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd:          []string{"mysql", "--protocol=TCP", "-h127.0.0.1", "-uroot", "-e", "SELECT 1"},
+		Env:          readyCheckEnv(containerEnv),
 		AttachStdout: true,
 		AttachStderr: true,
 	})

@@ -216,3 +216,31 @@ func TestDockerUp_RecordsBeforeCreate(t *testing.T) {
 		})
 	}
 }
+
+// TestReadyCheckEnv: an extras root_password becomes MYSQL_ROOT_PASSWORD,
+// and the in-container SELECT 1 logged in as root without it, so create
+// waited out the whole ready timeout on a server that was up.
+func TestReadyCheckEnv(t *testing.T) {
+	env := buildDockerEnv("bough", map[string]string{"root_password": "s3cret"})
+	if got := readyCheckEnv(env); !slices.Equal(got, []string{"MYSQL_PWD=s3cret"}) {
+		t.Errorf("readyCheckEnv(%v) = %v, want [MYSQL_PWD=s3cret]", env, got)
+	}
+	if got := readyCheckEnv(buildDockerEnv("bough", nil)); got != nil {
+		t.Errorf("no root password: readyCheckEnv = %v, want nil", got)
+	}
+}
+
+// TestCheckRootLogin: with a random or one-time root password nobody
+// can give the ready check root's password, so create used to time out;
+// Up now says why before starting anything.
+func TestCheckRootLogin(t *testing.T) {
+	for _, key := range []string{"random_root_password", "onetime_password"} {
+		err := checkRootLogin(map[string]string{key: "yes"})
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("extras %s: checkRootLogin = %v, want an error naming the key", key, err)
+		}
+	}
+	if err := checkRootLogin(map[string]string{"root_password": "s3cret", "user": "app"}); err != nil {
+		t.Errorf("a known root password: checkRootLogin = %v, want nil", err)
+	}
+}

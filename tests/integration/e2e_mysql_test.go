@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -171,6 +172,21 @@ func TestE2E_CreateMysqlReadyAndRemove_LegacyV03Schema(t *testing.T) {
 		t.Skip("integration test skipped in -short mode")
 	}
 	runE2ECreateReadyRemove(t, newFixtureWithYAML(t, v0_3LegacyYAML), "F-E2E-Mysql-V03")
+}
+
+// TestE2E_CreateMysqlReadyAndRemove_RootPassword: an extras root_password
+// reaches the image as MYSQL_ROOT_PASSWORD, and the ready check used to log
+// in as root without it, so create timed out on a server that was up.
+func TestE2E_CreateMysqlReadyAndRemove_RootPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in -short mode")
+	}
+	yaml := strings.Replace(v0_4CanonicalYAML, "    version: \"8.4\"\n",
+		"    version: \"8.4\"\n    extras:\n      root_password: s3cret\n", 1)
+	if yaml == v0_4CanonicalYAML {
+		t.Fatal("fixture: the engine's version line moved; extras were not added")
+	}
+	runE2ECreateReadyRemove(t, newFixtureWithYAML(t, yaml), "F-E2E-Mysql-RootPw")
 }
 
 func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {

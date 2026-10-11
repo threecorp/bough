@@ -45,6 +45,11 @@
 - **`bough create`'s `.gitignore` hint names a registry outside
   `.bough/`.** On the pre-v0.11 layout the registry is `.bough-ports.json`
   at the root, and it and its new `.lock` were missing from the list.
+- **A mysql engine with `extras: {root_password: …}` becomes ready.** The
+  ready check logged in as root without a password and timed out on a
+  server that was up; it now uses the container's `MYSQL_ROOT_PASSWORD`.
+  `random_root_password` and `onetime_password`, which leave root's
+  password unknown to bough, are refused when the engine starts.
 
 ## v0.29.5
 
