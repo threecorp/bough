@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 )
@@ -310,4 +311,75 @@ func TestCreateCmd_RefusesNameOutsideWorktrees(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".bough", "ports.json")); !os.IsNotExist(err) {
 		t.Errorf("create reserved ports for an invalid name: %v", err)
 	}
+}
+
+// sameNameFixture writes a config-only monorepo root and returns it with
+// the worktree path bough uses for name.
+func sameNameFixture(t *testing.T, name string) (root, wt string) {
+	t.Helper()
+	root = t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	yaml := "schema_version: 2\nmonorepo_root: .\nrepositories:\n  - name: demo\n    branch_strategy: main\nregistry:\n  path: .bough/ports.json\n"
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root, filepath.Join(worktreesDir(root), name)
+}
+
+// waitBlocked runs fn and asserts it does not return while the worktree
+// lock is held, then releases the lock and waits for fn.
+func waitBlocked(t *testing.T, release func(), fn func() error, stillThere func() bool) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case <-done:
+		release()
+		t.Fatal("ran while another create/remove of the same name held the worktree lock")
+	case <-time.After(500 * time.Millisecond):
+	}
+	if !stillThere() {
+		t.Error("state changed while the worktree lock was held")
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("never finished after the worktree lock was released")
+	}
+}
+
+// TestRemove_WaitsForSameNameLifecycle: a remove that ran while a create of
+// the same name was starting engines deleted the datadir under them.
+func TestRemove_WaitsForSameNameLifecycle(t *testing.T) {
+	root, wt := sameNameFixture(t, "F-X")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockWorktree(root, "F-X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	cmd := newRemoveCmd()
+	cmd.SetArgs([]string{"--name", "F-X"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	waitBlocked(t, release, cmd.Execute, func() bool { _, err := os.Stat(wt); return err == nil })
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("remove did not delete %s once it got the lock: %v", wt, err)
+	}
+}
+
+func TestCreate_WaitsForSameNameLifecycle(t *testing.T) {
+	root, wt := sameNameFixture(t, "F-X")
+	release, err := lockWorktree(root, "F-X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newCreateCmd()
+	cmd.SetArgs([]string{"--name", "F-X", "--cwd", root, "--no-fetch"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	waitBlocked(t, release, cmd.Execute, func() bool { _, err := os.Stat(wt); return os.IsNotExist(err) })
 }

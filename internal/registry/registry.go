@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/ikeikeikeike/bough/internal/fsutil"
-	"golang.org/x/sys/unix"
 )
 
 // Registry maps `worktree name → kind → port`. The outer map is keyed by
@@ -146,23 +145,11 @@ func (s *Store) Save(reg Registry, action string) error {
 // Update serializes read-modify-write across processes. The sibling lock
 // file stays in place because Save replaces the registry inode atomically.
 func (s *Store) Update(action string, mutate func(Registry) (bool, error)) error {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
-		return fmt.Errorf("registry: lock directory: %w", err)
-	}
-	lock, err := os.OpenFile(s.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("registry: open lock: %w", err)
-	}
-	defer lock.Close() // closing releases the process lock, including on errors
-	for {
-		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX)
-		if !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
+	release, err := fsutil.Lock(s.Path + ".lock")
 	if err != nil {
 		return fmt.Errorf("registry: lock: %w", err)
 	}
+	defer release() // also on errors below
 	reg, err := s.Load()
 	if err != nil {
 		return err

@@ -69,6 +69,11 @@ func newRemoveCmd() *cobra.Command {
 }
 
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
+	release, err := lockWorktree(monorepoRoot, name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.

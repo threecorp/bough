@@ -50,6 +50,11 @@
   server that was up; it now uses the container's `MYSQL_ROOT_PASSWORD`.
   `random_root_password` and `onetime_password`, which leave root's
   password unknown to bough, are refused when the engine starts.
+- **`bough create` and `bough remove` of the same worktree name run one
+  at a time.** The registry lock covered only its own load and save, so a
+  remove could delete the datadir and worktree a concurrent create of the
+  same name was starting an engine on. Each now holds
+  `.bough/locks/<name>.lock` from start to finish; a second one waits.
 
 ## v0.29.5
 

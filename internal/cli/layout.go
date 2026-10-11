@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/ikeikeikeike/bough/internal/fsutil"
 )
 
 // Workspace layout (v0.11+): everything bough generates at the monorepo
@@ -25,6 +28,7 @@ const (
 	portsFile     = "ports.json"
 	worktreesName = "worktrees"
 	legacyWtName  = ".worktrees"
+	locksSubdir   = "locks"
 )
 
 // resolveRepoSrc answers "where does this repo's source checkout live?"
@@ -69,4 +73,19 @@ func worktreePathFor(monorepoRoot, name string) (string, error) {
 		return "", fmt.Errorf("worktree name %q must name a directory inside %s", name, dir)
 	}
 	return path, nil
+}
+
+// lockWorktree serializes create and remove of one worktree name across
+// processes, from the first step to the last: the registry lock covers
+// only its own load-to-save, so a remove could otherwise delete the
+// datadir and worktree a concurrent create of the same name was starting
+// an engine on. The lock file lives at <root>/.bough/locks/<name>.lock
+// and is never deleted (see fsutil.Lock).
+func lockWorktree(monorepoRoot, name string) (release func(), err error) {
+	path := filepath.Join(monorepoRoot, boughDir, locksSubdir, url.PathEscape(name)+".lock")
+	release, err = fsutil.Lock(path)
+	if err != nil {
+		return nil, fmt.Errorf("lock worktree %s: %w", name, err)
+	}
+	return release, nil
 }

@@ -267,7 +267,8 @@ With the default layout, bough's checkouts, registry and worktrees live in two d
 ```
 <monorepo-root>/
   .bough/repos/<name>     # source checkouts (bough clones `source:` here)
-  .bough/ports.json       # port registry
+  .bough/ports.json       # port registry (+ ports.json.lock)
+  .bough/locks/<name>.lock  # held while create or remove runs for <name>
   worktrees/<name>/       # per-feature worktrees
 ```
 

@@ -109,6 +109,11 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	if err != nil {
 		return err
 	}
+	release, err := lockWorktree(monorepoRoot, name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot, rootInGit && gitDetermined); err != nil {
 		return err
 	}
