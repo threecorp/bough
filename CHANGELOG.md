@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- CI runs `make integration-test`, so the mysql E2E and the `pkg/dockerutil`
+  daemon tests (the image-swap refusal and volume ownership) now gate every
+  PR. The E2E fails instead of skipping when `dist/` lacks the binaries.
+
 ## v0.29.0
 
 ### Removed

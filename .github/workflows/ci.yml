@@ -83,6 +83,23 @@ jobs:
       - name: Entry-point smoke
         run: ./scripts/entrypoint-smoke.sh /tmp/boughbin/bough
 
+  # The image-swap refusal and anonymous-volume ownership in pkg/dockerutil
+  # are only exercised against a real daemon, so `go test ./...` cannot see them.
+  integration:
+    name: Integration tests (real Docker)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          diagnostic-endpoint: ''
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: make integration-test
+        run: nix develop .#ci -c make integration-test
+
   conformance:
     name: Plugin conformance (real Docker)
     needs: test

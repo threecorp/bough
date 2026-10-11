@@ -13,10 +13,9 @@
 //
 // Local invocation:
 //
-//	make build
 //	make integration-test
 //
-// No CI job runs it today.
+// CI runs it in the `integration` job.
 
 package integration
 
@@ -116,9 +115,8 @@ func newFixtureWithYAML(t *testing.T, yaml string) *monorepoFixture {
 	root := t.TempDir()
 
 	// Resolve bough + bough-plugin-mysql binaries to ./dist (built by
-	// `make build` before integration-test fires). Fail loudly if
-	// they're missing so the operator gets a clear hint rather than a
-	// vague "plugin not found".
+	// `make build` before integration-test fires). Fail rather than skip
+	// when they're missing: a skip would pass the CI job without testing.
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -127,7 +125,7 @@ func newFixtureWithYAML(t *testing.T, yaml string) *monorepoFixture {
 	hostBinDir := filepath.Clean(filepath.Join(repoRoot, "..", "..", "dist"))
 	for _, b := range []string{"bough", "bough-plugin-mysql"} {
 		if _, err := os.Stat(filepath.Join(hostBinDir, b)); err != nil {
-			t.Skipf("missing %s in dist/ — run `make build` before `make integration-test`", b)
+			t.Fatalf("missing %s in dist/ — run `make build` before `make integration-test`", b)
 		}
 	}
 
