@@ -169,11 +169,12 @@ func TestCreate_MigrationFailurePropagates(t *testing.T) {
 				var out, stderr bytes.Buffer
 				cmd := newCreateCmd()
 				args := []string{"--name", "F-Migrate", "--cwd", root, "--no-fetch"}
-				if mode == "official-hook" {
+				switch mode {
+				case "official-hook":
 					cmd = newHookHandleCmd()
 					args = []string{"--event", "WorktreeCreate"}
 					cmd.SetIn(bytes.NewBufferString(fmt.Sprintf(`{"name":"F-Migrate","cwd":%q}`, root)))
-				} else if mode == "strict-cli" {
+				case "strict-cli":
 					args = append(args, "--strict")
 				}
 				cmd.SetArgs(args)
