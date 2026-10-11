@@ -87,7 +87,8 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 // Shared by the `bough remove` CLI and the WorktreeRemove hook dispatch
 // so the two paths cannot diverge. worktreePath wins when present (and is
 // Cleaned so a trailing slash does not shift Dir(Dir(...)) a level too
-// shallow); otherwise the worktree is <cwd>/<worktrees-dir>/<name>. cwd is
+// shallow, and must sit directly in a worktrees dir); otherwise the
+// worktree is <cwd>/<worktrees-dir>/<name>. cwd is
 // os.Getwd() — the hook payload's own `cwd` is deliberately NOT trusted:
 // a WorktreeRemove hook can fire from inside the worktree being torn
 // down, and doubling that into the path would miss the real worktree and
@@ -96,12 +97,15 @@ func resolveRemoveTarget(name, worktreePath string) (monorepoRoot, wtName, path 
 	switch {
 	case worktreePath != "":
 		path = filepath.Clean(worktreePath)
+		if parent := filepath.Base(filepath.Dir(path)); parent != worktreesName && parent != legacyWtName {
+			return "", "", "", fmt.Errorf("worktree path %s is not inside a %s/ or %s/ dir", path, worktreesName, legacyWtName)
+		}
 		wtName = filepath.Base(path)
 		monorepoRoot = filepath.Dir(filepath.Dir(path))
 	case name != "":
 		monorepoRoot, _ = os.Getwd()
 		wtName = name
-		path = filepath.Join(worktreesDir(monorepoRoot), name)
+		path, err = worktreePathFor(monorepoRoot, name)
 	default:
 		err = errors.New("removal needs a worktree path or name (--path/--name, or hook worktree_path/name)")
 	}

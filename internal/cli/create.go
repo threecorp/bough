@@ -105,7 +105,10 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// and monorepoRoot cannot change between them.
 	rootInGit, gitDetermined := insideGitWorkTree(monorepoRoot)
 	warnIfRootNotGit(stderr, cfg, monorepoRoot, rootInGit, gitDetermined)
-	worktreeRoot := filepath.Join(worktreesDir(monorepoRoot), name)
+	worktreeRoot, err := worktreePathFor(monorepoRoot, name)
+	if err != nil {
+		return err
+	}
 	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot, rootInGit && gitDetermined); err != nil {
 		return err
 	}

@@ -1,6 +1,10 @@
 package cli
 
-import "path/filepath"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
 
 // Workspace layout (v0.11+): everything bough generates at the monorepo
 // root is grouped so that a git-initialised monorepo root needs only two
@@ -52,4 +56,17 @@ func worktreesDir(monorepoRoot string) string {
 		return legacy
 	}
 	return filepath.Join(monorepoRoot, worktreesName)
+}
+
+// worktreePathFor is <worktrees-dir>/<name>, refusing a name that resolves
+// to the worktrees dir itself or outside it: remove rm -rf's this path, so
+// `--name ..` would otherwise delete the monorepo root.
+func worktreePathFor(monorepoRoot, name string) (string, error) {
+	dir := worktreesDir(monorepoRoot)
+	path := filepath.Join(dir, name)
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("worktree name %q must name a directory inside %s", name, dir)
+	}
+	return path, nil
 }

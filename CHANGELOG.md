@@ -21,6 +21,12 @@
   or `post_create` step; it now reports the failure like `bough create
   --strict`. The worktree and its ports stay, so the next attempt reuses
   them. Plain `bough create` stays best-effort.
+- **`bough remove --name ..` no longer deletes the monorepo root.** A name
+  was joined onto the worktrees dir unchecked, so `..` resolved to the
+  root and remove ran `rm -rf` on it. `create`, `remove` and `verify` now
+  refuse a name that resolves to the worktrees dir or outside it, and
+  `remove --path` (and the `WorktreeRemove` hook) refuses a path whose
+  parent is not a `worktrees/` or `.worktrees/` dir.
 
 ## v0.29.5
 

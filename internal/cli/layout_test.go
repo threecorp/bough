@@ -212,3 +212,81 @@ func TestWorktreesDir(t *testing.T) {
 		}
 	})
 }
+
+// TestWorktreePathFor pins the guard every name-based entry point shares: a
+// name that resolves to the worktrees dir itself or outside it ("..",
+// "../x") is refused, because remove would otherwise rm -rf the monorepo
+// root or a sibling of it.
+func TestWorktreePathFor(t *testing.T) {
+	root := t.TempDir()
+	dir := worktreesDir(root)
+	for _, name := range []string{"F-Auth", "feat/x"} {
+		got, err := worktreePathFor(root, name)
+		if err != nil || got != filepath.Join(dir, name) {
+			t.Errorf("worktreePathFor(%q) = (%q, %v), want %q", name, got, err, filepath.Join(dir, name))
+		}
+	}
+	for _, name := range []string{"", ".", "..", "../x", "a/../..", "../worktrees-x"} {
+		if got, err := worktreePathFor(root, name); err == nil {
+			t.Errorf("worktreePathFor(%q) = %q, want an error", name, got)
+		}
+	}
+}
+
+func TestResolveRemoveTarget_RefusesTargetOutsideWorktrees(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	if _, _, path, err := resolveRemoveTarget("..", ""); err == nil {
+		t.Errorf("name %q resolved to %q, want an error", "..", path)
+	}
+	for _, p := range []string{root, filepath.Join(root, "other", "F-Auth")} {
+		if _, _, _, err := resolveRemoveTarget("", p); err == nil {
+			t.Errorf("path %q accepted, want an error (not directly inside the worktrees dir)", p)
+		}
+	}
+	want := filepath.Join(worktreesDir(root), "F-Auth")
+	if _, name, path, err := resolveRemoveTarget("", want); err != nil || name != "F-Auth" || path != want {
+		t.Errorf("worktree path = (%q, %q, %v), want (F-Auth, %q, nil)", name, path, err, want)
+	}
+}
+
+// TestRemoveCmd_DotDotLeavesRootIntact drives the CLI the way an operator
+// would: before the guard, `bough remove --name ..` ran pre_remove in the
+// root and then removed the whole monorepo root.
+func TestRemoveCmd_DotDotLeavesRootIntact(t *testing.T) {
+	root := t.TempDir()
+	yaml := "schema_version: 2\nmonorepo_root: .\nrepositories:\n  - name: demo\n    branch_strategy: main\nregistry:\n  path: .bough/ports.json\n"
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	cmd := newRemoveCmd()
+	cmd.SetArgs([]string{"--name", ".."})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil {
+		t.Error("remove --name .. succeeded, want an error")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".bough.yaml")); err != nil {
+		t.Errorf("monorepo root was touched: %v", err)
+	}
+}
+
+func TestCreateCmd_RefusesNameOutsideWorktrees(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	yaml := "schema_version: 2\nmonorepo_root: .\nrepositories:\n  - name: demo\n    branch_strategy: main\nregistry:\n  path: .bough/ports.json\n"
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newCreateCmd()
+	cmd.SetArgs([]string{"--name", "..", "--cwd", root, "--no-fetch"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil {
+		t.Error("create --name .. succeeded, want an error")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".bough", "ports.json")); !os.IsNotExist(err) {
+		t.Errorf("create reserved ports for an invalid name: %v", err)
+	}
+}
