@@ -123,6 +123,44 @@ func TestStore_BackupOnOverwrite(t *testing.T) {
 	}
 }
 
+// TestStore_BackupsInTheSameSecondAllSurvive: the name carries the time to
+// the second, so with creates serialized several saves land in one second
+// and each backup used to replace the one before it.
+func TestStore_BackupsInTheSameSecondAllSurvive(t *testing.T) {
+	tmp := t.TempDir()
+	backupDir := filepath.Join(tmp, "backups")
+	s := &Store{Path: filepath.Join(tmp, "ports.json"), BackupDir: backupDir, Now: fixedClock("20260101-120000")}
+	versions := []Registry{
+		{"A": {"mysql.main": 33000}},
+		{"A": {"mysql.main": 33000}, "B": {"mysql.main": 33001}},
+		{"A": {"mysql.main": 33000}, "B": {"mysql.main": 33001}, "C": {"mysql.main": 33002}},
+	}
+	for i, reg := range versions {
+		if err := s.Save(reg, "allocate"); err != nil {
+			t.Fatalf("Save %d: %v", i, err)
+		}
+	}
+	backups, _ := filepath.Glob(filepath.Join(backupDir, "*.json"))
+	if len(backups) != len(versions)-1 {
+		t.Fatalf("got %d backups %v, want one per overwrite (%d)", len(backups), backups, len(versions)-1)
+	}
+	sizes := map[int]bool{}
+	for _, b := range backups {
+		data, err := os.ReadFile(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reg Registry
+		if err := json.Unmarshal(data, &reg); err != nil {
+			t.Fatalf("%s: %v", b, err)
+		}
+		sizes[len(reg)] = true
+	}
+	if !sizes[1] || !sizes[2] {
+		t.Errorf("backups hold registries of sizes %v, want the 1- and 2-entry versions", sizes)
+	}
+}
+
 func TestStore_AtomicityPreservesOldFileOnEncodeFailure(t *testing.T) {
 	tmp := t.TempDir()
 	regPath := filepath.Join(tmp, ".bough-ports.json")

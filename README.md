@@ -300,7 +300,9 @@ git -C worktrees/<name> rev-parse --show-toplevel   # must print the container's
 
 A monorepo still on the pre-v0.11 layout (checkouts at `<root>/<name>`,
 worktrees under `.worktrees/`, registry at `.bough-ports.json`) keeps
-working; bough reuses the existing locations.
+working; bough reuses the existing locations. Its `.gitignore` also needs
+the registry and the `.bough-ports.json.lock` beside it, which
+`bough create` lists in its warning.
 
 ## Compose-wrapped services
 

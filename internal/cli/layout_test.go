@@ -87,6 +87,27 @@ func TestWarnIfRootNotGit(t *testing.T) {
 		}
 	})
 
+	// The registry and its .lock sit outside .bough/ on the pre-v0.11
+	// layout (and wherever registry.path points), so .bough/ alone left
+	// both untracked-but-unignored.
+	t.Run("a registry outside .bough/ is suggested with its lock", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".bough-ports.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := &config.Config{Registry: config.RegistryConfig{Path: ".bough/ports.json"}}
+		got := strings.Join(gitignoreSuggestions(cfg, root), ",")
+		if want := ".bough-ports.json,.bough-ports.json.lock,.bough/,worktrees/"; got != want {
+			t.Errorf("legacy registry: gitignoreSuggestions = %s, want %s", got, want)
+		}
+
+		fresh := t.TempDir()
+		got = strings.Join(gitignoreSuggestions(cfg, fresh), ",")
+		if want := ".bough/,worktrees/"; got != want {
+			t.Errorf("registry under .bough/: gitignoreSuggestions = %s, want %s", got, want)
+		}
+	})
+
 	t.Run("git root stays silent", func(t *testing.T) {
 		root := t.TempDir()
 		if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {

@@ -39,6 +39,12 @@
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
   checking its image; it now reports the error.
+- **Registry backups written in the same second all survive.** The
+  backup name carried the time to the second, so each save in that second
+  replaced the backup before it; a numbered suffix now keeps every one.
+- **`bough create`'s `.gitignore` hint names a registry outside
+  `.bough/`.** On the pre-v0.11 layout the registry is `.bough-ports.json`
+  at the root, and it and its new `.lock` were missing from the list.
 
 ## v0.29.5
 

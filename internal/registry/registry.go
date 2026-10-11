@@ -15,7 +15,7 @@
 // partial JSON document, and the CLI mutates through Store.Update so two
 // processes cannot both read the same snapshot and drop each other's
 // reservation on save. Every write is preceded by a copy of the
-// previous file to ${backupDir}/<basename>-pre-<action>-<ts>.json so
+// previous file to ${backupDir}/<basename>-pre-<action>-<ts>[-<n>].json so
 // human mistakes (an accidental port collision the schema doesn't
 // catch, a corrupted file from a SIGKILL'd hook) can be recovered
 // without reconstructing port history by hand.
@@ -124,7 +124,7 @@ const LegacyPath = ".worktree-ports.json"
 const CanonicalPath = ".bough-ports.json"
 
 // Save writes the registry back to disk after copying the previous file
-// to ${BackupDir}/<basename>.pre-<action>-<ts>.json. The action label
+// to ${BackupDir}/<basename>-pre-<action>-<ts>[-<n>].json. The action label
 // (e.g. "allocate" / "cleanup") shows up in the backup filename so
 // reviewers can tell what mutation produced each backup.
 //
@@ -191,7 +191,17 @@ func (s *Store) backup(action string) error {
 	base = strings.TrimPrefix(base, ".")
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
 	ts := s.Now().UTC().Format("20060102-150405")
+	// Serialized creates save several times a second; a numbered suffix
+	// keeps each backup instead of letting the next one replace it.
 	dst := filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s.json", stem, action, ts))
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+			break
+		} else if err != nil {
+			return err
+		}
+		dst = filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s-%d.json", stem, action, ts, n))
+	}
 	return fsutil.CopyFile(s.Path, dst)
 }
 

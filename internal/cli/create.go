@@ -670,11 +670,19 @@ func warnIfRootNotGit(stderr io.Writer, cfg *config.Config, monorepoRoot string,
 // layout is in use: `.bough/` (registry + v0.11 checkouts), the real
 // worktrees dir (`worktrees/` or the legacy hidden `.worktrees/`), and
 // — for a monorepo still on the pre-v0.11 layout — every sub-repo whose
-// checkout sits directly at the root, which `.bough/` does not cover.
+// checkout sits directly at the root, plus a registry file (and the
+// `.lock` Store.Update keeps beside it) outside `.bough/`, neither of which
+// `.bough/` covers.
 func gitignoreSuggestions(cfg *config.Config, monorepoRoot string) []string {
 	set := map[string]struct{}{
 		boughDir + "/": {},
 		filepath.Base(worktreesDir(monorepoRoot)) + "/": {},
+	}
+	regPath := resolveRegistryPath(monorepoRoot, cfg.Registry.Path)
+	if rel, err := filepath.Rel(monorepoRoot, regPath); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, boughDir+string(filepath.Separator)) {
+		set[rel] = struct{}{}
+		set[rel+".lock"] = struct{}{}
 	}
 	for _, repo := range cfg.Repositories {
 		if resolveRepoSrc(monorepoRoot, repo.Name) == filepath.Join(monorepoRoot, repo.Name) {
