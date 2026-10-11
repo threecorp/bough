@@ -184,20 +184,23 @@ func TestStore_AtomicityPreservesOldFileOnEncodeFailure(t *testing.T) {
 	}
 }
 
-func TestRegistry_TakenByKind(t *testing.T) {
+func TestRegistry_Taken(t *testing.T) {
 	reg := Registry{
 		"A": {"mysql.main": 33000, "api.main": 36000},
 		"B": {"mysql.main": 33001, "api.main": 36001},
 		"C": {"mysql.main": 33002},
 	}
-	if got, want := len(TakenByKind(reg, "mysql.main")), 3; got != want {
-		t.Errorf("mysql.main taken: got %d want %d", got, want)
+	got := Taken(reg)
+	for _, p := range []int{33000, 33001, 33002, 36000, 36001} {
+		if !got[p] {
+			t.Errorf("port %d held by an entry is missing from Taken", p)
+		}
 	}
-	if got, want := len(TakenByKind(reg, "api.main")), 2; got != want {
-		t.Errorf("api.main taken: got %d want %d", got, want)
+	if len(got) != 5 {
+		t.Errorf("Taken = %v, want exactly the 5 held ports", got)
 	}
-	if len(TakenByKind(reg, "gateway.main")) != 0 {
-		t.Errorf("absent kind: want empty")
+	if len(Taken(Registry{})) != 0 {
+		t.Errorf("empty registry: want empty")
 	}
 }
 

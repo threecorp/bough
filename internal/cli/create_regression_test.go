@@ -259,3 +259,32 @@ func TestRunRemove_PreservesReservationCreatedDuringTeardown(t *testing.T) {
 		t.Errorf("concurrent reservation lost: (%d,%v), allocated %d", p, ok, ports["api"])
 	}
 }
+
+// TestAllocateAllPorts_OverlappingRangesGetDistinctPorts: the allocator
+// starts every kind at the same hash offset of the worktree name, so two
+// kinds sharing a range were handed the same port on every create.
+func TestAllocateAllPorts_OverlappingRangesGetDistinctPorts(t *testing.T) {
+	root := t.TempDir()
+	shared := [2]int{40000, 40099}
+	cfg := &config.Config{
+		Registry: config.RegistryConfig{Path: ".bough/ports.json"},
+		Engines: []config.Engine{
+			{Kind: "mysql", PortRanges: map[string][2]int{"main": shared}},
+			{Kind: "redis", PortRanges: map[string][2]int{"main": shared}},
+		},
+		Ports: map[string]config.PortRange{"api": {Range: shared}},
+	}
+	for _, name := range []string{"F-A", "F-B"} {
+		enginePorts, nonEnginePorts, err := allocateAllPorts(cfg, root, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[int]string{}
+		for kind, port := range map[string]int{"mysql": enginePorts["mysql"], "redis": enginePorts["redis"], "api": nonEnginePorts["api"]} {
+			if other, dup := seen[port]; dup {
+				t.Errorf("%s: %s and %s were both given port %d", name, kind, other, port)
+			}
+			seen[port] = kind
+		}
+	}
+}

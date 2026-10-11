@@ -278,9 +278,10 @@ func samePath(a, b string) bool {
 
 // WorktreeConflict is the refusal for a container OtherWorktree flagged.
 func WorktreeConflict(name, have, want string) error {
-	return fmt.Errorf("container %s belongs to the worktree at %s, not %s: another checkout of this monorepo "+
-		"has a worktree of the same name, so both were given the same port. bough leaves that container alone — "+
-		"name this worktree differently, or give this checkout its own port ranges", name, have, want)
+	return fmt.Errorf("container %s belongs to the worktree at %s, not %s: both were given the same port "+
+		"(another checkout with a worktree of the same name, or another monorepo sharing these port ranges). "+
+		"bough leaves that container alone — name this worktree differently, or give this checkout its own port ranges",
+		name, have, want)
 }
 
 // RemoveOwned force-removes a container, taking its anonymous volumes

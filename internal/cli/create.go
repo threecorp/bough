@@ -100,11 +100,6 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// wrapper and behave as before.
 	stderr = termio.Wrap(stderr)
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
-	// One probe, two consumers: whether the root is inside a work tree
-	// decides both the heads-up below and how the container is materialised,
-	// and monorepoRoot cannot change between them.
-	rootInGit, gitDetermined := insideGitWorkTree(monorepoRoot)
-	warnIfRootNotGit(stderr, cfg, monorepoRoot, rootInGit, gitDetermined)
 	worktreeRoot, err := worktreePathFor(monorepoRoot, name)
 	if err != nil {
 		return err
@@ -114,6 +109,11 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		return err
 	}
 	defer release()
+	// One probe, two consumers: whether the root is inside a work tree
+	// decides both the heads-up below and how the container is materialised,
+	// and monorepoRoot cannot change between them.
+	rootInGit, gitDetermined := insideGitWorkTree(monorepoRoot)
+	warnIfRootNotGit(stderr, cfg, monorepoRoot, rootInGit, gitDetermined)
 	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot, rootInGit && gitDetermined); err != nil {
 		return err
 	}
@@ -892,7 +892,7 @@ func allocateEngines(reg registry.Registry, cfg *config.Config, name string) (ma
 			continue
 		}
 		port, err := allocator.Allocate(name, "main", mainRange[0], rangeLen(mainRange),
-			registry.TakenByKind(reg, key))
+			registry.Taken(reg))
 		if err != nil {
 			return nil, fmt.Errorf("allocate %s.main port: %w", eng.Kind, err)
 		}
@@ -911,7 +911,7 @@ func allocateNonEnginePorts(reg registry.Registry, cfg *config.Config, name stri
 			continue
 		}
 		port, err := allocator.Allocate(name, "main", pr.Range[0], rangeLen(pr.Range),
-			registry.TakenByKind(reg, key))
+			registry.Taken(reg))
 		if err != nil {
 			return nil, fmt.Errorf("allocate %s port: %w", kind, err)
 		}

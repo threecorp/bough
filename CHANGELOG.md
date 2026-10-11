@@ -55,6 +55,13 @@
   remove could delete the datadir and worktree a concurrent create of the
   same name was starting an engine on. Each now holds
   `.bough/locks/<name>.lock` from start to finish; a second one waits.
+- **Kinds with overlapping port ranges no longer share a port.** Every
+  kind started at the same offset for a worktree name and only avoided
+  ports of its own kind, so two engines (or an engine and a `ports:`
+  entry) sharing a range got the same port on every create. Allocation
+  now avoids every port the registry holds; existing reservations are
+  kept as they are. A `ports:` entry named like an `engines[].kind`, which
+  shared that engine's registry key, is now a config error.
 
 ## v0.29.5
 

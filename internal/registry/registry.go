@@ -271,14 +271,15 @@ func Delete(reg Registry, name string) (map[string]int, bool) {
 	return entry, ok
 }
 
-// TakenByKind returns the set of ports currently held under `kind`
-// across every entry. This is the input the allocator expects in its
-// `taken` parameter — the registry knows the answer because it already
-// owns the whole table.
-func TakenByKind(reg Registry, kind string) map[int]bool {
+// Taken returns every port any entry holds, whatever its kind. This is
+// the input the allocator expects in its `taken` parameter: kinds may
+// declare overlapping ranges, and the allocator starts each kind at the
+// same hash offset of the worktree name, so a per-kind set handed two
+// kinds sharing a range the same port.
+func Taken(reg Registry) map[int]bool {
 	out := map[int]bool{}
 	for _, entry := range reg {
-		if p, ok := entry[kind]; ok {
+		for _, p := range entry {
 			out[p] = true
 		}
 	}

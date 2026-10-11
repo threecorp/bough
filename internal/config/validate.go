@@ -36,7 +36,8 @@ func (c *Config) deprecationWarnings() []string {
 //     low < high so the allocator never traps in an infinite probe.
 //     Every engine must have at least one entry.
 //  3. Each Ports[<kind>].Range must satisfy the same low<high
-//     constraint.
+//     constraint, and a Ports kind must not repeat an Engine.Kind:
+//     both would be stored under <kind>.main in the registry.
 //  4. Engine.Kind values must be unique — the allocator keys a
 //     worktree's ports by kind, so a second entry of the same kind
 //     would silently reuse the first one's port and env vars.
@@ -115,6 +116,11 @@ func (c *Config) validateSemantic() error {
 	for kind, pr := range c.Ports {
 		if pr.Range[0] <= 0 || pr.Range[1] <= pr.Range[0] {
 			errs = append(errs, fmt.Errorf("config: ports[%s].range=%v must be [low,high] with 0<low<high", kind, pr.Range))
+		}
+		// Both would be stored under <kind>.main in the registry, so the
+		// second allocation would hand out the engine's port again.
+		if seenKind[kind] {
+			errs = append(errs, fmt.Errorf("config: ports[%s] has the name of an engines[].kind; both would share the registry key %s.main — rename the ports entry", kind, kind))
 		}
 	}
 
