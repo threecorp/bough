@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,11 +119,13 @@ func readyCheckEnv(containerEnv []string) []string {
 }
 
 // checkRootLogin refuses the extras that leave root's password unknown to
-// bough: the ready check logs in as root, so with either key create would
-// wait out the whole ready timeout on a server that is already up.
+// bough: the ready check logs in as root, so with any of them create would
+// wait out the whole ready timeout on a server that is already up. Keys are
+// matched in any case, as buildDockerEnv upper-cases them all.
 func checkRootLogin(extras map[string]string) error {
-	for _, key := range []string{"random_root_password", "onetime_password"} {
-		if extras[key] != "" {
+	refused := []string{"random_root_password", "onetime_password", "root_password_file"}
+	for key, v := range extras {
+		if v != "" && slices.Contains(refused, strings.ToLower(key)) {
 			return fmt.Errorf("extras %s is not supported: bough's ready check logs in as root, "+
 				"so it needs root's password — set root_password instead", key)
 		}
@@ -191,7 +194,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	}
 
 	// Repeated WorktreeCreate reuses a matching container and records its image.
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot, req.Datadir)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {

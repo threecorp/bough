@@ -353,6 +353,47 @@ func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 	}
 }
 
+// TestProvider_Down_InspectFailureStopsNothing: the owner check used to
+// treat any docker inspect error as "nothing there" and went on to stop a
+// container it never identified. Only "No such object" may proceed.
+func TestProvider_Down_InspectFailureStopsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		stops   bool
+	}{
+		{"daemon error", "Error response from daemon: boom", false},
+		{"container already gone", "Error: No such object: bough-compose-56128", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			t.Setenv("FAKE_DOCKER_MESSAGE", tc.message)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in inspect) echo \"$FAKE_DOCKER_MESSAGE\" >&2; exit 1;; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			worktreeRoot := t.TempDir()
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56128}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			b, _ := os.ReadFile(record)
+			stopped := strings.Contains(string(b), " stop ")
+			if stopped != tc.stops {
+				t.Errorf("stop called = %v, want %v (Down err %v); calls:\n%s", stopped, tc.stops, err, b)
+			}
+			if !tc.stops && err == nil {
+				t.Error("Down succeeded although docker inspect failed")
+			}
+		})
+	}
+}
+
 // TestProvider_Down_BoundsHungCommands: a `compose stop` or `rm` that never
 // returns (a pre_stop hook, a stuck daemon) gives up after cmdWait instead
 // of holding the remove forever, even when a leftover child keeps the

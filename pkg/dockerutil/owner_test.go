@@ -23,6 +23,7 @@ type fakeDaemon struct {
 	name          string
 	inspectStatus int
 	labels        map[string]string
+	binds         []string
 	running       bool
 
 	mu      sync.Mutex
@@ -43,9 +44,10 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"Id":     fakeID,
-			"Config": map[string]any{"Image": "mysql:8.4", "Labels": f.labels},
-			"State":  map[string]any{"Running": f.running},
+			"Id":         fakeID,
+			"Config":     map[string]any{"Image": "mysql:8.4", "Labels": f.labels},
+			"HostConfig": map[string]any{"Binds": f.binds},
+			"State":      map[string]any{"Running": f.running},
 		})
 	case r.Method == http.MethodDelete && strings.HasSuffix(path, "/containers/"+fakeID):
 		f.mu.Lock()
@@ -93,7 +95,7 @@ func TestUpOrReuse_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 	owner, other := t.TempDir(), t.TempDir()
 	for _, running := range []bool{true, false} {
 		f := &fakeDaemon{name: "bough-mysql-36000", labels: worktreeLabels(owner), running: running}
-		_, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", other)
+		_, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", other, "")
 		if err == nil {
 			t.Fatalf("running=%v: UpOrReuse accepted a container another worktree created", running)
 		}
@@ -129,7 +131,7 @@ func TestUpOrReuse_ReusesItsOwnWorktreesContainer(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeDaemon{name: "bough-mysql-36000", labels: tc.labels, running: true}
-			skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", tc.want)
+			skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", tc.want, "")
 			if err != nil || !skip {
 				t.Errorf("UpOrReuse = (%v, %v), want (true, nil)", skip, err)
 			}
@@ -142,7 +144,7 @@ func TestUpOrReuse_ReusesItsOwnWorktreesContainer(t *testing.T) {
 // owner and image were never checked. Only "already gone" may proceed.
 func TestUpOrReuse_InspectFailureKeepsTheContainer(t *testing.T) {
 	f := &fakeDaemon{name: "bough-mysql-36000", inspectStatus: http.StatusInternalServerError}
-	if _, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", t.TempDir()); err == nil {
+	if _, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", t.TempDir(), ""); err == nil {
 		t.Error("UpOrReuse succeeded although inspect failed")
 	}
 	if f.wasRemoved() {
@@ -150,7 +152,7 @@ func TestUpOrReuse_InspectFailureKeepsTheContainer(t *testing.T) {
 	}
 
 	gone := &fakeDaemon{name: "bough-mysql-36000", inspectStatus: http.StatusNotFound}
-	skip, err := UpOrReuse(context.Background(), newFakeClient(t, gone), gone.name, "mysql:8.4", t.TempDir())
+	skip, err := UpOrReuse(context.Background(), newFakeClient(t, gone), gone.name, "mysql:8.4", t.TempDir(), "")
 	if err != nil || skip {
 		t.Errorf("container vanished before inspect: UpOrReuse = (%v, %v), want (false, nil)", skip, err)
 	}
@@ -183,5 +185,53 @@ func TestLabels_WorktreeRoot(t *testing.T) {
 	}
 	if _, ok := Labels("mysql", "mysql:8.4", 36000, "")[LabelWorktreeRoot]; ok {
 		t.Error("an empty worktree root must not be stamped")
+	}
+}
+
+// TestUpOrReuse_UnlabelledContainerOfAnotherDatadir: a container made
+// before the worktree label existed still names its datadir in its bind
+// mount, so another checkout's legacy container is refused too.
+func TestUpOrReuse_UnlabelledContainerOfAnotherDatadir(t *testing.T) {
+	own, other := t.TempDir(), t.TempDir()
+	cases := []struct {
+		name    string
+		bind    string
+		refused bool
+	}{
+		{"bind of another live datadir", other + ":/var/lib/mysql", true},
+		{"bind of this datadir", own + ":/var/lib/mysql", false},
+		{"bind of a datadir that no longer exists", filepath.Join(other, "gone") + ":/var/lib/mysql", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDaemon{name: "bough-mysql-36000", labels: map[string]string{LabelManaged: "true"}, binds: []string{tc.bind}, running: true}
+			skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", t.TempDir(), own)
+			if tc.refused && err == nil {
+				t.Error("UpOrReuse reused a legacy container bound to another datadir")
+			}
+			if !tc.refused && (err != nil || !skip) {
+				t.Errorf("UpOrReuse = (%v, %v), want (true, nil)", skip, err)
+			}
+			if f.wasRemoved() {
+				t.Error("UpOrReuse removed the container")
+			}
+		})
+	}
+}
+
+// TestOtherWorktree_CaseDifferentSpelling: a cwd typed in another case on a
+// case-insensitive filesystem is the same worktree, not a foreign one.
+func TestOtherWorktree_CaseDifferentSpelling(t *testing.T) {
+	base := t.TempDir()
+	owner := filepath.Join(base, "Owner")
+	if err := os.Mkdir(owner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "owner")
+	if _, err := os.Stat(alias); err != nil {
+		t.Skip("case-sensitive filesystem")
+	}
+	if got := OtherWorktree(owner, alias); got != "" {
+		t.Errorf("OtherWorktree(%q, %q) = %q, want \"\" (same directory)", owner, alias, got)
 	}
 }

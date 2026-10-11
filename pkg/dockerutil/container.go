@@ -164,7 +164,9 @@ func shellQuote(s string) string {
 // directory other than wantWorktree) is an error too, running or stopped:
 // reusing it would point this worktree at that one's database, and
 // removing it would delete that database's container. wantWorktree == ""
-// skips the check.
+// skips the check. A container without the label (made by an older bough)
+// is checked by its bind mounts instead: one that binds another live
+// directory and not wantDatadir is refused the same way.
 //
 // A container created from another image — running or stopped — is an
 // error rather than a reuse or a recreate: engines[].version picks the
@@ -176,7 +178,7 @@ func shellQuote(s string) string {
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
-func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWorktree string) (bool, error) {
+func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWorktree, wantDatadir string) (bool, error) {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return false, err
@@ -195,6 +197,11 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWor
 	}
 	if have := otherWorktree(info.Config, wantWorktree); have != "" {
 		return false, WorktreeConflict(name, have, wantWorktree)
+	}
+	if info.Config == nil || info.Config.Labels[LabelWorktreeRoot] == "" {
+		if have := otherDatadir(info.HostConfig, wantDatadir); have != "" {
+			return false, WorktreeConflict(name, have, wantDatadir)
+		}
 	}
 	have := configImage(info.Config)
 	if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
@@ -265,20 +272,43 @@ func OtherWorktree(have, want string) string {
 	return have
 }
 
-// samePath compares two spellings of a directory, resolving symlinks so a
-// worktree reached through /tmp and /private/tmp is still one worktree.
+// samePath compares two spellings of a directory by the file they open,
+// so a worktree reached through /tmp and /private/tmp, or typed in another
+// letter case on a case-insensitive filesystem, is still one worktree.
 func samePath(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
 	}
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && ra == rb
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
+}
+
+// otherDatadir is the owner check for a container made before
+// LabelWorktreeRoot existed: its bind mounts still name the datadir it was
+// created for. It returns a live bind source when none of the binds is
+// want, and "" when want is empty, the container has no binds, or a bind
+// is want or no longer exists.
+func otherDatadir(hostCfg *container.HostConfig, want string) string {
+	if hostCfg == nil || want == "" || len(hostCfg.Binds) == 0 {
+		return ""
+	}
+	other := ""
+	for _, bind := range hostCfg.Binds {
+		src, _, _ := strings.Cut(bind, ":")
+		if samePath(src, want) {
+			return ""
+		}
+		if _, err := os.Stat(src); err == nil && other == "" {
+			other = src
+		}
+	}
+	return other
 }
 
 // WorktreeConflict is the refusal for a container OtherWorktree flagged.
 func WorktreeConflict(name, have, want string) error {
-	return fmt.Errorf("container %s belongs to the worktree at %s, not %s: both were given the same port "+
+	return fmt.Errorf("container %s belongs to %s, not %s: both were given the same port "+
 		"(another checkout with a worktree of the same name, or another monorepo sharing these port ranges). "+
 		"bough leaves that container alone — name this worktree differently, or give this checkout its own port ranges",
 		name, have, want)

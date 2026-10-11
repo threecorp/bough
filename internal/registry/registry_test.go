@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -158,6 +159,33 @@ func TestStore_BackupsInTheSameSecondAllSurvive(t *testing.T) {
 	}
 	if !sizes[1] || !sizes[2] {
 		t.Errorf("backups hold registries of sizes %v, want the 1- and 2-entry versions", sizes)
+	}
+}
+
+// TestStore_SharedBackupDirKeepsEveryBackup: monorepos may share one
+// backup_dir, and their registries are all named ports.json, so stores
+// under different locks saving in the same second raced for one name.
+func TestStore_SharedBackupDirKeepsEveryBackup(t *testing.T) {
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	const stores, saves = 4, 20
+	var wg sync.WaitGroup
+	for i := 0; i < stores; i++ {
+		s := &Store{Path: filepath.Join(t.TempDir(), "ports.json"), BackupDir: backupDir, Now: fixedClock("20260101-120000")}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < saves; j++ {
+				if err := s.Save(Registry{"A": {"mysql.main": 33000 + j}}, "allocate"); err != nil {
+					t.Errorf("Save: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	backups, _ := filepath.Glob(filepath.Join(backupDir, "*.json"))
+	if want := stores * (saves - 1); len(backups) != want {
+		t.Errorf("got %d backups, want %d (one per overwrite of each store)", len(backups), want)
 	}
 }
 

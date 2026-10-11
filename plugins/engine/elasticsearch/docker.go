@@ -362,7 +362,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("elasticsearch docker: data image check: %w", err)
 	}
 
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot, req.Datadir)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {

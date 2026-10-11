@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +34,8 @@ const (
 	worktreesName = "worktrees"
 	legacyWtName  = ".worktrees"
 	locksSubdir   = "locks"
+	// maxLockNameBytes keeps <name>.lock under the common 255-byte limit.
+	maxLockNameBytes = 200
 )
 
 // resolveRepoSrc answers "where does this repo's source checkout live?"
@@ -62,17 +69,48 @@ func worktreesDir(monorepoRoot string) string {
 	return filepath.Join(monorepoRoot, worktreesName)
 }
 
-// worktreePathFor is <worktrees-dir>/<name>, refusing a name that resolves
-// to the worktrees dir itself or outside it: remove rm -rf's this path, so
-// `--name ..` would otherwise delete the monorepo root.
+// worktreePathFor is <worktrees-dir>/<name>, refusing a name that is not
+// one plain directory name there: remove rm -rf's this path, so `..` would
+// delete the monorepo root, "feat" would delete a nested "feat/x", and a
+// spelling such as "b/" would reach worktrees/b under a name the registry
+// and the worktree lock do not know.
 func worktreePathFor(monorepoRoot, name string) (string, error) {
 	dir := worktreesDir(monorepoRoot)
-	path := filepath.Join(dir, name)
-	rel, err := filepath.Rel(dir, path)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("worktree name %q must name a directory inside %s", name, dir)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return "", fmt.Errorf("worktree name %q must be one directory name inside %s", name, dir)
 	}
-	return path, nil
+	if err := checkWorktreeEntry(dir, name); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// checkWorktreeEntry refuses <dir>/<name> when it exists as a symlink or
+// only as a case alias of another entry. remove runs pre_remove, Cleanup
+// and the git fallback rm -rf inside the worktree, so a symlink sent them
+// to its target; a case alias on a case-insensitive filesystem opened
+// another worktree whose registry entry and lock key on its real name.
+func checkWorktreeEntry(dir, name string) error {
+	info, err := os.Lstat(filepath.Join(dir, name))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("worktree %s is a symlink; bough only manages the directories it created", filepath.Join(dir, name))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("worktree name %q matches an existing directory in %s only by letter case; use its exact name", name, dir)
 }
 
 // lockWorktree serializes create and remove of one worktree name across
@@ -82,7 +120,14 @@ func worktreePathFor(monorepoRoot, name string) (string, error) {
 // an engine on. The lock file lives at <root>/.bough/locks/<name>.lock
 // and is never deleted (see fsutil.Lock).
 func lockWorktree(monorepoRoot, name string) (release func(), err error) {
-	path := filepath.Join(monorepoRoot, boughDir, locksSubdir, url.PathEscape(name)+".lock")
+	file := url.PathEscape(name)
+	if len(file) > maxLockNameBytes {
+		// Escaping turns each UTF-8 byte into %XX; a long non-ASCII name
+		// would exceed the 255-byte file-name limit.
+		sum := sha256.Sum256([]byte(name))
+		file = hex.EncodeToString(sum[:])
+	}
+	path := filepath.Join(monorepoRoot, boughDir, locksSubdir, file+".lock")
 	release, err = fsutil.Lock(path)
 	if err != nil {
 		return nil, fmt.Errorf("lock worktree %s: %w", name, err)

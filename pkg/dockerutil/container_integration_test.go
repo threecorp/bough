@@ -131,7 +131,7 @@ func TestUpOrReuse_SkipsRunning(t *testing.T) {
 	name := fmt.Sprintf("bough-test-reuse-%d", time.Now().UnixNano())
 	_ = createSleepContainer(t, cli, name, true)
 
-	skip, err := UpOrReuse(context.Background(), cli, name, testImage, "")
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage, "", "")
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
 	id := createSleepContainer(t, cli, name, true)
 	ctx := context.Background()
 
-	_, err := UpOrReuse(ctx, cli, name, "alpine:3.19", "")
+	_, err := UpOrReuse(ctx, cli, name, "alpine:3.19", "", "")
 	if err == nil {
 		t.Fatal("UpOrReuse reused a container running alpine:3.20 for a config asking for alpine:3.19")
 	}
@@ -167,7 +167,7 @@ func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
 		t.Errorf("the refused container must keep running untouched (inspect err=%v)", ierr)
 	}
 
-	skip, err := UpOrReuse(ctx, cli, name, "", "")
+	skip, err := UpOrReuse(ctx, cli, name, "", "", "")
 	if err != nil || !skip {
 		t.Errorf("UpOrReuse with no wanted image = (%v, %v), want (true, nil): compose owns its image", skip, err)
 	}
@@ -236,7 +236,7 @@ func TestUpOrReuse_SameImageAnotherSpellingReuses(t *testing.T) {
 	name := fmt.Sprintf("bough-test-spell-%d", time.Now().UnixNano())
 	_ = createSleepContainer(t, cli, name, true)
 
-	skip, err := UpOrReuse(context.Background(), cli, name, "docker.io/library/"+testImage, "")
+	skip, err := UpOrReuse(context.Background(), cli, name, "docker.io/library/"+testImage, "", "")
 	if err != nil || !skip {
 		t.Errorf("UpOrReuse = (%v, %v), want (true, nil) for the same image spelled with its registry prefix", skip, err)
 	}
@@ -254,7 +254,7 @@ func TestUpOrReuse_RefusesAStoppedContainerOnAnotherImage(t *testing.T) {
 	name := fmt.Sprintf("bough-test-stopswap-%d", time.Now().UnixNano())
 	_ = createSleepContainer(t, cli, name, false)
 
-	if _, err := UpOrReuse(context.Background(), cli, name, "alpine:3.19", ""); err == nil {
+	if _, err := UpOrReuse(context.Background(), cli, name, "alpine:3.19", "", ""); err == nil {
 		t.Fatal("UpOrReuse recreated a stopped alpine:3.20 container for a config asking for alpine:3.19")
 	}
 	if id, _ := LookupByName(context.Background(), cli, name); id == "" {
@@ -312,7 +312,7 @@ func TestUpOrReuse_StoppedContainerVolumes(t *testing.T) {
 				_ = cli.VolumeRemove(context.Background(), volume, true)
 			})
 
-			if _, err := UpOrReuse(ctx, cli, name, tc.wantImage, ""); err != nil {
+			if _, err := UpOrReuse(ctx, cli, name, tc.wantImage, "", ""); err != nil {
 				t.Fatalf("UpOrReuse: %v", err)
 			}
 			_, verr := cli.VolumeInspect(ctx, volume)
@@ -333,7 +333,7 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 	// Up failure.
 	_ = createSleepContainer(t, cli, name, false)
 
-	skip, err := UpOrReuse(context.Background(), cli, name, testImage, "")
+	skip, err := UpOrReuse(context.Background(), cli, name, testImage, "", "")
 	if err != nil {
 		t.Fatalf("UpOrReuse: %v", err)
 	}
@@ -450,13 +450,13 @@ func TestUpOrReuse_RefusesAnotherWorktreesContainerOnTheDaemon(t *testing.T) {
 		t.Fatalf("ContainerStart: %v", err)
 	}
 
-	if _, err := UpOrReuse(ctx, cli, name, testImage, other); err == nil {
+	if _, err := UpOrReuse(ctx, cli, name, testImage, other, ""); err == nil {
 		t.Error("UpOrReuse reused another worktree's container")
 	}
 	if err := CheckWorktree(ctx, cli, resp.ID, name, other); err == nil {
 		t.Error("CheckWorktree accepted another worktree's container")
 	}
-	if skip, err := UpOrReuse(ctx, cli, name, testImage, owner); err != nil || !skip {
+	if skip, err := UpOrReuse(ctx, cli, name, testImage, owner, ""); err != nil || !skip {
 		t.Errorf("UpOrReuse for the owning worktree = (%v, %v), want (true, nil)", skip, err)
 	}
 }

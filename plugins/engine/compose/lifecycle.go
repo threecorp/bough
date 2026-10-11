@@ -97,7 +97,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
-	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
+	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot, "")
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
 	}
@@ -274,8 +274,9 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 
 // checkOwner refuses to stop bough-compose-<port> when its worktree-root
 // label names another checkout's worktree of the same name. It asks the
-// docker CLI, like the rest of Down; a container docker cannot inspect
-// (already gone, or no daemon) is left to compose stop to report.
+// docker CLI, like the rest of Down. Only a container docker reports gone
+// lets Down go on unchecked; any other inspect failure stops Down, since
+// compose stop would then act on a container nobody identified.
 func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot string) error {
 	name := fmt.Sprintf("bough-compose-%d", port)
 	ictx, cancel := context.WithTimeout(ctx, p.cmdWait)
@@ -283,9 +284,14 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot string
 	cmd := exec.CommandContext(ictx, "docker", "inspect", "--format",
 		`{{index .Config.Labels "`+dockerutil.LabelWorktreeRoot+`"}}`, name)
 	cmd.WaitDelay = p.pipeWait
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil
+		if strings.Contains(stderr.String(), "No such object") {
+			return nil
+		}
+		return fmt.Errorf("docker inspect %s: %w\n%s", name, err, stderr.String())
 	}
 	if have := dockerutil.OtherWorktree(strings.TrimSpace(string(out)), worktreeRoot); have != "" {
 		return dockerutil.WorktreeConflict(name, have, worktreeRoot)

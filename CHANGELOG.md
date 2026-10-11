@@ -23,10 +23,13 @@
   them. Plain `bough create` stays best-effort.
 - **`bough remove --name ..` no longer deletes the monorepo root.** A name
   was joined onto the worktrees dir unchecked, so `..` resolved to the
-  root and remove ran `rm -rf` on it. `create`, `remove` and `verify` now
-  refuse a name that resolves to the worktrees dir or outside it, and
-  `remove --path` (and the `WorktreeRemove` hook) refuses a path whose
-  parent is not a `worktrees/` or `.worktrees/` dir.
+  root and remove ran `rm -rf` on it; `feat` removed a nested `feat/x`,
+  and `b/` reached `worktrees/b` while skipping `b`'s engines. `create`,
+  `remove` and `verify` now take only a single directory name, and refuse
+  a worktree that is a symlink or that matches an existing one only by
+  letter case. `remove --path` (and the `WorktreeRemove` hook) refuses a
+  path whose parent is not a `worktrees/` or `.worktrees/` dir, and
+  resolves a relative path against the current directory.
 - **A second clone no longer takes over the first clone's database.**
   Engine containers are named `bough-<engine>-<port>` (`bough-compose-<port>`
   for `kind: compose`) and the port is a hash of the worktree name, so two checkouts of one monorepo with a
@@ -34,22 +37,28 @@
   one (pointing the second worktree at the first one's data) and remove
   stopped it. Containers now carry a `com.bough.worktree-root` label, and
   create and remove refuse a container whose label names another existing
-  worktree. Containers made before this release have no label and behave
-  as before.
+  worktree. A container made before this release has no label; create
+  checks its bind mounts instead and refuses one bound to another live
+  datadir, while remove still stops it as before.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
-  checking its image; it now reports the error.
+  checking its image; it now reports the error. A `kind: compose` remove
+  likewise stops only when `docker inspect` succeeds or reports the
+  container gone.
 - **Registry backups written in the same second all survive.** The
   backup name carried the time to the second, so each save in that second
-  replaced the backup before it; a numbered suffix now keeps every one.
+  replaced the backup before it, also across monorepos sharing one
+  `backup_dir`. The name is now claimed exclusively, and a taken one gets
+  a numbered suffix.
 - **`bough create`'s `.gitignore` hint names a registry outside
   `.bough/`.** On the pre-v0.11 layout the registry is `.bough-ports.json`
   at the root, and it and its new `.lock` were missing from the list.
 - **A mysql engine with `extras: {root_password: …}` becomes ready.** The
   ready check logged in as root without a password and timed out on a
   server that was up; it now uses the container's `MYSQL_ROOT_PASSWORD`.
-  `random_root_password` and `onetime_password`, which leave root's
-  password unknown to bough, are refused when the engine starts.
+  `random_root_password`, `onetime_password` and `root_password_file`,
+  which leave root's password unknown to bough, are refused (in any letter
+  case) when the engine starts.
 - **`bough create` and `bough remove` of the same worktree name run one
   at a time.** The registry lock covered only its own load and save, so a
   remove could delete the datadir and worktree a concurrent create of the

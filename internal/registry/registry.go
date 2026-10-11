@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -178,18 +179,45 @@ func (s *Store) backup(action string) error {
 	base = strings.TrimPrefix(base, ".")
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
 	ts := s.Now().UTC().Format("20060102-150405")
-	// Serialized creates save several times a second; a numbered suffix
-	// keeps each backup instead of letting the next one replace it.
-	dst := filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s.json", stem, action, ts))
-	for n := 2; ; n++ {
-		if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
-			break
-		} else if err != nil {
+	// Serialized creates save several times a second, and monorepos may
+	// share one backup dir, so the name is claimed with O_EXCL and a taken
+	// one moves to the next numbered suffix instead of being replaced.
+	for n := 1; ; n++ {
+		dst := filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s.json", stem, action, ts))
+		if n > 1 {
+			dst = filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s-%d.json", stem, action, ts, n))
+		}
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
 			return err
 		}
-		dst = filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s-%d.json", stem, action, ts, n))
+		return s.copyInto(out, dst)
 	}
-	return fsutil.CopyFile(s.Path, dst)
+}
+
+// copyInto writes the current registry into out, a backup file backup
+// just created, and removes it again on failure.
+func (s *Store) copyInto(out *os.File, dst string) error {
+	in, err := os.Open(s.Path)
+	if err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) atomicWriteJSON(reg Registry) error {

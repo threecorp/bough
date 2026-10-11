@@ -234,7 +234,7 @@ func TestReadyCheckEnv(t *testing.T) {
 // can give the ready check root's password, so create used to time out;
 // Up now says why before starting anything.
 func TestCheckRootLogin(t *testing.T) {
-	for _, key := range []string{"random_root_password", "onetime_password"} {
+	for _, key := range []string{"random_root_password", "onetime_password", "root_password_file", "RANDOM_ROOT_PASSWORD"} {
 		err := checkRootLogin(map[string]string{key: "yes"})
 		if err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("extras %s: checkRootLogin = %v, want an error naming the key", key, err)

@@ -235,23 +235,59 @@ func TestWorktreesDir(t *testing.T) {
 	})
 }
 
-// TestWorktreePathFor pins the guard every name-based entry point shares: a
-// name that resolves to the worktrees dir itself or outside it ("..",
-// "../x") is refused, because remove would otherwise rm -rf the monorepo
-// root or a sibling of it.
+// TestWorktreePathFor pins the guard every name-based entry point shares.
+// A worktree name is one directory name: "..", "../x" reached the monorepo
+// root, "feat" on a nested "feat/x" made remove delete feat/x, and "b/",
+// "./b", "/b" or "a/../b" reached worktrees/b under a name the registry
+// and lock did not know.
 func TestWorktreePathFor(t *testing.T) {
 	root := t.TempDir()
 	dir := worktreesDir(root)
-	for _, name := range []string{"F-Auth", "feat/x"} {
+	for _, name := range []string{"F-Auth", "fix.1_x"} {
 		got, err := worktreePathFor(root, name)
 		if err != nil || got != filepath.Join(dir, name) {
 			t.Errorf("worktreePathFor(%q) = (%q, %v), want %q", name, got, err, filepath.Join(dir, name))
 		}
 	}
-	for _, name := range []string{"", ".", "..", "../x", "a/../..", "../worktrees-x"} {
+	for _, name := range []string{"", ".", "..", "../x", "a/../..", "../worktrees-x", "feat/x", "b/", "./b", "/b", "a/../b", `a\b`} {
 		if got, err := worktreePathFor(root, name); err == nil {
 			t.Errorf("worktreePathFor(%q) = %q, want an error", name, got)
 		}
+	}
+}
+
+// TestWorktreePathFor_RefusesASymlinkedWorktree: remove runs pre_remove,
+// Cleanup and the git fallback rm -rf inside the worktree's repos, so a
+// worktrees/<name> symlink pointed all of them at its target.
+func TestWorktreePathFor_RefusesASymlinkedWorktree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(worktreesDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(worktreesDir(root), "F-Link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktreePathFor(root, "F-Link"); err == nil {
+		t.Error("worktreePathFor accepted a symlinked worktree dir")
+	}
+}
+
+// TestWorktreePathFor_RefusesACaseAlias: on a case-insensitive filesystem
+// "F-AUTH" opens worktrees/F-Auth, but the registry and lock key on the
+// name, so remove skipped F-Auth's engines and deleted its datadir.
+func TestWorktreePathFor_RefusesACaseAlias(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktreesDir(root), "F-Auth"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreesDir(root), "F-AUTH")); err != nil {
+		t.Skip("case-sensitive filesystem: F-AUTH is a different directory here")
+	}
+	if _, err := worktreePathFor(root, "F-AUTH"); err == nil {
+		t.Error("worktreePathFor accepted F-AUTH for the existing F-Auth")
+	}
+	if _, err := worktreePathFor(root, "F-Auth"); err != nil {
+		t.Errorf("worktreePathFor refused the exact name: %v", err)
 	}
 }
 
@@ -269,6 +305,21 @@ func TestResolveRemoveTarget_RefusesTargetOutsideWorktrees(t *testing.T) {
 	want := filepath.Join(worktreesDir(root), "F-Auth")
 	if _, name, path, err := resolveRemoveTarget("", want); err != nil || name != "F-Auth" || path != want {
 		t.Errorf("worktree path = (%q, %q, %v), want (F-Auth, %q, nil)", name, path, err, want)
+	}
+	// A relative --path used to reach Down as a relative WorktreeRoot, so
+	// the owner check refused this worktree's own container.
+	if _, _, path, err := resolveRemoveTarget("", filepath.Join(worktreesName, "F-Auth")); err != nil || !filepath.IsAbs(path) {
+		t.Errorf("relative worktree path resolved to (%q, %v), want an absolute path", path, err)
+	}
+	if err := os.MkdirAll(worktreesDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(worktreesDir(root), "F-Link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := resolveRemoveTarget("", link); err == nil {
+		t.Error("a symlinked worktree path was accepted")
 	}
 }
 
@@ -382,4 +433,14 @@ func TestCreate_WaitsForSameNameLifecycle(t *testing.T) {
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 	waitBlocked(t, release, cmd.Execute, func() bool { _, err := os.Stat(wt); return os.IsNotExist(err) })
+}
+
+// TestLockWorktree_LongName: escaping turns each UTF-8 byte into %XX, so a
+// long non-ASCII name exceeded the 255-byte file-name limit.
+func TestLockWorktree_LongName(t *testing.T) {
+	release, err := lockWorktree(t.TempDir(), strings.Repeat("機能", 30))
+	if err != nil {
+		t.Fatalf("lockWorktree: %v", err)
+	}
+	release()
 }
