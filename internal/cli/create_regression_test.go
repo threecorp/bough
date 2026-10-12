@@ -146,7 +146,7 @@ func TestCreate_MigrationFailurePropagates(t *testing.T) {
 			if err := os.MkdirAll(repo, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			for _, args := range [][]string{{"init", "-b", "main"}, {"commit", "--allow-empty", "-m", "test fixture"}} {
+			for _, args := range [][]string{{"init", "-b", "main"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "test fixture"}} {
 				c := exec.Command("git", args...)
 				c.Dir = repo
 				if out, err := c.CombinedOutput(); err != nil {
