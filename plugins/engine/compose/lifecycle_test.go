@@ -474,7 +474,7 @@ func TestProvider_Up_KeepsTheRecordedProjectEvenWhenShared(t *testing.T) {
 // TestForeignOwner_RecordedComposeFiles: docker compose joins the config
 // file paths with commas, which a path may itself contain, and records
 // them as the caller spelled them. A recorded file is this worktree's only
-// when it is the same file as this worktree's compose or override file.
+// when it is the same file as this worktree's override file.
 func TestForeignOwner_RecordedComposeFiles(t *testing.T) {
 	base := t.TempDir()
 	worktreeRoot := filepath.Join(base, "feat,one", "demo-api")
@@ -567,21 +567,18 @@ func TestProvider_Up_RefusesAChangedExplicitProject(t *testing.T) {
 	}
 }
 
-// TestProvider_Up_ChangedProjectOfAStoppedContainerIsAllowed: only a
-// running container pins the project; a stopped one is removed and the
-// service starts in the project the config now names.
-func TestProvider_Up_ChangedProjectOfAStoppedContainerIsAllowed(t *testing.T) {
+// TestResolveProject_ChangedProjectIsRefusedInEveryState: a restarting or
+// paused container counts as running for reuse, and recreating a stopped
+// one could fail with the old sidecar left naming the old project, so any
+// container of this worktree pins the project until `bough remove`.
+func TestResolveProject_ChangedProjectIsRefusedInEveryState(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
-	fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+worktreeRoot+`\t\texited\n';; esac`)
-	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(worktreeRoot, "compose.yml"), []byte("services: {redis: {image: redis:7-alpine}}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := New().resolveProject(context.Background(), worktreeRoot, 56135, "demo-api/compose.yml", "redis", "new", nil)
-	if err != nil || got != "new" {
-		t.Errorf("resolveProject = (%q, %v), want (new, nil) for a stopped container", got, err)
+	for _, state := range []string{"running", "restarting", "paused", "exited", "created"} {
+		fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+worktreeRoot+`\t\t`+state+`\n';; esac`)
+		_, err := New().resolveProject(context.Background(), worktreeRoot, 56135, "demo-api/compose.yml", "redis", "new", nil)
+		if err == nil || !strings.Contains(err.Error(), "bough remove") {
+			t.Errorf("%s: resolveProject = %v, want a refusal that points at bough remove", state, err)
+		}
 	}
 }
 
@@ -605,12 +602,13 @@ func TestCheckOwner_RefusalNeverAdvisesDeletingTheOtherContainer(t *testing.T) {
 // Down with nothing to stop, so the published port blocked remove.
 func TestProvider_Down_RemovesItsOwnContainerWithoutASidecar(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
-	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\tp\t`+worktreeRoot+`\t\trunning\n';; esac`)
+	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1id\tp\t`+worktreeRoot+`\t\trunning\n';; esac`)
 	if err := New().Down(context.Background(), &api.DownReq{Ports: []int{56137}, WorktreeRoot: worktreeRoot}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
-	if b, _ := os.ReadFile(record); !strings.Contains(string(b), "rm -f bough-compose-56137") {
-		t.Errorf("Down did not remove its own container; calls:\n%s", b)
+	// By the checked ID: the name may have been reused in between.
+	if b, _ := os.ReadFile(record); !strings.Contains(string(b), "rm -f c1id") {
+		t.Errorf("Down did not remove its own container by ID; calls:\n%s", b)
 	}
 }
 

@@ -158,22 +158,23 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 // own container's label, so an existing service keeps its project and its
 // named volumes; else composeProjectName for this worktree. A recorded
 // project is never swapped for another, by bough or by a changed
-// compose.project: the running container would stay in the old one while
-// the sidecar named the new one. Up refuses a recorded project that holds
-// another worktree's container instead.
+// compose.project while this worktree's container exists: the container
+// would stay in the old one while the sidecar named the new one. Up
+// refuses a recorded project that holds another worktree's container.
 func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port int, file, service, explicit string, ownFiles []string) (string, error) {
 	if explicit != "" {
-		// This worktree's running container keeps the project it was
-		// started in; a changed compose.project would leave it there while
-		// the sidecar named the new one. A stopped one is removed by
-		// UpOrReuse and the service starts in the new project.
+		// This worktree's container keeps the project it was created in,
+		// whatever its state: reusing a running (or restarting, or paused)
+		// one would leave it there while the sidecar named the new project,
+		// and recreating a stopped one could fail midway with the old
+		// sidecar still naming the old project. `bough remove` clears it.
 		own, err := p.listContainers(ctx, fmt.Sprintf("name=^bough-compose-%d$", port))
 		if err != nil {
 			return "", err
 		}
 		for _, c := range own {
-			if c.State == "running" && c.Project != "" && c.Project != explicit && foreignOwner(c, worktreeRoot, ownFiles) == "" {
-				return "", fmt.Errorf("compose.project is %s, but this worktree's container bough-compose-%d runs in project %s: "+
+			if c.Project != "" && c.Project != explicit && foreignOwner(c, worktreeRoot, ownFiles) == "" {
+				return "", fmt.Errorf("compose.project is %s, but this worktree's container bough-compose-%d is in project %s: "+
 					"`bough remove` this worktree and create it again to move it", explicit, port, c.Project)
 			}
 		}
@@ -213,13 +214,15 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 		if foreignOwner(c, worktreeRoot, []string{overrideFilePath(worktreeRoot, port)}) != "" {
 			continue
 		}
+		// By the ID that was checked, not the name: another create may have
+		// reused the name in between.
 		rctx, cancel := context.WithTimeout(ctx, p.cmdWait)
-		cmd := exec.CommandContext(rctx, "docker", "rm", "-f", name)
+		cmd := exec.CommandContext(rctx, "docker", "rm", "-f", c.ID)
 		cmd.WaitDelay = p.pipeWait
 		out, err := cmd.CombinedOutput()
 		cancel()
-		if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
-			return fmt.Errorf("docker rm -f %s: %w\n%s", name, err, out)
+		if err != nil && !errors.Is(err, exec.ErrWaitDelay) && !strings.Contains(string(out), "No such container") {
+			return fmt.Errorf("docker rm -f %s (%s): %w\n%s", c.ID, name, err, out)
 		}
 	}
 	return nil

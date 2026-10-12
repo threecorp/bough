@@ -61,8 +61,11 @@
   service, since `compose up` also starts the dependencies; remove checks
   the one service it stops, and removes the worktree's own container even
   when an interrupted create never recorded its state. Changing
-  `compose.project` while the worktree's container runs in the old
-  project is refused too.
+  `compose.project` while the worktree's container still exists in the
+  old project is refused too, until `bough remove` clears it. A container
+  made before this release whose override file under `.local/` was
+  deleted can no longer be proven the worktree's own; remove it with
+  `docker rm -f` after checking its labels.
   A service started earlier keeps its project (from its state file, or
   from its container when the state file was never written); if that
   project holds another clone's container, create stops and asks for the
