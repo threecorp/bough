@@ -23,7 +23,7 @@ const (
 
 // composeContainer is one row of `docker ps` for the owner check.
 type composeContainer struct {
-	ID, Project, WorktreeRoot, ConfigFiles string
+	ID, Project, WorktreeRoot, ConfigFiles, State string
 }
 
 // listContainers runs `docker ps -a` with the given filters. A failure is
@@ -31,7 +31,7 @@ type composeContainer struct {
 // project nobody identified.
 func (p *Provider) listContainers(ctx context.Context, filters ...string) ([]composeContainer, error) {
 	args := []string{"ps", "-a", "--no-trunc", "--format",
-		`{{.ID}}	{{.Label "` + labelComposeProject + `"}}	{{.Label "` + dockerutil.LabelWorktreeRoot + `"}}	{{.Label "` + labelComposeConfigFiles + `"}}`}
+		`{{.ID}}	{{.Label "` + labelComposeProject + `"}}	{{.Label "` + dockerutil.LabelWorktreeRoot + `"}}	{{.Label "` + labelComposeConfigFiles + `"}}	{{.State}}`}
 	for _, f := range filters {
 		args = append(args, "--filter", f)
 	}
@@ -50,8 +50,8 @@ func (p *Provider) listContainers(ctx context.Context, filters ...string) ([]com
 		if line == "" {
 			continue
 		}
-		f := append(strings.Split(line, "\t"), "", "", "")
-		rows = append(rows, composeContainer{ID: f[0], Project: f[1], WorktreeRoot: f[2], ConfigFiles: f[3]})
+		f := append(strings.Split(line, "\t"), "", "", "", "")
+		rows = append(rows, composeContainer{ID: f[0], Project: f[1], WorktreeRoot: f[2], ConfigFiles: f[3], State: f[4]})
 	}
 	return rows, nil
 }
@@ -60,8 +60,9 @@ func (p *Provider) listContainers(ctx context.Context, filters ...string) ([]com
 // worktree-root label names this worktree (or a worktree that no longer
 // exists, like the native engines), or, for a container made before the
 // label or a dependency the override does not label, a compose file
-// recorded on it is the same file as one of ownFiles (this worktree's
-// compose and override files). Anything else is foreign, including a
+// recorded on it is the same file as one of ownFiles: this worktree's
+// override for the port, which no other worktree uses, unlike a compose
+// file several worktrees may share. Anything else is foreign, including a
 // legacy container whose files are gone, since compose up would recreate
 // it and compose stop would stop it.
 func foreignOwner(c composeContainer, worktreeRoot string, ownFiles []string) string {
@@ -82,7 +83,9 @@ func foreignOwner(c composeContainer, worktreeRoot string, ownFiles []string) st
 // recordedFiles splits compose's comma-joined config file label. A path
 // may itself hold a comma, so at each position the longest run of
 // comma-separated pieces that names an existing file is one path; pieces
-// that name nothing stand alone.
+// that name nothing stand alone. The label cannot be split exactly: a
+// deleted foreign file whose directory names were built to end in ","
+// plus this worktree's override path would still read as ours.
 func recordedFiles(label string) []string {
 	if label == "" {
 		return nil
@@ -142,9 +145,8 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 	for _, c := range append(byName, byProject...) {
 		if owner := foreignOwner(c, worktreeRoot, ownFiles); owner != "" {
 			return fmt.Errorf("%w (a project recorded before project names carried a checkout hash can be shared "+
-				"between clones: `bough remove` this worktree, first deleting its own container with "+
-				"`docker rm -f %s` if remove refuses, and create it again to get a project of its own)",
-				dockerutil.WorktreeConflict(fmt.Sprintf("%s (project %s)", c.ID, project), owner, filepath.Dir(worktreeRoot)), name)
+				"between clones: `bough remove` this worktree and create it again to get a project of its own)",
+				dockerutil.WorktreeConflict(fmt.Sprintf("%s (project %s)", c.ID, project), owner, filepath.Dir(worktreeRoot)))
 		}
 	}
 	return nil
@@ -161,15 +163,16 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 // another worktree's container instead.
 func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port int, file, service, explicit string, ownFiles []string) (string, error) {
 	if explicit != "" {
-		// This worktree's container keeps the project it was started in;
-		// a changed compose.project would leave it there while the
-		// sidecar named the new one.
+		// This worktree's running container keeps the project it was
+		// started in; a changed compose.project would leave it there while
+		// the sidecar named the new one. A stopped one is removed by
+		// UpOrReuse and the service starts in the new project.
 		own, err := p.listContainers(ctx, fmt.Sprintf("name=^bough-compose-%d$", port))
 		if err != nil {
 			return "", err
 		}
 		for _, c := range own {
-			if c.Project != "" && c.Project != explicit && foreignOwner(c, worktreeRoot, ownFiles) == "" {
+			if c.State == "running" && c.Project != "" && c.Project != explicit && foreignOwner(c, worktreeRoot, ownFiles) == "" {
 				return "", fmt.Errorf("compose.project is %s, but this worktree's container bough-compose-%d runs in project %s: "+
 					"`bough remove` this worktree and create it again to move it", explicit, port, c.Project)
 			}
@@ -194,4 +197,30 @@ func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port
 	}
 	worktree := filepath.Dir(worktreeRoot)
 	return composeProjectName(filepath.Base(worktree), file, worktree), nil
+}
+
+// removeOwnContainer is Down without a sidecar: an Up that failed after
+// starting the container but before writing the sidecar left nothing for
+// compose stop to target. A container under this port's name that is
+// provably this worktree's is removed directly; anything else is left.
+func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoot string) error {
+	name := fmt.Sprintf("bough-compose-%d", port)
+	rows, err := p.listContainers(ctx, "name=^"+name+"$")
+	if err != nil {
+		return err
+	}
+	for _, c := range rows {
+		if foreignOwner(c, worktreeRoot, []string{overrideFilePath(worktreeRoot, port)}) != "" {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, p.cmdWait)
+		cmd := exec.CommandContext(rctx, "docker", "rm", "-f", name)
+		cmd.WaitDelay = p.pipeWait
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+			return fmt.Errorf("docker rm -f %s: %w\n%s", name, err, out)
+		}
+	}
+	return nil
 }

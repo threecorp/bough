@@ -56,10 +56,13 @@
   ends with a hash of the worktree directory, and create and remove refuse
   a project holding a container that is not provably this worktree's: its
   worktree label, or for an older container the compose files docker
-  compose recorded on it, must be this worktree's (create checks every
+  compose recorded on it, must name this worktree's own override file (a
+  compose file several worktrees share is no proof). Create checks every
   service, since `compose up` also starts the dependencies; remove checks
-  the one service it stops). Changing `compose.project` while the
-  worktree's container runs in the old project is refused too.
+  the one service it stops, and removes the worktree's own container even
+  when an interrupted create never recorded its state. Changing
+  `compose.project` while the worktree's container runs in the old
+  project is refused too.
   A service started earlier keeps its project (from its state file, or
   from its container when the state file was never written); if that
   project holds another clone's container, create stops and asks for the

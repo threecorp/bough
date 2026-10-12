@@ -384,10 +384,18 @@ func TestProvider_Down_StopsItsOwnLegacyContainer(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
 	// Down resolves the sidecar's compose.yml under the raw worktree root.
 	ownFile := filepath.Join(filepath.Dir(worktreeRoot), "compose.yml")
-	if err := os.WriteFile(ownFile, nil, 0o600); err != nil {
-		t.Fatal(err)
+	// An older bough started it with `-f compose.yml -f <override>`, so
+	// compose recorded both; the override is the worktree's own.
+	override := overrideFilePath(worktreeRoot, 56130)
+	for _, f := range []string{ownFile, override} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	record := fakeDockerPS(t, `printf 'c1\tbough-t\t\t`+ownFile+`\n'`)
+	record := fakeDockerPS(t, `printf 'c1\tbough-t\t\t`+ownFile+`,`+override+`\n'`)
 	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56130}
 	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
 		t.Fatal(err)
@@ -480,28 +488,29 @@ func TestForeignOwner_RecordedComposeFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	own := []string{composeFile, override}
+	own := []string{override}
 	alias := filepath.Join(base, "alias")
 	if err := os.Symlink(filepath.Join(base, "feat,one"), alias); err != nil {
 		t.Fatal(err)
 	}
 	// A foreign file whose single path ends with this worktree's path.
-	foreign := filepath.Join(base, "foreign,") + composeFile
+	foreign := filepath.Join(base, "foreign,") + override
 	if err := os.MkdirAll(filepath.Dir(foreign), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(foreign, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	upper := strings.ToUpper(composeFile)
+	upper := strings.ToUpper(override)
 	_, upperErr := os.Stat(upper)
 	cases := []struct {
 		name, files string
 		ours        bool
 	}{
 		{"own files under a name with a comma", composeFile + "," + override, true},
-		{"own file through a symlinked alias", filepath.Join(alias, "demo-api", "compose.yml"), true},
-		{"own file in another letter case (same file only on a case-insensitive filesystem)", upper, upperErr == nil},
+		{"own override through a symlinked alias", filepath.Join(alias, "demo-api", ".local", "bough-compose-1-override.yml"), true},
+		{"own override in another letter case (same file only on a case-insensitive filesystem)", upper, upperErr == nil},
+		{"only the shared compose file, with another worktree's override", composeFile + "," + filepath.Join(base, "feat", "x-override.yml"), false},
 		{"a foreign single path that ends with this worktree's path", foreign, false},
 		{"another worktree's files", filepath.Join(base, "feat", "demo-api", "compose.yml"), false},
 		{"nothing recorded", "", false},
@@ -519,7 +528,7 @@ func TestForeignOwner_RecordedComposeFiles(t *testing.T) {
 // remove that the refusal tells the user to run.
 func TestProvider_Down_ChecksOnlyItsOwnService(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "demo-api")
-	record := fakeDockerPS(t, `case "$*" in *service=*) ;; *project=*) printf 'c9\tbough-t\t`+other+`\t\n';; esac`)
+	record := fakeDockerPS(t, `case "$*" in *com.docker.compose.service=redis*) ;; *project=*) printf 'c9\tbough-t\t`+other+`\t\n';; esac`)
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
 	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56133}
 	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
@@ -538,7 +547,7 @@ func TestProvider_Down_ChecksOnlyItsOwnService(t *testing.T) {
 // there and the sidecar naming the new one.
 func TestProvider_Up_RefusesAChangedExplicitProject(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
-	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+worktreeRoot+`\t\n';; esac`)
+	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+worktreeRoot+`\t\trunning\n';; esac`)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -552,6 +561,86 @@ func TestProvider_Up_RefusesAChangedExplicitProject(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "old") {
 		t.Errorf("Up = %v, want a refusal naming the running project old", err)
+	}
+	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
+		t.Errorf("Up ran docker compose; calls:\n%s", b)
+	}
+}
+
+// TestProvider_Up_ChangedProjectOfAStoppedContainerIsAllowed: only a
+// running container pins the project; a stopped one is removed and the
+// service starts in the project the config now names.
+func TestProvider_Up_ChangedProjectOfAStoppedContainerIsAllowed(t *testing.T) {
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+worktreeRoot+`\t\texited\n';; esac`)
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "compose.yml"), []byte("services: {redis: {image: redis:7-alpine}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := New().resolveProject(context.Background(), worktreeRoot, 56135, "demo-api/compose.yml", "redis", "new", nil)
+	if err != nil || got != "new" {
+		t.Errorf("resolveProject = (%q, %v), want (new, nil) for a stopped container", got, err)
+	}
+}
+
+// TestCheckOwner_RefusalNeverAdvisesDeletingTheOtherContainer: the refused
+// container may be another worktree's; the message must not tell the user
+// to delete it.
+func TestCheckOwner_RefusalNeverAdvisesDeletingTheOtherContainer(t *testing.T) {
+	other := filepath.Join(t.TempDir(), "demo-api")
+	fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\tp\t`+other+`\t\n';; esac`)
+	err := New().checkOwner(context.Background(), 56136, filepath.Join(t.TempDir(), "demo-api"), "p", "", nil)
+	if err == nil {
+		t.Fatal("checkOwner accepted another worktree's container")
+	}
+	if strings.Contains(err.Error(), "docker rm") {
+		t.Errorf("refusal advises deleting a container: %v", err)
+	}
+}
+
+// TestProvider_Down_RemovesItsOwnContainerWithoutASidecar: an Up that
+// failed after starting the container but before writing the sidecar left
+// Down with nothing to stop, so the published port blocked remove.
+func TestProvider_Down_RemovesItsOwnContainerWithoutASidecar(t *testing.T) {
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\tp\t`+worktreeRoot+`\t\trunning\n';; esac`)
+	if err := New().Down(context.Background(), &api.DownReq{Ports: []int{56137}, WorktreeRoot: worktreeRoot}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if b, _ := os.ReadFile(record); !strings.Contains(string(b), "rm -f bough-compose-56137") {
+		t.Errorf("Down did not remove its own container; calls:\n%s", b)
+	}
+}
+
+// TestProvider_Up_SharedComposeFileIsNoProofOfOwnership: two worktrees may
+// share one compose file by absolute path; a dependency container that
+// recorded it alongside another worktree's override is that worktree's.
+func TestProvider_Up_SharedComposeFileIsNoProofOfOwnership(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "shared-compose.yml")
+	if err := os.WriteFile(shared, []byte("services: {redis: {image: redis:7-alpine}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	otherOverride := filepath.Join(t.TempDir(), "demo-api", ".local", "bough-compose-1-override.yml")
+	if err := os.MkdirAll(filepath.Dir(otherOverride), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherOverride, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := fakeDockerPS(t, `case "$*" in *project=shared*) printf 'dep1\tshared\t\t`+shared+`,`+otherOverride+`\n';; esac`)
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := New().Up(context.Background(), &api.UpReq{
+		WorktreeRoot: worktreeRoot,
+		Ports:        []api.PortSpec{{Role: "main", Port: 56138}},
+		Extras:       map[string]string{"compose.file": shared, "compose.service": "redis", "compose.target_port": "6379", "compose.project": "shared"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "belongs to") {
+		t.Errorf("Up = %v, want the owner refusal for the other worktree's dependency", err)
 	}
 	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
 		t.Errorf("Up ran docker compose; calls:\n%s", b)

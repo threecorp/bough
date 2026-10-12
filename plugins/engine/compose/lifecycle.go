@@ -69,7 +69,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
 
-	ownFiles := []string{composeFile, overrideFilePath(req.WorktreeRoot, port)}
+	ownFiles := []string{overrideFilePath(req.WorktreeRoot, port)}
 	project, err := p.resolveProject(ctx, req.WorktreeRoot, port, file, service, req.Extras["compose.project"], ownFiles)
 	if err != nil {
 		return fmt.Errorf("compose: Up: %w", err)
@@ -227,14 +227,18 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		if os.IsNotExist(err) {
 			// Up never completed for this port (e.g. it failed before
 			// reaching the sidecar write) — Down must still be
-			// idempotent rather than erroring on "nothing to do."
+			// idempotent rather than erroring on "nothing to do," and a
+			// container Up did start is removed if it is provably ours.
+			if err := p.removeOwnContainer(ctx, port, req.WorktreeRoot); err != nil {
+				return fmt.Errorf("compose: Down: %w", err)
+			}
 			return nil
 		}
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
 	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
-	ownFiles := []string{composeFile, overrideFilePath(req.WorktreeRoot, port)}
+	ownFiles := []string{overrideFilePath(req.WorktreeRoot, port)}
 	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project, st.Service, ownFiles); err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
 	}
