@@ -240,9 +240,14 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 // A network some other container still names, by ID or by name (a created
 // but never started container records only the name), stays, stopped
 // containers included. A failure the daemon reports as "in use" or "gone"
-// is the outcome this wanted; any other failure is returned. A network left
-// after a failed cleanup whose container and sidecar are both gone is not
-// found again; `docker network prune` clears it.
+// is the outcome this wanted; any other failure is returned.
+//
+// Two leftovers remain, and `docker network prune` clears them: a network
+// compose created for an Up that failed before any container existed (a
+// missing external volume, say), or one whose cleanup failed after the
+// container and sidecar were already gone, is not found again. And a
+// container created on the network between the check and the removal is
+// not seen; it fails to start afterwards.
 func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project string) error {
 	left, err := p.listContainers(ctx, "label="+labelComposeProject+"="+project)
 	if err != nil || len(left) > 0 {
@@ -272,16 +277,21 @@ func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project strin
 			continue
 		}
 		msg, err := p.docker(ctx, "network", "rm", id)
-		if err == nil || strings.Contains(msg, "active endpoints") {
+		if err == nil || strings.Contains(msg, "active endpoints") || networkGone(msg) {
 			continue
 		}
-		if imsg, ierr := p.docker(ctx, "network", "inspect", id); ierr != nil &&
-			(strings.Contains(imsg, "No such network") || strings.Contains(imsg, "not found")) {
+		if imsg, ierr := p.docker(ctx, "network", "inspect", id); ierr != nil && networkGone(imsg) {
 			continue
 		}
 		return fmt.Errorf("docker network rm %s (%s): %w\n%s", id, name, err, msg)
 	}
 	return nil
+}
+
+// networkGone reports whether a docker message says the network no
+// longer exists.
+func networkGone(msg string) bool {
+	return strings.Contains(msg, "No such network") || strings.Contains(msg, "not found") || strings.Contains(msg, "unknown network")
 }
 
 // docker runs one docker CLI command bounded by cmdWait and returns its
