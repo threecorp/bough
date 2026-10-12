@@ -28,14 +28,15 @@
   and `b/` reached `worktrees/b` while skipping `b`'s engines. `create`,
   `remove` and `verify` now take only a single directory name, and refuse
   a worktree that is a symlink, that matches an existing one only by
-  letter case (checked again once remove holds the worktree lock), or
-  that resolves to the monorepo root or above it through a symlinked
-  worktrees dir. Remove refuses a worktree that holds another registered
-  one; a nested name an older bough created (such as `feat/x`) can still
-  be removed by that exact name while the registry holds it.
-  `remove --path` (and the `WorktreeRemove` hook) refuses a path whose
-  parent is not a `worktrees/` or `.worktrees/` dir, and resolves a
-  relative path against the current directory.
+  letter case (checked again once create or remove holds the worktree
+  lock, which names differing only by case share), or that resolves to
+  the monorepo root or above it through a symlinked worktrees dir. Remove
+  refuses a worktree that holds another registered one; a nested name an
+  older bough created (such as `feat/x`) can still be removed, by name or
+  by the `WorktreeRemove` hook's path, while the registry holds it and no
+  part of it is a symlink. `remove --path` refuses a path outside a
+  `worktrees/` or `.worktrees/` dir, and resolves a relative path against
+  the current directory.
 - **A second clone no longer takes over the first clone's database.**
   Engine containers are named `bough-<engine>-<port>` (`bough-compose-<port>`
   for `kind: compose`) and the port is a hash of the worktree name, so two checkouts of one monorepo with a
@@ -46,14 +47,18 @@
   worktree. The owner is the worktree directory, which also holds the
   datadir, so deleting only the engine-provider repo does not free the
   database. A container made before this release has no label; create and
-  remove find its worktree from its `.local/<kind>-data` bind mount
-  instead.
+  remove find its worktree from its `.local/<kind>-data` bind mount, or
+  for a `kind: compose` service from the compose files docker compose
+  recorded on it.
 - **A `kind: compose` service of another clone is no longer recreated.**
   The default project name came from the worktree name and the compose
   file alone, so two clones with a same-named worktree shared a project,
   and one clone's `compose up` recreated the other's service. The name now
-  ends with a hash of the worktree directory. A service started earlier
-  keeps the project its state file recorded.
+  ends with a hash of the worktree directory, and create and remove refuse
+  a project whose container for the service belongs to another worktree.
+  A service started earlier keeps its project (from its state file, or
+  from its container when the state file was never written) unless that
+  project holds another clone's container.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
   checking its image; it now reports the error. A `kind: compose` remove

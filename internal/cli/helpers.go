@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 
@@ -86,8 +87,8 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 // the (monorepoRoot, worktreeName, worktreePath) triple runRemove needs.
 // Shared by the `bough remove` CLI and the WorktreeRemove hook dispatch
 // so the two paths cannot diverge. worktreePath wins when present (and is
-// made absolute and Cleaned so a trailing slash does not shift Dir(Dir(...))
-// a level too shallow, and must sit directly in a worktrees dir); otherwise the
+// made absolute and Cleaned, and must sit in a worktrees dir: directly, or
+// nested for a name an older bough created); otherwise the
 // worktree is <cwd>/<worktrees-dir>/<name>. cwd is
 // os.Getwd() — the hook payload's own `cwd` is deliberately NOT trusted:
 // a WorktreeRemove hook can fire from inside the worktree being torn
@@ -101,12 +102,18 @@ func resolveRemoveTarget(name, worktreePath string) (monorepoRoot, wtName, path 
 		if path, err = filepath.Abs(worktreePath); err != nil {
 			return "", "", "", err
 		}
-		if parent := filepath.Base(filepath.Dir(path)); parent != worktreesName && parent != legacyWtName {
+		dir, rel, ok := splitWorktreePath(path)
+		if !ok {
 			return "", "", "", fmt.Errorf("worktree path %s is not inside a %s/ or %s/ dir", path, worktreesName, legacyWtName)
 		}
-		wtName = filepath.Base(path)
-		monorepoRoot = filepath.Dir(filepath.Dir(path))
-		if err := checkWorktreeEntry(filepath.Dir(path), wtName); err != nil {
+		// A nested rel is a name an older bough created; runRemove accepts
+		// it only when the registry holds it.
+		if strings.Contains(rel, "/") && !legacyNestedName(rel) {
+			return "", "", "", fmt.Errorf("worktree path %s does not name a worktree", path)
+		}
+		wtName = rel
+		monorepoRoot = filepath.Dir(dir)
+		if err := checkWorktreeEntry(dir, wtName); err != nil {
 			return "", "", "", err
 		}
 		if err := checkNotAboveRoot(monorepoRoot, path); err != nil {
@@ -118,8 +125,11 @@ func resolveRemoveTarget(name, worktreePath string) (monorepoRoot, wtName, path 
 		path, err = worktreePathFor(monorepoRoot, name)
 		if err != nil && legacyNestedName(name) {
 			// runRemove accepts it only when the registry holds this name.
-			path = filepath.Join(worktreesDir(monorepoRoot), name)
-			err = checkNotAboveRoot(monorepoRoot, path)
+			dir := worktreesDir(monorepoRoot)
+			path = filepath.Join(dir, name)
+			if err = checkWorktreeEntry(dir, name); err == nil {
+				err = checkNotAboveRoot(monorepoRoot, path)
+			}
 		}
 	default:
 		err = errors.New("removal needs a worktree path or name (--path/--name, or hook worktree_path/name)")
@@ -222,4 +232,17 @@ func engineProviderRepo(cfg *config.Config) *config.Repository {
 		}
 	}
 	return nil
+}
+
+// splitWorktreePath finds the worktrees dir (worktrees/ or .worktrees/)
+// nearest above path and returns it with path relative to it: the parent
+// for a plain worktree, an ancestor for a nested one an older bough made.
+func splitWorktreePath(path string) (dir, rel string, ok bool) {
+	for p := filepath.Dir(path); p != filepath.Dir(p); p = filepath.Dir(p) {
+		if base := filepath.Base(p); base == worktreesName || base == legacyWtName {
+			rel, err := filepath.Rel(p, path)
+			return p, rel, err == nil
+		}
+	}
+	return "", "", false
 }

@@ -116,7 +116,9 @@ func checkNotAboveRoot(monorepoRoot, path string) error {
 	if err != nil {
 		return nil // no root on disk yet, nothing above it to reach
 	}
-	if rel, err := filepath.Rel(real, root); err == nil && (rel == "." || !strings.HasPrefix(rel, "..")) {
+	// The first component decides: "..mono" is a directory name, not a
+	// step up, so a plain string prefix misjudged it.
+	if rel, err := filepath.Rel(real, root); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("worktree %s resolves to %s, which holds the monorepo root %s", path, real, monorepoRoot)
 	}
 	return nil
@@ -142,32 +144,47 @@ func resolveExisting(path string) (string, error) {
 	}
 }
 
-// checkWorktreeEntry refuses <dir>/<name> when it exists as a symlink or
-// only as a case alias of another entry. remove runs pre_remove, Cleanup
-// and the git fallback rm -rf inside the worktree, so a symlink sent them
-// to its target; a case alias on a case-insensitive filesystem opened
-// another worktree whose registry entry and lock key on its real name.
+// checkWorktreeEntry refuses <dir>/<name> when any component of name
+// exists as a symlink or only as a case alias of another entry. remove runs
+// pre_remove, Cleanup and the git fallback rm -rf inside the worktree, so
+// a symlink anywhere in a nested name sent them to its target; a case alias
+// on a case-insensitive filesystem opened another worktree whose registry
+// entry keys on its real name.
 func checkWorktreeEntry(dir, name string) error {
-	info, err := os.Lstat(filepath.Join(dir, name))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+	parent := dir
+	for _, seg := range strings.Split(name, "/") {
+		p := filepath.Join(parent, seg)
+		info, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("worktree %s: %s is a symlink; bough only manages the directories it created", filepath.Join(dir, name), p)
+		}
+		if err := checkExactEntry(parent, seg); err != nil {
+			return err
+		}
+		parent = p
 	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("worktree %s is a symlink; bough only manages the directories it created", filepath.Join(dir, name))
-	}
-	entries, err := os.ReadDir(dir)
+	return nil
+}
+
+// checkExactEntry refuses seg when parent holds it only under another
+// letter case.
+func checkExactEntry(parent, seg string) error {
+	entries, err := os.ReadDir(parent)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if e.Name() == name {
+		if e.Name() == seg {
 			return nil
 		}
 	}
-	return fmt.Errorf("worktree name %q matches an existing directory in %s only by letter case; use its exact name", name, dir)
+	return fmt.Errorf("worktree name %q matches an existing directory in %s only by letter case; use its exact name", seg, parent)
 }
 
 // lockWorktree serializes create and remove of one worktree name across
@@ -177,11 +194,14 @@ func checkWorktreeEntry(dir, name string) error {
 // an engine on. The lock file lives at <root>/.bough/locks/<name>.lock
 // and is never deleted (see fsutil.Lock).
 func lockWorktree(monorepoRoot, name string) (release func(), err error) {
-	file := url.PathEscape(name)
+	// Lower-cased: names that differ only by case open one directory on a
+	// case-insensitive filesystem, so they must wait on one lock.
+	key := strings.ToLower(name)
+	file := url.PathEscape(key)
 	if len(file) > maxLockNameBytes {
 		// Escaping turns each UTF-8 byte into %XX; a long non-ASCII name
 		// would exceed the 255-byte file-name limit.
-		sum := sha256.Sum256([]byte(name))
+		sum := sha256.Sum256([]byte(key))
 		file = hex.EncodeToString(sum[:])
 	}
 	path := filepath.Join(monorepoRoot, boughDir, locksSubdir, file+".lock")

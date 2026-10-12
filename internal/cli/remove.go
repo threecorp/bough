@@ -76,7 +76,7 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	defer release()
 	// Again under the lock: a create of a case alias may have made the
 	// directory while this remove waited.
-	if err := checkWorktreeEntry(filepath.Dir(worktreePath), filepath.Base(worktreePath)); err != nil {
+	if err := checkWorktreeEntry(strings.TrimSuffix(worktreePath, string(filepath.Separator)+name), name); err != nil {
 		return err
 	}
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup

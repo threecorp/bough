@@ -65,7 +65,7 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cwd, "cwd", "", "monorepo root (defaults to current working dir; overridden by --stdin-json)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")
-	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists)")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists; always on with --stdin-json, the hook payload path)")
 	return cmd
 }
 
@@ -113,6 +113,11 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		return err
 	}
 	defer release()
+	// Again under the lock: a create of a case alias may have made the
+	// directory while this one waited.
+	if err := checkWorktreeEntry(filepath.Dir(worktreeRoot), name); err != nil {
+		return err
+	}
 	// One probe, two consumers: whether the root is inside a work tree
 	// decides both the heads-up below and how the container is materialised,
 	// and monorepoRoot cannot change between them.

@@ -323,94 +323,129 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 	}
 }
 
-// TestProvider_Down_LeavesAnotherWorktreesContainerAlone: container_name is
-// bough-compose-<port> and the port is a hash of the worktree name, so a
-// second clone's same-named worktree reaches the first clone's container;
-// stopping it took that worktree's service down.
-func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
+// fakeDockerPS puts a fake docker on PATH that records every call and
+// answers `docker ps` with the output of psScript, a shell snippet that
+// sees the ps arguments in "$*". It returns the call record's path.
+func fakeDockerPS(t *testing.T, psScript string) string {
+	t.Helper()
 	bin := t.TempDir()
 	record := filepath.Join(t.TempDir(), "calls.txt")
-	owner := filepath.Join(t.TempDir(), "demo-api")
 	t.Setenv("FAKE_DOCKER_RECORD", record)
-	t.Setenv("FAKE_DOCKER_OWNER", owner)
-	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in inspect) echo \"$FAKE_DOCKER_OWNER\";; esac\n"
+	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in ps) " + psScript + ";; esac\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return record
+}
 
-	worktreeRoot := t.TempDir()
-	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56127}
-	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+// TestProvider_Down_LeavesAnotherWorktreesContainerAlone: container_name is
+// bough-compose-<port> and the project name was the worktree name, so a
+// second clone's same-named worktree reached the first clone's service;
+// stopping it took that worktree's service down. A container made before
+// the worktree label is recognized by the compose file compose recorded.
+func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
+	other := t.TempDir()
+	otherFile := filepath.Join(other, "demo-api", "compose.yml")
+	if err := os.MkdirAll(filepath.Dir(otherFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
-	if err == nil || !strings.Contains(err.Error(), filepath.Dir(owner)) {
-		t.Errorf("Down = %v, want a refusal naming the owning worktree %s", err, filepath.Dir(owner))
+	if err := os.WriteFile(otherFile, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(record); strings.Contains(string(b), " stop ") || strings.Contains(string(b), " rm ") {
-		t.Errorf("Down stopped another worktree's container; calls:\n%s", b)
+	for name, row := range map[string]string{
+		"labelled": "c1\\tbough-t\\t" + filepath.Join(other, "demo-api") + "\\t",
+		"legacy":   "c1\\tbough-t\\t\\t" + otherFile,
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := fakeDockerPS(t, `printf '`+row+`\n'`)
+			worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56127}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			if err == nil || !strings.Contains(err.Error(), other) {
+				t.Errorf("Down = %v, want a refusal naming %s", err, other)
+			}
+			if b, _ := os.ReadFile(record); strings.Contains(string(b), " stop ") || strings.Contains(string(b), " rm ") {
+				t.Errorf("Down stopped another worktree's container; calls:\n%s", b)
+			}
+		})
 	}
 }
 
-// TestProvider_Down_InspectFailureStopsNothing: the owner check used to
-// treat any docker inspect error as "nothing there" and went on to stop a
-// container it never identified. Only "No such object" may proceed.
-func TestProvider_Down_InspectFailureStopsNothing(t *testing.T) {
+// TestProvider_Down_PsFailureStopsNothing: an owner check that cannot list
+// the project's containers must not let compose stop act on them.
+func TestProvider_Down_PsFailureStopsNothing(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		message string
-		stops   bool
+		name  string
+		ps    string
+		stops bool
 	}{
-		{"daemon error", "Error response from daemon: boom", false},
-		{"container already gone", "Error: No such object: bough-compose-56128", true},
+		{"daemon error", "echo 'Error response from daemon: boom' >&2; exit 1", false},
+		{"nothing there", "true", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bin := t.TempDir()
-			record := filepath.Join(t.TempDir(), "calls.txt")
-			t.Setenv("FAKE_DOCKER_RECORD", record)
-			t.Setenv("FAKE_DOCKER_MESSAGE", tc.message)
-			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in inspect) echo \"$FAKE_DOCKER_MESSAGE\" >&2; exit 1;; esac\n"
-			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-			worktreeRoot := t.TempDir()
+			record := fakeDockerPS(t, tc.ps)
+			worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
 			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56128}
 			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
 				t.Fatal(err)
 			}
 			err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
 			b, _ := os.ReadFile(record)
-			stopped := strings.Contains(string(b), " stop ")
-			if stopped != tc.stops {
+			if stopped := strings.Contains(string(b), " stop "); stopped != tc.stops {
 				t.Errorf("stop called = %v, want %v (Down err %v); calls:\n%s", stopped, tc.stops, err, b)
 			}
 			if !tc.stops && err == nil {
-				t.Error("Down succeeded although docker inspect failed")
+				t.Error("Down succeeded although docker ps failed")
 			}
 		})
 	}
 }
 
-// TestResolveProject_KeepsTheRecordedProject: a service started before
-// project names carried a checkout hash is found by the name its sidecar
-// recorded, so upgrading does not orphan it from Down.
-func TestResolveProject_KeepsTheRecordedProject(t *testing.T) {
+// TestResolveProject: an existing service keeps the project it was
+// started under (from the sidecar, or from its container when the sidecar
+// was never written), unless that project holds another worktree's
+// container for the service, which two clones shared before the hash.
+func TestResolveProject(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
-	st := &upState{File: "demo-api/compose.yml", Service: "redis", Project: "bough-f-x-demo-api-compose-yml", TargetPort: 6379, HostPort: 56129}
-	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
-		t.Fatal(err)
+	hashed := composeProjectName(filepath.Base(filepath.Dir(worktreeRoot)), "demo-api/compose.yml", filepath.Dir(worktreeRoot))
+	other := filepath.Join(t.TempDir(), "demo-api")
+	const recorded = "bough-f-x-demo-api-compose-yml"
+	cases := []struct {
+		name    string
+		sidecar bool
+		ps      string
+		want    string
+	}{
+		{"sidecar project with no foreign container", true, "true", recorded},
+		{"sidecar project shared with another clone", true,
+			`case "$*" in *project=` + recorded + `*) printf 'c1\t` + recorded + `\t` + other + `\t\n';; esac`, hashed},
+		{"no sidecar, own container records the project", false,
+			`case "$*" in *name=*) printf 'c1\t` + recorded + `\t` + worktreeRoot + `\t\n';; esac`, recorded},
+		{"no sidecar, no container", false, "true", hashed},
 	}
-	if got := resolveProject(worktreeRoot, st.HostPort, st.File, st.Service, ""); got != st.Project {
-		t.Errorf("resolveProject = %q, want the recorded %q", got, st.Project)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeDockerPS(t, tc.ps)
+			root := worktreeRoot
+			if tc.sidecar {
+				st := &upState{File: "demo-api/compose.yml", Service: "redis", Project: recorded, TargetPort: 6379, HostPort: 56129}
+				if err := writeSidecarState(root, st.HostPort, st); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(root, ".local")) })
+			}
+			got, err := New().resolveProject(context.Background(), root, 56129, "demo-api/compose.yml", "redis", "")
+			if err != nil || got != tc.want {
+				t.Errorf("resolveProject = (%q, %v), want %q", got, err, tc.want)
+			}
+		})
 	}
-	if got := resolveProject(worktreeRoot, st.HostPort, st.File, st.Service, "mine"); got != "mine" {
+	if got, _ := New().resolveProject(context.Background(), worktreeRoot, 56129, "demo-api/compose.yml", "redis", "mine"); got != "mine" {
 		t.Errorf("an explicit compose.project must win; got %q", got)
-	}
-	if got := resolveProject(worktreeRoot, st.HostPort, "other.yml", st.Service, ""); got == st.Project {
-		t.Error("a sidecar for another file must not decide the project")
 	}
 }
 

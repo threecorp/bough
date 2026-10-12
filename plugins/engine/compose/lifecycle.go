@@ -69,7 +69,10 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
 
-	project := resolveProject(req.WorktreeRoot, port, file, service, req.Extras["compose.project"])
+	project, err := p.resolveProject(ctx, req.WorktreeRoot, port, file, service, req.Extras["compose.project"])
+	if err != nil {
+		return fmt.Errorf("compose: Up: %w", err)
+	}
 	envPrefix := req.Extras["compose.env_prefix"]
 	if envPrefix == "" {
 		envPrefix = strings.ToUpper(service)
@@ -118,6 +121,11 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		// exact helper.
 		if !dockerutil.IsPortFree(port) {
 			return fmt.Errorf("compose: Up: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", port)
+		}
+		// compose up recreates whatever the project already runs for this
+		// service, so another worktree's container there must stop it.
+		if err := p.checkOwner(ctx, port, req.WorktreeRoot, project, service); err != nil {
+			return fmt.Errorf("compose: Up: %w", err)
 		}
 
 		upCmd := exec.CommandContext(ctx, "docker", "compose",
@@ -218,7 +226,7 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
-	if err := p.checkOwner(ctx, port, req.WorktreeRoot); err != nil {
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project, st.Service); err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
 	}
 
@@ -268,33 +276,6 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	return nil
 }
 
-// checkOwner refuses to stop bough-compose-<port> when its worktree-root
-// label names another checkout's worktree of the same name. It asks the
-// docker CLI, like the rest of Down. Only a container docker reports gone
-// lets Down go on unchecked; any other inspect failure stops Down, since
-// compose stop would then act on a container nobody identified.
-func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot string) error {
-	name := fmt.Sprintf("bough-compose-%d", port)
-	ictx, cancel := context.WithTimeout(ctx, p.cmdWait)
-	defer cancel()
-	cmd := exec.CommandContext(ictx, "docker", "inspect", "--format",
-		`{{index .Config.Labels "`+dockerutil.LabelWorktreeRoot+`"}}`, name)
-	cmd.WaitDelay = p.pipeWait
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		if strings.Contains(stderr.String(), "No such object") {
-			return nil
-		}
-		return fmt.Errorf("docker inspect %s: %w\n%s", name, err, stderr.String())
-	}
-	if have := dockerutil.OtherWorktree(strings.TrimSpace(string(out)), worktreeRoot); have != "" {
-		return dockerutil.WorktreeConflict(name, have, filepath.Dir(worktreeRoot))
-	}
-	return nil
-}
-
 // Cleanup is an intentional no-op — see the package doc for why
 // (compose owns its own named volumes; this signature has no channel
 // to address them, and reaching into an operator-owned compose
@@ -327,20 +308,4 @@ func (p *Provider) EnvVars(_ context.Context, req *api.EnvVarsReq) (map[string]s
 		out["BOUGH_"+prefix+"_URL"] = fmt.Sprintf("%s://127.0.0.1:%d", scheme, port)
 	}
 	return out, nil
-}
-
-// resolveProject picks the compose project for one service: an explicit
-// compose.project as is, else the project this worktree's sidecar already
-// recorded for the same file and service (a service started before project
-// names carried a checkout hash keeps its project, so Down still finds it),
-// else composeProjectName for this checkout's worktree.
-func resolveProject(worktreeRoot string, port int, file, service, explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if st, err := readSidecarState(worktreeRoot, port); err == nil && st.Project != "" && st.File == file && st.Service == service {
-		return st.Project
-	}
-	worktree := filepath.Dir(worktreeRoot)
-	return composeProjectName(filepath.Base(worktree), file, worktree)
 }

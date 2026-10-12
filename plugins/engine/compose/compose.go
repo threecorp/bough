@@ -124,11 +124,13 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 // file's declared path and a hash of checkout, the worktree's directory:
 // two clones of one monorepo with a same-named worktree would otherwise
 // share a project, and one clone's `compose up` would recreate the other
-// clone's service. Determinism matters twice over: Up
+// clone's service. A hash prefix can still collide, so Up and Down also
+// check who owns the project's containers (checkOwner). Determinism
+// matters twice over: Up
 // and Down must independently derive the identical name (Down has no
 // channel to receive whatever Up computed, besides the sidecar state
 // file which stores it verbatim), and two different worktrees
-// referencing the textually-identical compose file must NEVER derive
+// referencing the textually-identical compose file should not derive
 // the same name — compose's own up-or-reuse would otherwise silently
 // hand one worktree a container actually owned by another.
 //
@@ -137,7 +139,7 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 // valid lowercase-alnum start regardless of how degenerate the inputs
 // are.
 // projectHashLen is how many hex digits of the checkout hash the name keeps.
-const projectHashLen = 8
+const projectHashLen = 16
 
 func composeProjectName(worktreeName, file, checkout string) string {
 	sum := sha256.Sum256([]byte(checkout))

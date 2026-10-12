@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -503,28 +505,54 @@ func TestRemove_RefusesAParentOfARegisteredWorktree(t *testing.T) {
 	}
 }
 
-// TestRemove_RechecksTheCaseAliasAfterTheLock: a remove of F-AUTH passed
-// the case check before F-Auth existed, then waited on the shared lock
-// file while create made F-Auth, and went on to delete it.
-func TestRemove_RechecksTheCaseAliasAfterTheLock(t *testing.T) {
-	root, wt := sameNameFixture(t, "F-Auth")
-	if err := os.MkdirAll(filepath.Join(root, boughDir, locksSubdir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	probe := filepath.Join(root, boughDir, locksSubdir, "Case-Probe")
+// caseInsensitive reports whether dir's filesystem folds letter case.
+func caseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "Case-Probe")
 	if err := os.WriteFile(probe, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, boughDir, locksSubdir, "case-probe")); err != nil {
-		t.Skip("case-sensitive filesystem: F-AUTH and F-Auth do not share a lock file")
+	defer func() { _ = os.Remove(probe) }()
+	_, err := os.Stat(filepath.Join(dir, "case-probe"))
+	return err == nil
+}
+
+// TestRunRemove_RechecksTheCaseAliasUnderTheLock: a remove of F-AUTH passed
+// the case check before F-Auth existed, then waited on the lock while a
+// create made F-Auth, and went on to delete it. runRemove is called
+// directly, as after a check that passed, with F-Auth already there.
+func TestRunRemove_RechecksTheCaseAliasUnderTheLock(t *testing.T) {
+	root, wt := sameNameFixture(t, "F-Auth")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !caseInsensitive(t, root) {
+		t.Skip("case-sensitive filesystem: F-AUTH is a different directory")
+	}
+	cfg := &config.Config{Registry: config.RegistryConfig{Path: ".bough/ports.json"}}
+	alias := filepath.Join(worktreesDir(root), "F-AUTH")
+	if err := runRemove(context.Background(), io.Discard, cfg, root, "F-AUTH", alias, 0); err == nil {
+		t.Error("runRemove F-AUTH succeeded, want the case alias refused")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("F-Auth was deleted through its case alias: %v", err)
+	}
+}
+
+// TestCreate_RechecksTheCaseAliasUnderTheLock is the create half: a create
+// of F-AUTH that waited on the lock while F-Auth was created went on into
+// F-Auth's directory under another registry name.
+func TestCreate_RechecksTheCaseAliasUnderTheLock(t *testing.T) {
+	root, wt := sameNameFixture(t, "F-Auth")
+	if !caseInsensitive(t, root) {
+		t.Skip("case-sensitive filesystem: F-AUTH is a different directory")
 	}
 	release, err := lockWorktree(root, "F-Auth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(root)
-	cmd := newRemoveCmd()
-	cmd.SetArgs([]string{"--name", "F-AUTH"})
+	cmd := newCreateCmd()
+	cmd.SetArgs([]string{"--name", "F-AUTH", "--cwd", root, "--no-fetch"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 	done := make(chan error, 1)
@@ -537,12 +565,106 @@ func TestRemove_RechecksTheCaseAliasAfterTheLock(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Error("remove F-AUTH succeeded after F-Auth appeared, want the case alias refused")
+			t.Error("create F-AUTH succeeded after F-Auth appeared, want the case alias refused")
 		}
 	case <-time.After(60 * time.Second):
-		t.Fatal("remove never finished")
+		t.Fatal("create never finished")
 	}
-	if _, err := os.Stat(wt); err != nil {
-		t.Errorf("F-Auth was deleted through its case alias: %v", err)
+	if _, err := os.Stat(filepath.Join(root, ".bough", "ports.json")); !os.IsNotExist(err) {
+		t.Errorf("create reserved ports under the case alias: %v", err)
+	}
+}
+
+// TestLockWorktree_CaseAliasesShareALock: names that differ only by case
+// open one directory on a case-insensitive filesystem, so they must wait
+// on one lock, long names (hashed) included.
+func TestLockWorktree_CaseAliasesShareALock(t *testing.T) {
+	root := t.TempDir()
+	for _, pair := range [][2]string{{"F-Auth", "F-AUTH"}, {strings.Repeat("a", 201), strings.Repeat("A", 201)}} {
+		release, err := lockWorktree(root, pair[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		acquired := make(chan func(), 1)
+		go func() {
+			second, err := lockWorktree(root, pair[1])
+			if err == nil {
+				acquired <- second
+			}
+		}()
+		var second func()
+		select {
+		case second = <-acquired:
+			t.Errorf("%.10s and %.10s took separate locks", pair[0], pair[1])
+		case <-time.After(300 * time.Millisecond):
+		}
+		release()
+		if second == nil {
+			second = <-acquired
+		}
+		second()
+	}
+}
+
+// TestRemove_RefusesATargetAboveTheRootByAPrefixedName: a directory name
+// starting with ".." is not a parent step, and a string-prefix test let
+// `remove --name ..parent` through a worktrees dir symlinked to the root's
+// grandparent, deleting the root's parent.
+func TestRemove_RefusesATargetAboveTheRootByAPrefixedName(t *testing.T) {
+	grand := t.TempDir()
+	root := filepath.Join(grand, "..parent", "..mono")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(grand, filepath.Join(root, worktreesName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktreePathFor(root, "..parent"); err == nil {
+		t.Error("worktreePathFor resolved to the root's parent and was accepted")
+	}
+}
+
+// TestRemove_RefusesASymlinkInsideANestedName: only the last component
+// was checked, so feat/x with feat linked to Other removed Other/x.
+func TestRemove_RefusesASymlinkInsideANestedName(t *testing.T) {
+	root, _ := sameNameFixture(t, "feat")
+	other := filepath.Join(worktreesDir(root), "Other", "x")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(worktreesDir(root), "Other"), filepath.Join(worktreesDir(root), "feat")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".bough"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bough", "ports.json"), []byte(`{"feat/x": {}, "Other/x": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	cmd := newRemoveCmd()
+	cmd.SetArgs([]string{"--name", "feat/x"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil {
+		t.Error("remove feat/x through a symlinked feat succeeded")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("Other/x was deleted: %v", err)
+	}
+}
+
+// TestResolveRemoveTarget_NestedPath: a WorktreeRemove payload for a nested
+// worktree an older bough created names <root>/worktrees/feat/x; its parent
+// is not the worktrees dir, but the worktree is still removable.
+func TestResolveRemoveTarget_NestedPath(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(worktreesDir(root), "feat", "x")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, name, path, err := resolveRemoveTarget("", nested)
+	if err != nil || name != "feat/x" || path != nested || gotRoot != root {
+		t.Errorf("resolveRemoveTarget = (%q, %q, %q, %v), want (%q, feat/x, %q, nil)", gotRoot, name, path, err, root, nested)
 	}
 }
