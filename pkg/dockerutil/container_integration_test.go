@@ -73,7 +73,7 @@ func createSleepContainer(t *testing.T, cli *client.Client, name string, start b
 
 func TestLookupByName_Found(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-lookup-%d", time.Now().UnixNano())
@@ -90,7 +90,7 @@ func TestLookupByName_Found(t *testing.T) {
 
 func TestLookupByName_NotFound(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	name := fmt.Sprintf("bough-test-missing-%d", time.Now().UnixNano())
 	gotID, err := LookupByName(context.Background(), cli, name)
@@ -104,7 +104,7 @@ func TestLookupByName_NotFound(t *testing.T) {
 
 func TestRemoveIfExists_Idempotent(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-remove-%d", time.Now().UnixNano())
@@ -125,7 +125,7 @@ func TestRemoveIfExists_Idempotent(t *testing.T) {
 
 func TestUpOrReuse_SkipsRunning(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-reuse-%d", time.Now().UnixNano())
@@ -147,7 +147,7 @@ func TestUpOrReuse_SkipsRunning(t *testing.T) {
 // wanted image (compose) must still reuse.
 func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-swap-%d", time.Now().UnixNano())
@@ -178,7 +178,7 @@ func TestUpOrReuse_RefusesARunningContainerOnAnotherImage(t *testing.T) {
 // it, while a same-named container bough did not create keeps its own.
 func TestRemoveOwned_VolumesFollowTheLabel(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 	ctx := context.Background()
 
@@ -230,7 +230,7 @@ func TestRemoveOwned_VolumesFollowTheLabel(t *testing.T) {
 // must not be told to remove the worktree.
 func TestUpOrReuse_SameImageAnotherSpellingReuses(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-spell-%d", time.Now().UnixNano())
@@ -248,7 +248,7 @@ func TestUpOrReuse_SameImageAnotherSpellingReuses(t *testing.T) {
 // under 18 does not even start). The stopped container must survive.
 func TestUpOrReuse_RefusesAStoppedContainerOnAnotherImage(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-stopswap-%d", time.Now().UnixNano())
@@ -268,7 +268,7 @@ func TestUpOrReuse_RefusesAStoppedContainerOnAnotherImage(t *testing.T) {
 // container bough labelled, for an image bough chose, loses its volume.
 func TestUpOrReuse_StoppedContainerVolumes(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 	ctx := context.Background()
 
@@ -325,7 +325,7 @@ func TestUpOrReuse_StoppedContainerVolumes(t *testing.T) {
 
 func TestUpOrReuse_RemovesStopped(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-stale-%d", time.Now().UnixNano())
@@ -356,7 +356,7 @@ func TestUpOrReuse_RemovesStopped(t *testing.T) {
 // untouched, risking Cleanup() deleting its datadir out from under it.
 func TestIsBackendRunning_StoppedContainerIsNotRunning(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-backend-stopped-%d", time.Now().UnixNano())
@@ -369,7 +369,7 @@ func TestIsBackendRunning_StoppedContainerIsNotRunning(t *testing.T) {
 
 func TestIsBackendRunning_RunningContainerIsRunning(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-backend-running-%d", time.Now().UnixNano())
@@ -382,7 +382,7 @@ func TestIsBackendRunning_RunningContainerIsRunning(t *testing.T) {
 
 func TestIsBackendRunning_NoContainerIsNotRunning(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	name := fmt.Sprintf("bough-test-backend-missing-%d", time.Now().UnixNano())
 	if IsBackendRunning(context.Background(), cli, name) {
@@ -409,7 +409,7 @@ func TestIsBackendRunning_NoContainerIsNotRunning(t *testing.T) {
 // race — must produce an error errdefs.IsNotFound recognizes.
 func TestUpOrReuse_RemovingAnAlreadyGoneContainerIsNotFatal(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
 	name := fmt.Sprintf("bough-test-vanish-%d", time.Now().UnixNano())
