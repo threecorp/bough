@@ -634,6 +634,9 @@ func TestProvider_Down_RemovesItsOwnContainerWithoutASidecar(t *testing.T) {
 			if strings.Contains(string(b), "rm -f bough-compose-56137") {
 				t.Errorf("Down removed by name, which another container may carry; calls:\n%s", b)
 			}
+			if !tc.wantErr && !strings.Contains(string(b), "network ls") {
+				t.Errorf("Down never cleaned the project network; calls:\n%s", b)
+			}
 		})
 	}
 }
@@ -674,21 +677,32 @@ func TestProvider_Up_SharedComposeFileIsNoProofOfOwnership(t *testing.T) {
 // TestProvider_Down_RemovesTheEmptyProjectNetwork: Down never runs
 // compose down, so the project's network outlived its last container and
 // every removed worktree left one behind until Docker ran out of address
-// pools. Once the project holds no container, its network goes too.
+// pools. Once the project holds no container, its own network goes; one
+// another container still names (a stopped one of a project that joined
+// it as external) stays, and one gone meanwhile is not an error.
 func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
+	const projectFilter = "label=com.docker.compose.project=bough-t"
 	for _, tc := range []struct {
-		name    string
-		ps      string
-		removed bool
+		name, ps, rm, inspect string
+		removed, wantErr      bool
 	}{
-		{"project now empty", "true", true},
-		{"project still holds a sibling service", `case "$*" in *service=*) ;; *project=*) printf 's1\tbough-t\t\t\n';; esac`, false},
+		{name: "project now empty", ps: "true", rm: "true", inspect: "true", removed: true},
+		{name: "project still holds a sibling service", ps: `case "$*" in *service=*) ;; *project=bough-t*) printf 's1\tbough-t\t\t\tExited\n';; esac`, rm: "true", inspect: "true"},
+		{name: "another project's stopped container names the network", ps: `case "$*" in *network=net1*) printf 'x1\tother\t\t\texited\n';; esac`, rm: "true", inspect: "true"},
+		{name: "network gone meanwhile", ps: "true", rm: "echo 'Error response from daemon: unknown network net1' >&2; exit 1", inspect: "exit 1", removed: true},
+		{name: "daemon error", ps: "true", rm: "echo 'Error response from daemon: boom' >&2; exit 1", inspect: "true", removed: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
 			record := filepath.Join(t.TempDir(), "calls.txt")
 			t.Setenv("FAKE_DOCKER_RECORD", record)
-			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1 $2\" in \"network ls\") echo net1;; ps*) " + tc.ps + ";; esac\n"
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
+				"case \"$1 $2\" in\n" +
+				"\"network ls\") case \"$*\" in *--no-trunc*" + projectFilter + "*) echo net1;; esac;;\n" +
+				"\"network rm\") " + tc.rm + ";;\n" +
+				"\"network inspect\") " + tc.inspect + ";;\n" +
+				"ps*) " + tc.ps + ";;\n" +
+				"esac\n"
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -698,12 +712,13 @@ func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
 			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
 				t.Fatal(err)
 			}
-			if err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
-				t.Fatalf("Down: %v", err)
+			err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Down = %v, want error %v", err, tc.wantErr)
 			}
 			b, _ := os.ReadFile(record)
 			if got := strings.Contains(string(b), "network rm net1"); got != tc.removed {
-				t.Errorf("network removed = %v, want %v; calls:\n%s", got, tc.removed, b)
+				t.Errorf("network rm called = %v, want %v; calls:\n%s", got, tc.removed, b)
 			}
 		})
 	}

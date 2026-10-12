@@ -224,6 +224,11 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 		if err != nil && !errors.Is(err, exec.ErrWaitDelay) && !strings.Contains(string(out), "No such container") {
 			return fmt.Errorf("docker rm -f %s (%s): %w\n%s", c.ID, name, err, out)
 		}
+		if c.Project != "" {
+			if err := p.removeEmptyProjectNetworks(ctx, c.Project); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -232,27 +237,46 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 // no container. Down stops one service and never runs compose down, which
 // would stop the siblings too, so without this every removed worktree
 // left its project network behind until Docker ran out of address pools.
+// A network some other container still names, stopped ones included (a
+// project may join it as external), stays.
 func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project string) error {
 	left, err := p.listContainers(ctx, "label="+labelComposeProject+"="+project)
 	if err != nil || len(left) > 0 {
 		return err
 	}
-	nctx, cancel := context.WithTimeout(ctx, p.cmdWait)
-	defer cancel()
-	ls := exec.CommandContext(nctx, "docker", "network", "ls", "-q", "--filter", "label="+labelComposeProject+"="+project)
-	ls.WaitDelay = p.pipeWait
-	out, err := ls.Output()
+	out, err := p.docker(ctx, "network", "ls", "-q", "--no-trunc", "--filter", "label="+labelComposeProject+"="+project)
 	if err != nil {
-		return fmt.Errorf("docker network ls: %w", err)
+		return fmt.Errorf("docker network ls: %w\n%s", err, out)
 	}
-	for _, id := range strings.Fields(string(out)) {
-		rm := exec.CommandContext(nctx, "docker", "network", "rm", id)
-		rm.WaitDelay = p.pipeWait
-		// A network another project joined, or one gone meanwhile, stays
-		// or is already gone; neither is this Down's failure.
-		if msg, err := rm.CombinedOutput(); err != nil && !strings.Contains(string(msg), "active endpoints") && !strings.Contains(string(msg), "not found") {
-			return fmt.Errorf("docker network rm %s: %w\n%s", id, err, msg)
+	for _, id := range strings.Fields(out) {
+		users, err := p.listContainers(ctx, "network="+id)
+		if err != nil {
+			return err
+		}
+		if len(users) > 0 {
+			continue
+		}
+		if msg, err := p.docker(ctx, "network", "rm", id); err != nil {
+			// Gone meanwhile (a prune, a parallel remove) is what this
+			// wanted; anything else is reported.
+			if _, ierr := p.docker(ctx, "network", "inspect", id); ierr == nil {
+				return fmt.Errorf("docker network rm %s: %w\n%s", id, err, msg)
+			}
 		}
 	}
 	return nil
+}
+
+// docker runs one docker CLI command bounded by cmdWait and returns its
+// combined output.
+func (p *Provider) docker(ctx context.Context, args ...string) (string, error) {
+	dctx, cancel := context.WithTimeout(ctx, p.cmdWait)
+	defer cancel()
+	cmd := exec.CommandContext(dctx, "docker", args...)
+	cmd.WaitDelay = p.pipeWait
+	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	return string(out), err
 }

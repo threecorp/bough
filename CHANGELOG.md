@@ -83,7 +83,8 @@
   Down stops only its service and never runs `compose down`, so each
   removed worktree left a Docker network behind until Docker reported
   "all predefined address pools have been fully subnetted". The network
-  now goes once the project holds no container.
+  now goes once the project holds no container and no other container,
+  stopped ones included, still names it.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
   checking its image; it now reports the error. A `kind: compose` create
