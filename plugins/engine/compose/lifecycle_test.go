@@ -634,8 +634,8 @@ func TestProvider_Down_RemovesItsOwnContainerWithoutASidecar(t *testing.T) {
 			if strings.Contains(string(b), "rm -f bough-compose-56137") {
 				t.Errorf("Down removed by name, which another container may carry; calls:\n%s", b)
 			}
-			if !tc.wantErr && !strings.Contains(string(b), "network ls") {
-				t.Errorf("Down never cleaned the project network; calls:\n%s", b)
+			if !tc.wantErr && !strings.Contains(string(b), "network ls --no-trunc --format {{.ID}}\t{{.Name}} --filter label=com.docker.compose.project=p") {
+				t.Errorf("Down never cleaned the removed container's project network; calls:\n%s", b)
 			}
 		})
 	}
@@ -688,9 +688,12 @@ func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
 	}{
 		{name: "project now empty", ps: "true", rm: "true", inspect: "true", removed: true},
 		{name: "project still holds a sibling service", ps: `case "$*" in *service=*) ;; *project=bough-t*) printf 's1\tbough-t\t\t\tExited\n';; esac`, rm: "true", inspect: "true"},
-		{name: "another project's stopped container names the network", ps: `case "$*" in *network=net1*) printf 'x1\tother\t\t\texited\n';; esac`, rm: "true", inspect: "true"},
-		{name: "network gone meanwhile", ps: "true", rm: "echo 'Error response from daemon: unknown network net1' >&2; exit 1", inspect: "exit 1", removed: true},
+		{name: "another project's stopped container names the network", ps: `case "$*" in *-a*network=net1*) printf 'x1\tother\t\t\texited\n';; esac`, rm: "true", inspect: "true"},
+		{name: "a never-started container names it by name only", ps: `case "$*" in *-a*network=bough-t_default*) printf 'x2\tother\t\t\tcreated\n';; esac`, rm: "true", inspect: "true"},
+		{name: "network gone meanwhile", ps: "true", rm: "echo 'Error response from daemon: unknown network net1' >&2; exit 1", inspect: "echo 'Error: No such network: net1' >&2; exit 1", removed: true},
+		{name: "joined by another container meanwhile", ps: "true", rm: "echo 'Error response from daemon: error while removing network: network bough-t_default has active endpoints' >&2; exit 1", inspect: "true", removed: true},
 		{name: "daemon error", ps: "true", rm: "echo 'Error response from daemon: boom' >&2; exit 1", inspect: "true", removed: true, wantErr: true},
+		{name: "daemon unreachable for the re-check", ps: "true", rm: "echo 'Error response from daemon: boom' >&2; exit 1", inspect: "echo 'Cannot connect to the Docker daemon' >&2; exit 1", removed: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -698,7 +701,7 @@ func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
 			t.Setenv("FAKE_DOCKER_RECORD", record)
 			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\n" +
 				"case \"$1 $2\" in\n" +
-				"\"network ls\") case \"$*\" in *--no-trunc*" + projectFilter + "*) echo net1;; esac;;\n" +
+				"\"network ls\") case \"$*\" in *--no-trunc*" + projectFilter + "*) printf 'net1\\tbough-t_default\\n';; esac;;\n" +
 				"\"network rm\") " + tc.rm + ";;\n" +
 				"\"network inspect\") " + tc.inspect + ";;\n" +
 				"ps*) " + tc.ps + ";;\n" +

@@ -237,32 +237,49 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 // no container. Down stops one service and never runs compose down, which
 // would stop the siblings too, so without this every removed worktree
 // left its project network behind until Docker ran out of address pools.
-// A network some other container still names, stopped ones included (a
-// project may join it as external), stays.
+// A network some other container still names, by ID or by name (a created
+// but never started container records only the name), stays, stopped
+// containers included. A failure the daemon reports as "in use" or "gone"
+// is the outcome this wanted; any other failure is returned. A network left
+// after a failed cleanup whose container and sidecar are both gone is not
+// found again; `docker network prune` clears it.
 func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project string) error {
 	left, err := p.listContainers(ctx, "label="+labelComposeProject+"="+project)
 	if err != nil || len(left) > 0 {
 		return err
 	}
-	out, err := p.docker(ctx, "network", "ls", "-q", "--no-trunc", "--filter", "label="+labelComposeProject+"="+project)
+	out, err := p.docker(ctx, "network", "ls", "--no-trunc", "--format", "{{.ID}}\t{{.Name}}", "--filter", "label="+labelComposeProject+"="+project)
 	if err != nil {
 		return fmt.Errorf("docker network ls: %w\n%s", err, out)
 	}
-	for _, id := range strings.Fields(out) {
-		users, err := p.listContainers(ctx, "network="+id)
-		if err != nil {
-			return err
-		}
-		if len(users) > 0 {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		id, name, _ := strings.Cut(line, "\t")
+		if id == "" {
 			continue
 		}
-		if msg, err := p.docker(ctx, "network", "rm", id); err != nil {
-			// Gone meanwhile (a prune, a parallel remove) is what this
-			// wanted; anything else is reported.
-			if _, ierr := p.docker(ctx, "network", "inspect", id); ierr == nil {
-				return fmt.Errorf("docker network rm %s: %w\n%s", id, err, msg)
+		inUse := false
+		for _, ref := range []string{id, name} {
+			if ref == "" {
+				continue
 			}
+			users, err := p.listContainers(ctx, "network="+ref)
+			if err != nil {
+				return err
+			}
+			inUse = inUse || len(users) > 0
 		}
+		if inUse {
+			continue
+		}
+		msg, err := p.docker(ctx, "network", "rm", id)
+		if err == nil || strings.Contains(msg, "active endpoints") {
+			continue
+		}
+		if imsg, ierr := p.docker(ctx, "network", "inspect", id); ierr != nil &&
+			(strings.Contains(imsg, "No such network") || strings.Contains(imsg, "not found")) {
+			continue
+		}
+		return fmt.Errorf("docker network rm %s (%s): %w\n%s", id, name, err, msg)
 	}
 	return nil
 }
