@@ -18,9 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
@@ -86,11 +86,11 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 
 // Cleanup removes the postgres datadir. Down must have already
 // converged on "nothing listening on Port".
-func (p *Provider) Cleanup(_ context.Context, datadir string, _ []int) error {
+func (p *Provider) Cleanup(ctx context.Context, datadir string, _ []int) error {
 	if datadir == "" {
 		return errors.New("postgres: Cleanup: datadir is required")
 	}
-	return os.RemoveAll(datadir)
+	return dockerutil.RemoveDatadir(ctx, datadir)
 }
 
 // PortRangeDefault returns the plugin's recommended port range under

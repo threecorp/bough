@@ -69,8 +69,9 @@ and the suite will treat the clause as not-applicable rather than failed.
 7. **`Cleanup` removes the datadir and is idempotent.** After a nil
    return the datadir must be gone, and a second `Cleanup` on the same
    `datadir` + `ports` must return nil. The suite skips, rather than
-   fails, a permission error from a datadir the container's user owns.
-   A plugin that owns no datadir (compose) sets
+   fails, a permission error from a datadir the container's user owns;
+   the bundled engines avoid it with `dockerutil.RemoveDatadir`, which
+   deletes such files from a root container. A plugin that owns no datadir (compose) sets
    `conformance.Config.SkipDatadirRemovalCheck`.
 
 ## EnvVars
