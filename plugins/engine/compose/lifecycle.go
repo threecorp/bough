@@ -69,7 +69,8 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
 
-	project, err := p.resolveProject(ctx, req.WorktreeRoot, port, file, service, req.Extras["compose.project"])
+	ownFiles := []string{composeFile, overrideFilePath(req.WorktreeRoot, port)}
+	project, err := p.resolveProject(ctx, req.WorktreeRoot, port, file, service, req.Extras["compose.project"], ownFiles)
 	if err != nil {
 		return fmt.Errorf("compose: Up: %w", err)
 	}
@@ -100,7 +101,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	// is only provably this worktree's through the compose files compose
 	// recorded on it, which UpOrReuse does not read, and compose up
 	// recreates whatever the project runs, dependencies included.
-	if err := p.checkOwner(ctx, port, req.WorktreeRoot, project); err != nil {
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, project, "", ownFiles); err != nil {
 		return fmt.Errorf("compose: Up: %w", err)
 	}
 	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
@@ -169,16 +170,20 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 
 // writeOverrideFile renders and persists the override fragment under
 // the engine-provider repo's own .local/ scratch dir.
+// overrideFilePath is where writeOverrideFile puts the fragment for port.
+func overrideFilePath(worktreeRoot string, port int) string {
+	return filepath.Join(worktreeRoot, ".local", fmt.Sprintf("bough-compose-%d-override.yml", port))
+}
+
 func writeOverrideFile(worktreeRoot string, port int, spec overrideSpec) (string, error) {
 	data, err := renderOverride(spec)
 	if err != nil {
 		return "", fmt.Errorf("render override: %w", err)
 	}
-	dir := filepath.Join(worktreeRoot, ".local")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("mkdir %s: %w", dir, err)
+	path := overrideFilePath(worktreeRoot, port)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("bough-compose-%d-override.yml", port))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("write override: %w", err)
 	}
@@ -228,11 +233,12 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
-	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project); err != nil {
+	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
+	ownFiles := []string{composeFile, overrideFilePath(req.WorktreeRoot, port)}
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project, st.Service, ownFiles); err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
 	}
 
-	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
 		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort, WorktreeRoot: req.WorktreeRoot,
 	})

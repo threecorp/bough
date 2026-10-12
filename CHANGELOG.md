@@ -54,10 +54,12 @@
   file alone, so two clones with a same-named worktree shared a project,
   and one clone's `compose up` recreated the other's service. The name now
   ends with a hash of the worktree directory, and create and remove refuse
-  a project holding any container (dependencies included) that is not
-  provably this worktree's: its worktree label, or for an older container
-  the compose files docker compose recorded on it, must point into this
-  worktree.
+  a project holding a container that is not provably this worktree's: its
+  worktree label, or for an older container the compose files docker
+  compose recorded on it, must be this worktree's (create checks every
+  service, since `compose up` also starts the dependencies; remove checks
+  the one service it stops). Changing `compose.project` while the
+  worktree's container runs in the old project is refused too.
   A service started earlier keeps its project (from its state file, or
   from its container when the state file was never written); if that
   project holds another clone's container, create stops and asks for the
