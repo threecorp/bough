@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ikeikeikeike/bough/pkg/dockerutil"
@@ -289,9 +290,11 @@ func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project strin
 }
 
 // networkGone reports whether a docker message says the network no
-// longer exists.
+// longer exists. A bare "not found" is not enough: a missing driver
+// plugin is reported as "plugin not found" while the network remains.
 func networkGone(msg string) bool {
-	return strings.Contains(msg, "No such network") || strings.Contains(msg, "not found") || strings.Contains(msg, "unknown network")
+	return strings.Contains(msg, "No such network") || strings.Contains(msg, "unknown network") ||
+		regexp.MustCompile(`network \S+ not found`).MatchString(msg)
 }
 
 // docker runs one docker CLI command bounded by cmdWait and returns its

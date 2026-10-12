@@ -693,6 +693,7 @@ func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
 		{name: "network gone meanwhile", ps: "true", rm: "echo 'Error response from daemon: unknown network net1' >&2; exit 1", inspect: "echo 'Error: No such network: net1' >&2; exit 1", removed: true},
 		{name: "joined by another container meanwhile", ps: "true", rm: "echo 'Error response from daemon: error while removing network: network bough-t_default has active endpoints' >&2; exit 1", inspect: "true", removed: true},
 		{name: "removal itself reports it gone, re-check unreachable", ps: "true", rm: "echo 'Error response from daemon: network net1 not found' >&2; exit 1", inspect: "echo 'Cannot connect to the Docker daemon' >&2; exit 1", removed: true},
+		{name: "missing driver plugin is not gone", ps: "true", rm: "echo 'Error response from daemon: failed deleting Network: plugin not found' >&2; exit 1", inspect: "true", removed: true, wantErr: true},
 		{name: "daemon error", ps: "true", rm: "echo 'Error response from daemon: boom' >&2; exit 1", inspect: "true", removed: true, wantErr: true},
 		{name: "daemon unreachable for the re-check", ps: "true", rm: "echo 'Error response from daemon: boom' >&2; exit 1", inspect: "echo 'Cannot connect to the Docker daemon' >&2; exit 1", removed: true, wantErr: true},
 	} {
