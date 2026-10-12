@@ -47,7 +47,10 @@ type monorepoFixture struct {
 }
 
 // v0.4CanonicalYAML is the schema_version:2 shape (engines: /
-// port_ranges: / initial_resources: / role: engine-provider).
+// port_ranges: / initial_resources: / role: engine-provider). Both
+// fixtures use 23000-23999, below the Linux (32768+) and macOS (49152+)
+// ephemeral ranges, where a loopback client's source port can make Up
+// see the picked port as taken (seen once on a CI runner).
 const v0_4CanonicalYAML = `schema_version: 2
 monorepo_root: "."
 repositories:
@@ -61,7 +64,7 @@ engines:
   - kind: mysql
     version: "8.4"
     port_ranges:
-      main: [42000, 42999]
+      main: [23000, 23999]
     initial_resources:
       - { type: database, name: bough }
 registry:
@@ -95,7 +98,7 @@ repositories:
 databases:
   - kind: mysql
     version: "8.4"
-    port_range: [42000, 42999]
+    port_range: [23000, 23999]
     initial_databases: ["bough"]
 registry:
   path: ".bough-ports.json"
@@ -204,7 +207,7 @@ func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {
 		t.Fatalf("load registry: %v", err)
 	}
 	port, ok := registry.Get(reg, wtName, "mysql.main")
-	if !ok || port < 42000 || port > 42999 {
+	if !ok || port < 23000 || port > 23999 {
 		t.Fatalf("registry missing mysql entry or out of range: port=%d ok=%v", port, ok)
 	}
 
