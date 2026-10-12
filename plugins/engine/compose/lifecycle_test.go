@@ -379,7 +379,7 @@ func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 
 // TestProvider_Down_StopsItsOwnLegacyContainer: a container made before
 // the worktree label is this worktree's when compose recorded this
-// worktree's compose file on it.
+// worktree's own override file on it (a shared compose file is no proof).
 func TestProvider_Down_StopsItsOwnLegacyContainer(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
 	// Down resolves the sidecar's compose.yml under the raw worktree root.
@@ -599,16 +599,42 @@ func TestCheckOwner_RefusalNeverAdvisesDeletingTheOtherContainer(t *testing.T) {
 
 // TestProvider_Down_RemovesItsOwnContainerWithoutASidecar: an Up that
 // failed after starting the container but before writing the sidecar left
-// Down with nothing to stop, so the published port blocked remove.
+// Down with nothing to stop, so the published port blocked remove. The
+// container is removed by the ID that was checked, never by the name a
+// newer container may carry; one already gone is not an error, and any
+// other daemon error is.
 func TestProvider_Down_RemovesItsOwnContainerWithoutASidecar(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
-	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1id\tp\t`+worktreeRoot+`\t\trunning\n';; esac`)
-	if err := New().Down(context.Background(), &api.DownReq{Ports: []int{56137}, WorktreeRoot: worktreeRoot}); err != nil {
-		t.Fatalf("Down: %v", err)
-	}
-	// By the checked ID: the name may have been reused in between.
-	if b, _ := os.ReadFile(record); !strings.Contains(string(b), "rm -f c1id") {
-		t.Errorf("Down did not remove its own container by ID; calls:\n%s", b)
+	row := `printf 'c1id\tp\t` + worktreeRoot + `\t\trunning\n'`
+	for _, tc := range []struct {
+		name, rm string
+		wantErr  bool
+	}{
+		{"removed", "true", false},
+		{"already gone", "echo 'Error response from daemon: No such container: c1id' >&2; exit 1", false},
+		{"daemon error", "echo 'Error response from daemon: boom' >&2; exit 1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in ps) case \"$*\" in *name=*) " + row + ";; esac;; rm) " + tc.rm + ";; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			err := New().Down(context.Background(), &api.DownReq{Ports: []int{56137}, WorktreeRoot: worktreeRoot})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Down = %v, want error %v", err, tc.wantErr)
+			}
+			b, _ := os.ReadFile(record)
+			if !strings.Contains(string(b), "rm -f c1id") {
+				t.Errorf("Down did not remove its own container by ID; calls:\n%s", b)
+			}
+			if strings.Contains(string(b), "rm -f bough-compose-56137") {
+				t.Errorf("Down removed by name, which another container may carry; calls:\n%s", b)
+			}
+		})
 	}
 }
 
@@ -642,6 +668,44 @@ func TestProvider_Up_SharedComposeFileIsNoProofOfOwnership(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
 		t.Errorf("Up ran docker compose; calls:\n%s", b)
+	}
+}
+
+// TestProvider_Down_RemovesTheEmptyProjectNetwork: Down never runs
+// compose down, so the project's network outlived its last container and
+// every removed worktree left one behind until Docker ran out of address
+// pools. Once the project holds no container, its network goes too.
+func TestProvider_Down_RemovesTheEmptyProjectNetwork(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ps      string
+		removed bool
+	}{
+		{"project now empty", "true", true},
+		{"project still holds a sibling service", `case "$*" in *service=*) ;; *project=*) printf 's1\tbough-t\t\t\n';; esac`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			record := filepath.Join(t.TempDir(), "calls.txt")
+			t.Setenv("FAKE_DOCKER_RECORD", record)
+			fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1 $2\" in \"network ls\") echo net1;; ps*) " + tc.ps + ";; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+			st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56139}
+			if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+				t.Fatal(err)
+			}
+			if err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
+				t.Fatalf("Down: %v", err)
+			}
+			b, _ := os.ReadFile(record)
+			if got := strings.Contains(string(b), "network rm net1"); got != tc.removed {
+				t.Errorf("network removed = %v, want %v; calls:\n%s", got, tc.removed, b)
+			}
+		})
 	}
 }
 

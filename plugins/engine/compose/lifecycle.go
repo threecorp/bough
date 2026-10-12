@@ -285,6 +285,9 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	if out, err := rmCmd.CombinedOutput(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Errorf("compose: Down: docker compose rm failed: %w\n%s", err, out)
 	}
+	if err := p.removeEmptyProjectNetworks(ctx, st.Project); err != nil {
+		return fmt.Errorf("compose: Down: %w", err)
+	}
 	return nil
 }
 

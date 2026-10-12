@@ -227,3 +227,32 @@ func (p *Provider) removeOwnContainer(ctx context.Context, port int, worktreeRoo
 	}
 	return nil
 }
+
+// removeEmptyProjectNetworks removes the networks of project once it holds
+// no container. Down stops one service and never runs compose down, which
+// would stop the siblings too, so without this every removed worktree
+// left its project network behind until Docker ran out of address pools.
+func (p *Provider) removeEmptyProjectNetworks(ctx context.Context, project string) error {
+	left, err := p.listContainers(ctx, "label="+labelComposeProject+"="+project)
+	if err != nil || len(left) > 0 {
+		return err
+	}
+	nctx, cancel := context.WithTimeout(ctx, p.cmdWait)
+	defer cancel()
+	ls := exec.CommandContext(nctx, "docker", "network", "ls", "-q", "--filter", "label="+labelComposeProject+"="+project)
+	ls.WaitDelay = p.pipeWait
+	out, err := ls.Output()
+	if err != nil {
+		return fmt.Errorf("docker network ls: %w", err)
+	}
+	for _, id := range strings.Fields(string(out)) {
+		rm := exec.CommandContext(nctx, "docker", "network", "rm", id)
+		rm.WaitDelay = p.pipeWait
+		// A network another project joined, or one gone meanwhile, stays
+		// or is already gone; neither is this Down's failure.
+		if msg, err := rm.CombinedOutput(); err != nil && !strings.Contains(string(msg), "active endpoints") && !strings.Contains(string(msg), "not found") {
+			return fmt.Errorf("docker network rm %s: %w\n%s", id, err, msg)
+		}
+	}
+	return nil
+}
