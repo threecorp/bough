@@ -416,11 +416,74 @@ func TestProvider_Up_RefusesAnotherWorktreesLegacyContainer(t *testing.T) {
 		Ports:        []api.PortSpec{{Role: "main", Port: 56131}},
 		Extras:       map[string]string{"compose.file": "demo-api/compose.yml", "compose.service": "redis", "compose.target_port": "6379"},
 	})
-	if err == nil {
-		t.Error("Up accepted another worktree's legacy container")
+	if err == nil || !strings.Contains(err.Error(), "belongs to") {
+		t.Errorf("Up = %v, want the owner refusal", err)
 	}
 	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
 		t.Errorf("Up ran docker compose after the refusal; calls:\n%s", b)
+	}
+}
+
+// TestProvider_Up_KeepsTheRecordedProjectEvenWhenShared: switching a
+// recorded project to a new one left the running container in the old
+// project while the sidecar named the new one, so remove could not stop
+// it. A project that holds another worktree's container is refused.
+func TestProvider_Up_KeepsTheRecordedProjectEvenWhenShared(t *testing.T) {
+	other := filepath.Join(t.TempDir(), "demo-api")
+	const recorded = "bough-f-x-demo-api-compose-yml"
+	record := fakeDockerPS(t, `case "$*" in *project=`+recorded+`*) printf 'c2\t`+recorded+`\t`+other+`\t\n';; esac`)
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "compose.yml"), []byte("services: {redis: {image: redis:7-alpine}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := &upState{File: "demo-api/compose.yml", Service: "redis", Project: recorded, TargetPort: 6379, HostPort: 56132}
+	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+		t.Fatal(err)
+	}
+	err := New().Up(context.Background(), &api.UpReq{
+		WorktreeRoot: worktreeRoot,
+		Ports:        []api.PortSpec{{Role: "main", Port: st.HostPort}},
+		Extras:       map[string]string{"compose.file": st.File, "compose.service": st.Service, "compose.target_port": "6379"},
+	})
+	if err == nil || !strings.Contains(err.Error(), recorded) {
+		t.Errorf("Up = %v, want a refusal naming the shared project %s", err, recorded)
+	}
+	if got, _ := readSidecarState(worktreeRoot, st.HostPort); got == nil || got.Project != recorded {
+		t.Errorf("the sidecar's project changed to %+v", got)
+	}
+	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
+		t.Errorf("Up ran docker compose; calls:\n%s", b)
+	}
+}
+
+// TestForeignOwner_RecordedComposeFiles: docker compose joins the config
+// file paths with commas, which a worktree name may contain, and records
+// them in the case the caller typed; neither makes a container foreign.
+func TestForeignOwner_RecordedComposeFiles(t *testing.T) {
+	base := t.TempDir()
+	worktreeRoot := filepath.Join(base, "feat,one", "demo-api")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(worktreeRoot, "compose.yml") + "," + filepath.Join(worktreeRoot, ".local", "bough-compose-1-override.yml")
+	cases := []struct {
+		name, files string
+		ours        bool
+	}{
+		{"own files under a name with a comma", own, true},
+		{"own files in another letter case", strings.ToUpper(own), true},
+		{"another worktree's files", filepath.Join(base, "feat", "demo-api", "compose.yml"), false},
+		{"a path that only ends like ours", filepath.Join(base, "x") + worktreeRoot + "/compose.yml", false},
+		{"nothing recorded", "", false},
+	}
+	for _, tc := range cases {
+		got := foreignOwner(composeContainer{ID: "c1", ConfigFiles: tc.files}, worktreeRoot)
+		if (got == "") != tc.ours {
+			t.Errorf("%s: foreignOwner = %q, want ours=%v", tc.name, got, tc.ours)
+		}
 	}
 }
 
@@ -461,7 +524,6 @@ func TestProvider_Down_PsFailureStopsNothing(t *testing.T) {
 func TestResolveProject(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
 	hashed := composeProjectName(filepath.Base(filepath.Dir(worktreeRoot)), "demo-api/compose.yml", filepath.Dir(worktreeRoot))
-	other := filepath.Join(t.TempDir(), "demo-api")
 	const recorded = "bough-f-x-demo-api-compose-yml"
 	cases := []struct {
 		name    string
@@ -470,12 +532,11 @@ func TestResolveProject(t *testing.T) {
 		want    string
 	}{
 		{"sidecar project with no foreign container", true, "true", recorded},
-		{"sidecar project shared with another clone", true,
-			`case "$*" in *project=` + recorded + `*) printf 'c1\t` + recorded + `\t` + other + `\t\n';; esac`, hashed},
+
 		{"no sidecar, own container records the project", false,
 			`case "$*" in *name=*) printf 'c1\t` + recorded + `\t` + worktreeRoot + `\t\n';; esac`, recorded},
 		{"no sidecar, no container", false, "true", hashed},
-		{"docker ps fails", true, "echo boom >&2; exit 1", ""},
+		{"docker ps fails", false, "echo boom >&2; exit 1", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

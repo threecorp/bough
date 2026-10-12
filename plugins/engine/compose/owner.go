@@ -55,28 +55,19 @@ func (p *Provider) listContainers(ctx context.Context, filters ...string) ([]com
 	return rows, nil
 }
 
-// foreignError is the refusal for a container another worktree owns, or
-// one bough cannot prove is this worktree's. resolveProject tells it apart
-// from a failed docker call, which it must return instead of moving on.
-type foreignError struct{ err error }
-
-func (e *foreignError) Error() string { return e.err.Error() }
-
 // foreignOwner returns "" only when c is provably this worktree's: its
 // worktree-root label names this worktree (or a worktree that no longer
 // exists, like the native engines), or, for a container made before the
-// label, a compose file compose recorded on it lies inside this worktree.
-// Anything else is foreign, including a legacy container whose files are
-// gone, since compose up would recreate it and compose stop would stop it.
+// label or a dependency the override does not label, the compose files
+// compose recorded on it lie in this worktree. Anything else is foreign,
+// including a legacy container whose files are gone, since compose up
+// would recreate it and compose stop would stop it.
 func foreignOwner(c composeContainer, worktreeRoot string) string {
 	if c.WorktreeRoot != "" {
 		return dockerutil.OtherWorktree(c.WorktreeRoot, worktreeRoot)
 	}
-	worktree := filepath.Dir(worktreeRoot)
-	for _, f := range strings.Split(c.ConfigFiles, ",") {
-		if f != "" && inside(worktree, f) {
-			return ""
-		}
+	if recordsWorktree(c.ConfigFiles, filepath.Dir(worktreeRoot)) {
+		return ""
 	}
 	if c.ConfigFiles != "" {
 		return "the worktree of " + c.ConfigFiles
@@ -84,12 +75,19 @@ func foreignOwner(c composeContainer, worktreeRoot string) string {
 	return "an unknown owner (no bough label, no compose files recorded)"
 }
 
-// inside reports whether path is within dir, comparing resolved paths and
-// the first component of the relative path. A recorded compose file may be
-// gone, so each side resolves through its longest existing prefix.
-func inside(dir, path string) bool {
-	rel, err := filepath.Rel(resolvePrefix(dir), resolvePrefix(path))
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// recordsWorktree reports whether files, compose's comma-joined config
+// file label, starts a path inside worktree. The label is not split: a
+// worktree name may hold a comma. Case is ignored, since compose records
+// the path as the caller typed it on a case-insensitive filesystem.
+func recordsWorktree(files, worktree string) bool {
+	files = strings.ToLower(files)
+	for _, dir := range []string{worktree, resolvePrefix(worktree)} {
+		prefix := strings.ToLower(dir) + string(filepath.Separator)
+		if strings.HasPrefix(files, prefix) || strings.Contains(files, ","+prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolvePrefix resolves symlinks in the longest existing prefix of path
@@ -123,7 +121,9 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 	}
 	for _, c := range append(byName, byProject...) {
 		if owner := foreignOwner(c, worktreeRoot); owner != "" {
-			return &foreignError{dockerutil.WorktreeConflict(fmt.Sprintf("%s (project %s)", c.ID, project), owner, filepath.Dir(worktreeRoot))}
+			return fmt.Errorf("%w (a project recorded before project names carried a checkout hash can be shared "+
+				"between clones: `bough remove` this worktree and create it again to get its own project)",
+				dockerutil.WorktreeConflict(fmt.Sprintf("%s (project %s)", c.ID, project), owner, filepath.Dir(worktreeRoot)))
 		}
 	}
 	return nil
@@ -134,38 +134,27 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 // it, from its sidecar or, when the sidecar was never written, from its
 // own container's label, so an existing service keeps its project and its
 // named volumes; else composeProjectName for this worktree. A recorded
-// project that holds a container not provably this worktree's (a name two
-// clones shared before the checkout hash) is not reused; a failed docker
-// call is an error, not a reason to switch projects.
+// project is never swapped for another: the running container would stay
+// in the old one while the sidecar named the new one. Up refuses a
+// recorded project that holds another worktree's container instead.
 func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port int, file, service, explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	var candidates []string
-	if st, err := readSidecarState(worktreeRoot, port); err == nil && st.Project != "" && st.File == file && st.Service == service {
-		candidates = append(candidates, st.Project)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	st, err := readSidecarState(worktreeRoot, port)
+	switch {
+	case err == nil && st.Project != "" && st.File == file && st.Service == service:
+		return st.Project, nil
+	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return "", fmt.Errorf("read sidecar state: %w", err)
 	}
-	if len(candidates) == 0 {
-		own, err := p.listContainers(ctx, fmt.Sprintf("name=^bough-compose-%d$", port))
-		if err != nil {
-			return "", err
-		}
-		for _, c := range own {
-			if c.Project != "" && foreignOwner(c, worktreeRoot) == "" {
-				candidates = append(candidates, c.Project)
-			}
-		}
+	own, err := p.listContainers(ctx, fmt.Sprintf("name=^bough-compose-%d$", port))
+	if err != nil {
+		return "", err
 	}
-	for _, project := range candidates {
-		err := p.checkOwner(ctx, port, worktreeRoot, project)
-		var foreign *foreignError
-		switch {
-		case err == nil:
-			return project, nil
-		case !errors.As(err, &foreign):
-			return "", err
+	for _, c := range own {
+		if c.Project != "" && foreignOwner(c, worktreeRoot) == "" {
+			return c.Project, nil
 		}
 	}
 	worktree := filepath.Dir(worktreeRoot)

@@ -59,11 +59,18 @@
   the compose files docker compose recorded on it, must point into this
   worktree.
   A service started earlier keeps its project (from its state file, or
-  from its container when the state file was never written) unless that
-  project holds another clone's container.
+  from its container when the state file was never written); if that
+  project holds another clone's container, create stops and asks for the
+  worktree to be removed and created again rather than switching projects
+  under a running service.
 - **`kind: compose` publishes its port on 127.0.0.1 only.** The override
   set no `host_ip`, so Docker published the service on every interface,
-  unlike the other engines.
+  unlike the other engines. A service already running keeps its old
+  binding until `bough remove` and `bough create` recreate it.
+- **Removing a worktree no longer follows a symlinked `.local`.** The
+  datadir cleanup resolved the path through a `.local` linked to another
+  worktree and deleted that worktree's datadir; it now refuses a symlinked
+  datadir or parent.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
   checking its image; it now reports the error. A `kind: compose` create
