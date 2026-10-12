@@ -330,10 +330,11 @@ override (fixed host port + a `bough-compose-<port>` container name) and
 runs `docker compose -f demo-api/compose.yml -f <override> -p
 <worktree-scoped-project> up -d redis`. Each worktree gets its own project
 name, container name and host port for that service, so two worktrees
-using the same file do not collide on them. Two caveats: the project name
-lowercases the worktree name and folds other characters to `-`
-(`F_Foo` and `F-Foo` map to the same project), and a `compose.project` you
-set is used as is.
+using the same file do not collide on them. The project name is the
+worktree name, lowercased with other characters folded to `-`, then the
+compose file path and a hash of the worktree directory, so a second clone
+of the monorepo gets its own project. A `compose.project` you set is used
+as is.
 
 Trade-offs versus the four native plugins:
 

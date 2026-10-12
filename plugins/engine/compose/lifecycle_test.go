@@ -330,7 +330,7 @@ func TestProvider_Down_PassesGraceToComposeStop(t *testing.T) {
 func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 	bin := t.TempDir()
 	record := filepath.Join(t.TempDir(), "calls.txt")
-	owner := t.TempDir()
+	owner := filepath.Join(t.TempDir(), "demo-api")
 	t.Setenv("FAKE_DOCKER_RECORD", record)
 	t.Setenv("FAKE_DOCKER_OWNER", owner)
 	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_DOCKER_RECORD\"\ncase \"$1\" in inspect) echo \"$FAKE_DOCKER_OWNER\";; esac\n"
@@ -345,8 +345,8 @@ func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
-	if err == nil || !strings.Contains(err.Error(), owner) {
-		t.Errorf("Down = %v, want a refusal naming the owning worktree %s", err, owner)
+	if err == nil || !strings.Contains(err.Error(), filepath.Dir(owner)) {
+		t.Errorf("Down = %v, want a refusal naming the owning worktree %s", err, filepath.Dir(owner))
 	}
 	if b, _ := os.ReadFile(record); strings.Contains(string(b), " stop ") || strings.Contains(string(b), " rm ") {
 		t.Errorf("Down stopped another worktree's container; calls:\n%s", b)
@@ -391,6 +391,26 @@ func TestProvider_Down_InspectFailureStopsNothing(t *testing.T) {
 				t.Error("Down succeeded although docker inspect failed")
 			}
 		})
+	}
+}
+
+// TestResolveProject_KeepsTheRecordedProject: a service started before
+// project names carried a checkout hash is found by the name its sidecar
+// recorded, so upgrading does not orphan it from Down.
+func TestResolveProject_KeepsTheRecordedProject(t *testing.T) {
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	st := &upState{File: "demo-api/compose.yml", Service: "redis", Project: "bough-f-x-demo-api-compose-yml", TargetPort: 6379, HostPort: 56129}
+	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveProject(worktreeRoot, st.HostPort, st.File, st.Service, ""); got != st.Project {
+		t.Errorf("resolveProject = %q, want the recorded %q", got, st.Project)
+	}
+	if got := resolveProject(worktreeRoot, st.HostPort, st.File, st.Service, "mine"); got != "mine" {
+		t.Errorf("an explicit compose.project must win; got %q", got)
+	}
+	if got := resolveProject(worktreeRoot, st.HostPort, "other.yml", st.Service, ""); got == st.Project {
+		t.Error("a sidecar for another file must not decide the project")
 	}
 }
 

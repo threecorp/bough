@@ -109,10 +109,18 @@ func resolveRemoveTarget(name, worktreePath string) (monorepoRoot, wtName, path 
 		if err := checkWorktreeEntry(filepath.Dir(path), wtName); err != nil {
 			return "", "", "", err
 		}
+		if err := checkNotAboveRoot(monorepoRoot, path); err != nil {
+			return "", "", "", err
+		}
 	case name != "":
 		monorepoRoot, _ = os.Getwd()
 		wtName = name
 		path, err = worktreePathFor(monorepoRoot, name)
+		if err != nil && legacyNestedName(name) {
+			// runRemove accepts it only when the registry holds this name.
+			path = filepath.Join(worktreesDir(monorepoRoot), name)
+			err = checkNotAboveRoot(monorepoRoot, path)
+		}
 	default:
 		err = errors.New("removal needs a worktree path or name (--path/--name, or hook worktree_path/name)")
 	}

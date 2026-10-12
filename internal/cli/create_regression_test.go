@@ -138,7 +138,7 @@ func TestRunPostCreateHooks_MigrationFailureSkipsSeed(t *testing.T) {
 }
 
 func TestCreate_MigrationFailurePropagates(t *testing.T) {
-	for _, mode := range []string{"strict-cli", "official-hook", "default-cli"} {
+	for _, mode := range []string{"strict-cli", "official-hook", "legacy-hook", "default-cli"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -176,6 +176,11 @@ func TestCreate_MigrationFailurePropagates(t *testing.T) {
 					cmd.SetIn(bytes.NewBufferString(fmt.Sprintf(`{"name":"F-Migrate","cwd":%q}`, root)))
 				case "strict-cli":
 					args = append(args, "--strict")
+				case "legacy-hook":
+					// Hooks installed before `bough hook handle` ran create
+					// with the payload on stdin; that path must fail too.
+					args = []string{"--stdin-json", "--no-fetch"}
+					cmd.SetIn(bytes.NewBufferString(fmt.Sprintf(`{"name":"F-Migrate","cwd":%q}`, root)))
 				}
 				cmd.SetArgs(args)
 				cmd.SetOut(&out)
@@ -286,6 +291,33 @@ func TestAllocateAllPorts_OverlappingRangesGetDistinctPorts(t *testing.T) {
 				t.Errorf("%s: %s and %s were both given port %d", name, kind, other, port)
 			}
 			seen[port] = kind
+		}
+	}
+}
+
+// TestAllocateAllPorts_OverlappingPortsKindsAreReproducible: ports: is a
+// map, and with every kind avoiding every held port the kind allocated
+// first took the shared candidate, so a re-create could swap api and web.
+func TestAllocateAllPorts_OverlappingPortsKindsAreReproducible(t *testing.T) {
+	shared := config.PortRange{Range: [2]int{40000, 40099}}
+	cfg := &config.Config{
+		Registry: config.RegistryConfig{Path: ".bough/ports.json"},
+		Ports:    map[string]config.PortRange{"api": shared, "web": shared, "admin": shared, "docs": shared},
+	}
+	var first map[string]int
+	for i := 0; i < 20; i++ {
+		_, ports, err := allocateAllPorts(cfg, t.TempDir(), "F-A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == nil {
+			first = ports
+			continue
+		}
+		for kind, port := range ports {
+			if first[kind] != port {
+				t.Fatalf("run %d gave %s port %d, first run gave %d", i, kind, port, first[kind])
+			}
 		}
 	}
 }

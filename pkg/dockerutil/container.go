@@ -165,8 +165,7 @@ func shellQuote(s string) string {
 // reusing it would point this worktree at that one's database, and
 // removing it would delete that database's container. wantWorktree == ""
 // skips the check. A container without the label (made by an older bough)
-// is checked by its bind mounts instead: one that binds another live
-// directory and not wantDatadir is refused the same way.
+// is checked by its datadir bind instead (containerWorktree).
 //
 // A container created from another image — running or stopped — is an
 // error rather than a reuse or a recreate: engines[].version picks the
@@ -178,7 +177,7 @@ func shellQuote(s string) string {
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
-func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWorktree, wantDatadir string) (bool, error) {
+func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWorktree string) (bool, error) {
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return false, err
@@ -195,13 +194,8 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWor
 		}
 		return false, err
 	}
-	if have := otherWorktree(info.Config, wantWorktree); have != "" {
-		return false, WorktreeConflict(name, have, wantWorktree)
-	}
-	if info.Config == nil || info.Config.Labels[LabelWorktreeRoot] == "" {
-		if have := otherDatadir(info.HostConfig, wantDatadir); have != "" {
-			return false, WorktreeConflict(name, have, wantDatadir)
-		}
+	if owner := otherOwner(containerWorktree(info.Config, info.HostConfig), wantWorktree); owner != "" {
+		return false, WorktreeConflict(name, owner, filepath.Dir(wantWorktree))
 	}
 	have := configImage(info.Config)
 	if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
@@ -232,8 +226,8 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWor
 
 // CheckWorktree is Down's half of the UpOrReuse owner check: stopping a
 // container another checkout's worktree created would take that
-// worktree's database down, so it is an error instead. A container that
-// vanished meanwhile is not; Down then has nothing to stop.
+// worktree's database down, so it is an error instead, labelled or not. A
+// container that vanished meanwhile is not; Down then has nothing to stop.
 func CheckWorktree(ctx context.Context, cli *client.Client, id, name, wantWorktree string) error {
 	info, err := cli.ContainerInspect(ctx, id)
 	if err != nil {
@@ -242,34 +236,58 @@ func CheckWorktree(ctx context.Context, cli *client.Client, id, name, wantWorktr
 		}
 		return err
 	}
-	if have := otherWorktree(info.Config, wantWorktree); have != "" {
-		return WorktreeConflict(name, have, wantWorktree)
+	if owner := otherOwner(containerWorktree(info.Config, info.HostConfig), wantWorktree); owner != "" {
+		return WorktreeConflict(name, owner, filepath.Dir(wantWorktree))
 	}
 	return nil
 }
 
-func otherWorktree(cfg *container.Config, want string) string {
-	if cfg == nil {
+// containerWorktree returns the worktree dir a container belongs to: the
+// parent of its LabelWorktreeRoot (an engine-provider repo inside the
+// worktree), or for a container made before the label, the worktree of
+// its <worktree>/.local/<kind>-data bind. "" when neither says.
+func containerWorktree(cfg *container.Config, hostCfg *container.HostConfig) string {
+	if cfg != nil && cfg.Labels[LabelWorktreeRoot] != "" {
+		return filepath.Dir(cfg.Labels[LabelWorktreeRoot])
+	}
+	if hostCfg == nil {
 		return ""
 	}
-	return OtherWorktree(cfg.Labels[LabelWorktreeRoot], want)
+	for _, bind := range hostCfg.Binds {
+		src, _, _ := strings.Cut(bind, ":")
+		if filepath.Base(filepath.Dir(src)) == ".local" && strings.HasSuffix(filepath.Base(src), "-data") {
+			return filepath.Dir(filepath.Dir(src))
+		}
+	}
+	return ""
 }
 
-// OtherWorktree returns have, a container's LabelWorktreeRoot, when it
-// names a live worktree other than want. Names are bough-<engine>-<port>
-// and the port is a hash of the worktree name, so a second clone of the
-// same monorepo with a same-named worktree lands on the same name. An
-// unlabelled container (made before the label existed), an empty want,
-// or a labelled worktree that no longer exists is not a conflict, so none
-// of them blocks what worked before.
+// OtherWorktree returns the worktree dir of have, a container's
+// LabelWorktreeRoot, when it is a live worktree other than want's. Both
+// are engine-provider repo paths (UpReq.WorktreeRoot); the worktree is
+// their parent, which also holds the datadir, so a deleted repo dir does
+// not free the database. Names are bough-<engine>-<port> and the port is a
+// hash of the worktree name, so a second clone of the same monorepo with a
+// same-named worktree lands on the same name.
 func OtherWorktree(have, want string) string {
-	if have == "" || want == "" || samePath(have, want) {
+	if have == "" {
 		return ""
 	}
-	if _, err := os.Stat(have); errors.Is(err, fs.ErrNotExist) {
+	return otherOwner(filepath.Dir(have), want)
+}
+
+// otherOwner returns owner when it names a live worktree dir other than
+// the parent of want. An unknown owner, an empty want, or an owner dir
+// that no longer exists is not a conflict, so none of them blocks what
+// worked before.
+func otherOwner(owner, want string) string {
+	if owner == "" || want == "" || samePath(owner, filepath.Dir(want)) {
 		return ""
 	}
-	return have
+	if _, err := os.Stat(owner); errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	return owner
 }
 
 // samePath compares two spellings of a directory by the file they open,
@@ -282,28 +300,6 @@ func samePath(a, b string) bool {
 	ia, errA := os.Stat(a)
 	ib, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(ia, ib)
-}
-
-// otherDatadir is the owner check for a container made before
-// LabelWorktreeRoot existed: its bind mounts still name the datadir it was
-// created for. It returns a live bind source when none of the binds is
-// want, and "" when want is empty, the container has no binds, or a bind
-// is want or no longer exists.
-func otherDatadir(hostCfg *container.HostConfig, want string) string {
-	if hostCfg == nil || want == "" || len(hostCfg.Binds) == 0 {
-		return ""
-	}
-	other := ""
-	for _, bind := range hostCfg.Binds {
-		src, _, _ := strings.Cut(bind, ":")
-		if samePath(src, want) {
-			return ""
-		}
-		if _, err := os.Stat(src); err == nil && other == "" {
-			other = src
-		}
-	}
-	return other
 }
 
 // WorktreeConflict is the refusal for a container OtherWorktree flagged.

@@ -65,9 +65,9 @@ func TestComposeProjectName(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := composeProjectName(tc.worktreeName, tc.file)
-			if got != tc.want {
-				t.Errorf("composeProjectName(%q, %q) = %q, want %q", tc.worktreeName, tc.file, got, tc.want)
+			got := composeProjectName(tc.worktreeName, tc.file, "/w/"+tc.worktreeName)
+			if !strings.HasPrefix(got, tc.want+"-") || len(got) != len(tc.want)+1+projectHashLen {
+				t.Errorf("composeProjectName(%q, %q) = %q, want %q plus a %d-char checkout hash", tc.worktreeName, tc.file, got, tc.want, projectHashLen)
 			}
 			// Compose project names must match [a-z0-9][a-z0-9_-]*.
 			if got == "" || !isLowerAlnum(rune(got[0])) {
@@ -87,12 +87,12 @@ func isLowerAlnum(r rune) bool {
 }
 
 // TestComposeProjectName_Deterministic guards the property Up/Down
-// both rely on: the SAME (worktreeName, file) pair must always derive
+// both rely on: the SAME (worktreeName, file, checkout) must always derive
 // the SAME project name, so a Down call can locate what Up started
 // without any extra state beyond the sidecar file's own File field.
 func TestComposeProjectName_Deterministic(t *testing.T) {
-	a := composeProjectName("F-Feature", "demo-api/compose.yml")
-	b := composeProjectName("F-Feature", "demo-api/compose.yml")
+	a := composeProjectName("F-Feature", "demo-api/compose.yml", "/w/F-Feature")
+	b := composeProjectName("F-Feature", "demo-api/compose.yml", "/w/F-Feature")
 	if a != b {
 		t.Errorf("composeProjectName is not deterministic: %q != %q", a, b)
 	}
@@ -104,10 +104,21 @@ func TestComposeProjectName_Deterministic(t *testing.T) {
 // or docker compose's own up-or-reuse would silently hand worktree B
 // a container actually owned by worktree A.
 func TestComposeProjectName_DifferentWorktreesDiffer(t *testing.T) {
-	a := composeProjectName("F-WorktreeA", "demo-api/compose.yml")
-	b := composeProjectName("F-WorktreeB", "demo-api/compose.yml")
+	a := composeProjectName("F-WorktreeA", "demo-api/compose.yml", "/w/F-WorktreeA")
+	b := composeProjectName("F-WorktreeB", "demo-api/compose.yml", "/w/F-WorktreeB")
 	if a == b {
 		t.Errorf("two different worktrees derived the same project name %q — isolation is broken", a)
+	}
+}
+
+// TestComposeProjectName_SameNameInAnotherCheckoutDiffers: two clones of
+// one monorepo with a same-named worktree derived one project, so the
+// second clone's `compose up` recreated the first clone's service.
+func TestComposeProjectName_SameNameInAnotherCheckoutDiffers(t *testing.T) {
+	a := composeProjectName("F-Feature", "demo-api/compose.yml", "/clone-a/worktrees/F-Feature")
+	b := composeProjectName("F-Feature", "demo-api/compose.yml", "/clone-b/worktrees/F-Feature")
+	if a == b {
+		t.Errorf("two checkouts derived the same project name %q", a)
 	}
 }
 

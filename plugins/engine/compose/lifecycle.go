@@ -64,16 +64,12 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: invalid compose.target_port %q", targetPortStr)
 	}
 
-	worktreeName := filepath.Base(filepath.Dir(req.WorktreeRoot))
 	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, file)
 	if _, err := os.Stat(composeFile); err != nil {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
 
-	project := req.Extras["compose.project"]
-	if project == "" {
-		project = composeProjectName(worktreeName, file)
-	}
+	project := resolveProject(req.WorktreeRoot, port, file, service, req.Extras["compose.project"])
 	envPrefix := req.Extras["compose.env_prefix"]
 	if envPrefix == "" {
 		envPrefix = strings.ToUpper(service)
@@ -97,7 +93,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
-	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot, "")
+	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
 	}
@@ -294,7 +290,7 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot string
 		return fmt.Errorf("docker inspect %s: %w\n%s", name, err, stderr.String())
 	}
 	if have := dockerutil.OtherWorktree(strings.TrimSpace(string(out)), worktreeRoot); have != "" {
-		return dockerutil.WorktreeConflict(name, have, worktreeRoot)
+		return dockerutil.WorktreeConflict(name, have, filepath.Dir(worktreeRoot))
 	}
 	return nil
 }
@@ -331,4 +327,20 @@ func (p *Provider) EnvVars(_ context.Context, req *api.EnvVarsReq) (map[string]s
 		out["BOUGH_"+prefix+"_URL"] = fmt.Sprintf("%s://127.0.0.1:%d", scheme, port)
 	}
 	return out, nil
+}
+
+// resolveProject picks the compose project for one service: an explicit
+// compose.project as is, else the project this worktree's sidecar already
+// recorded for the same file and service (a service started before project
+// names carried a checkout hash keeps its project, so Down still finds it),
+// else composeProjectName for this checkout's worktree.
+func resolveProject(worktreeRoot string, port int, file, service, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if st, err := readSidecarState(worktreeRoot, port); err == nil && st.Project != "" && st.File == file && st.Service == service {
+		return st.Project
+	}
+	worktree := filepath.Dir(worktreeRoot)
+	return composeProjectName(filepath.Base(worktree), file, worktree)
 }

@@ -58,6 +58,8 @@ package compose
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -118,8 +120,11 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 }
 
 // composeProjectName derives a deterministic, worktree-scoped
-// `docker compose -p` project name from the worktree name and the
-// compose file's declared path. Determinism matters twice over: Up
+// `docker compose -p` project name from the worktree name, the compose
+// file's declared path and a hash of checkout, the worktree's directory:
+// two clones of one monorepo with a same-named worktree would otherwise
+// share a project, and one clone's `compose up` would recreate the other
+// clone's service. Determinism matters twice over: Up
 // and Down must independently derive the identical name (Down has no
 // channel to receive whatever Up computed, besides the sidecar state
 // file which stores it verbatim), and two different worktrees
@@ -131,8 +136,13 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 // always starts with the literal "bough-" prefix, which is already a
 // valid lowercase-alnum start regardless of how degenerate the inputs
 // are.
-func composeProjectName(worktreeName, file string) string {
-	return "bough-" + sanitizeComposeToken(worktreeName) + "-" + sanitizeComposeToken(file)
+// projectHashLen is how many hex digits of the checkout hash the name keeps.
+const projectHashLen = 8
+
+func composeProjectName(worktreeName, file, checkout string) string {
+	sum := sha256.Sum256([]byte(checkout))
+	return "bough-" + sanitizeComposeToken(worktreeName) + "-" + sanitizeComposeToken(file) +
+		"-" + hex.EncodeToString(sum[:])[:projectHashLen]
 }
 
 // sanitizeComposeToken lowercases s and collapses every run of

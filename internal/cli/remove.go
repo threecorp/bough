@@ -74,6 +74,11 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		return err
 	}
 	defer release()
+	// Again under the lock: a create of a case alias may have made the
+	// directory while this remove waited.
+	if err := checkWorktreeEntry(filepath.Dir(worktreePath), filepath.Base(worktreePath)); err != nil {
+		return err
+	}
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.
@@ -87,6 +92,9 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	reg, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("load registry: %w", err)
+	}
+	if err := checkRemovableName(reg, name); err != nil {
+		return err
 	}
 
 	provider := engineProviderRepo(cfg)
@@ -338,4 +346,22 @@ func answers(ctx context.Context, host string, port int) bool {
 		}
 	}
 	return true
+}
+
+// checkRemovableName refuses a remove that would delete another registered
+// worktree: an older bough created nested names such as feat/x, so the
+// directory of `feat` can hold one. A nested name itself is removable only
+// when the registry holds it (legacyNestedName).
+func checkRemovableName(reg registry.Registry, name string) error {
+	if strings.Contains(name, "/") {
+		if _, ok := reg[name]; !ok {
+			return fmt.Errorf("worktree name %q must be one directory name; nested names are removable only when registered", name)
+		}
+	}
+	for other := range reg {
+		if strings.HasPrefix(other, name+"/") {
+			return fmt.Errorf("worktree %s holds the registered worktree %s; remove that one first", name, other)
+		}
+	}
+	return nil
 }

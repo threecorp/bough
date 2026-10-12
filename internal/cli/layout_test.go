@@ -444,3 +444,105 @@ func TestLockWorktree_LongName(t *testing.T) {
 	}
 	release()
 }
+
+// TestRemove_RefusesAWorktreesDirLinkedAboveTheRoot: a worktrees dir that is
+// a symlink to the root's parent turned `remove --name <root's name>` into
+// rm -rf of the monorepo root.
+func TestRemove_RefusesAWorktreesDirLinkedAboveTheRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mono")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(parent, filepath.Join(root, worktreesName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktreePathFor(root, "mono"); err == nil {
+		t.Error("worktreePathFor resolved to the monorepo root through a symlinked worktrees dir")
+	}
+}
+
+// TestRemove_RefusesAParentOfARegisteredWorktree: an older bough created
+// nested names such as feat/x, and `remove --name feat` deleted feat/x and
+// its datadir while its engines kept running.
+func TestRemove_RefusesAParentOfARegisteredWorktree(t *testing.T) {
+	root, _ := sameNameFixture(t, "feat")
+	nested := filepath.Join(worktreesDir(root), "feat", "x")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".bough"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bough", "ports.json"), []byte(`{"feat/x": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	for _, args := range [][]string{{"--name", "feat"}, {"--name", "feat/y"}} {
+		cmd := newRemoveCmd()
+		cmd.SetArgs(args)
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		if err := cmd.Execute(); err == nil {
+			t.Errorf("remove %v succeeded, want an error", args)
+		}
+	}
+	if _, err := os.Stat(nested); err != nil {
+		t.Fatalf("the registered nested worktree was touched: %v", err)
+	}
+	// The registered legacy name itself can still be removed.
+	cmd := newRemoveCmd()
+	cmd.SetArgs([]string{"--name", "feat/x"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Errorf("remove of the registered legacy name feat/x: %v", err)
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Errorf("feat/x still exists after its own remove: %v", err)
+	}
+}
+
+// TestRemove_RechecksTheCaseAliasAfterTheLock: a remove of F-AUTH passed
+// the case check before F-Auth existed, then waited on the shared lock
+// file while create made F-Auth, and went on to delete it.
+func TestRemove_RechecksTheCaseAliasAfterTheLock(t *testing.T) {
+	root, wt := sameNameFixture(t, "F-Auth")
+	if err := os.MkdirAll(filepath.Join(root, boughDir, locksSubdir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe := filepath.Join(root, boughDir, locksSubdir, "Case-Probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, boughDir, locksSubdir, "case-probe")); err != nil {
+		t.Skip("case-sensitive filesystem: F-AUTH and F-Auth do not share a lock file")
+	}
+	release, err := lockWorktree(root, "F-Auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	cmd := newRemoveCmd()
+	cmd.SetArgs([]string{"--name", "F-AUTH"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	time.Sleep(500 * time.Millisecond)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("remove F-AUTH succeeded after F-Auth appeared, want the case alias refused")
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("remove never finished")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("F-Auth was deleted through its case alias: %v", err)
+	}
+}

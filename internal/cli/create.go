@@ -46,6 +46,10 @@ func newCreateCmd() *cobra.Command {
 					return err
 				}
 				name, cwd = in.Name, in.Cwd
+				// The payload comes from a WorktreeCreate hook installed
+				// before `bough hook handle`; like that dispatcher, an
+				// incomplete environment must fail the hook.
+				strict = true
 			}
 			if name == "" {
 				return errors.New("--name is required (or pass --stdin-json with a {name, cwd} payload)")
@@ -904,7 +908,15 @@ func allocateEngines(reg registry.Registry, cfg *config.Config, name string) (ma
 
 func allocateNonEnginePorts(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
 	out := make(map[string]int, len(cfg.Ports))
-	for kind, pr := range cfg.Ports {
+	// Name order, not map order: every kind avoids every held port, so
+	// with overlapping ranges the order decides who gets which port.
+	kinds := make([]string, 0, len(cfg.Ports))
+	for kind := range cfg.Ports {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		pr := cfg.Ports[kind]
 		key := kind + ".main"
 		if existing, ok := registry.Get(reg, name, key); ok {
 			out[kind] = existing

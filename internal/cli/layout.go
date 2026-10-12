@@ -79,10 +79,67 @@ func worktreePathFor(monorepoRoot, name string) (string, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return "", fmt.Errorf("worktree name %q must be one directory name inside %s", name, dir)
 	}
+	path := filepath.Join(dir, name)
 	if err := checkWorktreeEntry(dir, name); err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, name), nil
+	if err := checkNotAboveRoot(monorepoRoot, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// legacyNestedName reports whether name is a clean multi-segment name such
+// as feat/x, which bough before v0.30 created under the worktrees dir. Only
+// remove accepts one, and only when the registry holds that exact name.
+func legacyNestedName(name string) bool {
+	if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || !strings.Contains(name, "/") {
+		return false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "." || seg == ".." || seg == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// checkNotAboveRoot refuses a worktree path that resolves to the monorepo
+// root or above it: a worktrees dir symlinked to the root's parent turned
+// `remove --name <root's name>` into rm -rf of the root.
+func checkNotAboveRoot(monorepoRoot, path string) error {
+	real, err := resolveExisting(path)
+	if err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(monorepoRoot)
+	if err != nil {
+		return nil // no root on disk yet, nothing above it to reach
+	}
+	if rel, err := filepath.Rel(real, root); err == nil && (rel == "." || !strings.HasPrefix(rel, "..")) {
+		return fmt.Errorf("worktree %s resolves to %s, which holds the monorepo root %s", path, real, monorepoRoot)
+	}
+	return nil
+}
+
+// resolveExisting resolves symlinks in path's longest existing prefix and
+// appends the rest, so a path that does not exist yet still resolves
+// through a symlinked parent.
+func resolveExisting(path string) (string, error) {
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		real, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			return filepath.Join(real, rest), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		if filepath.Dir(p) == p {
+			return path, nil
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
 }
 
 // checkWorktreeEntry refuses <dir>/<name> when it exists as a symlink or

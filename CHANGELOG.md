@@ -19,17 +19,23 @@
 - **The `WorktreeCreate` hook fails when the environment is incomplete.**
   It ran create best-effort and exited 0 after a failed sub-repo, template
   or `post_create` step; it now reports the failure like `bough create
-  --strict`. The worktree and its ports stay, so the next attempt reuses
+  --strict`, both through `bough hook handle` and through an older hook
+  that runs `bough create --stdin-json`. The worktree and its ports stay, so the next attempt reuses
   them. Plain `bough create` stays best-effort.
 - **`bough remove --name ..` no longer deletes the monorepo root.** A name
   was joined onto the worktrees dir unchecked, so `..` resolved to the
   root and remove ran `rm -rf` on it; `feat` removed a nested `feat/x`,
   and `b/` reached `worktrees/b` while skipping `b`'s engines. `create`,
   `remove` and `verify` now take only a single directory name, and refuse
-  a worktree that is a symlink or that matches an existing one only by
-  letter case. `remove --path` (and the `WorktreeRemove` hook) refuses a
-  path whose parent is not a `worktrees/` or `.worktrees/` dir, and
-  resolves a relative path against the current directory.
+  a worktree that is a symlink, that matches an existing one only by
+  letter case (checked again once remove holds the worktree lock), or
+  that resolves to the monorepo root or above it through a symlinked
+  worktrees dir. Remove refuses a worktree that holds another registered
+  one; a nested name an older bough created (such as `feat/x`) can still
+  be removed by that exact name while the registry holds it.
+  `remove --path` (and the `WorktreeRemove` hook) refuses a path whose
+  parent is not a `worktrees/` or `.worktrees/` dir, and resolves a
+  relative path against the current directory.
 - **A second clone no longer takes over the first clone's database.**
   Engine containers are named `bough-<engine>-<port>` (`bough-compose-<port>`
   for `kind: compose`) and the port is a hash of the worktree name, so two checkouts of one monorepo with a
@@ -37,9 +43,17 @@
   one (pointing the second worktree at the first one's data) and remove
   stopped it. Containers now carry a `com.bough.worktree-root` label, and
   create and remove refuse a container whose label names another existing
-  worktree. A container made before this release has no label; create
-  checks its bind mounts instead and refuses one bound to another live
-  datadir, while remove still stops it as before.
+  worktree. The owner is the worktree directory, which also holds the
+  datadir, so deleting only the engine-provider repo does not free the
+  database. A container made before this release has no label; create and
+  remove find its worktree from its `.local/<kind>-data` bind mount
+  instead.
+- **A `kind: compose` service of another clone is no longer recreated.**
+  The default project name came from the worktree name and the compose
+  file alone, so two clones with a same-named worktree shared a project,
+  and one clone's `compose up` recreated the other's service. The name now
+  ends with a hash of the worktree directory. A service started earlier
+  keeps the project its state file recorded.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
   checking its image; it now reports the error. A `kind: compose` remove
@@ -68,7 +82,8 @@
   kind started at the same offset for a worktree name and only avoided
   ports of its own kind, so two engines (or an engine and a `ports:`
   entry) sharing a range got the same port on every create. Allocation
-  now avoids every port the registry holds; existing reservations are
+  now avoids every port the registry holds, and handles `ports:` kinds in
+  name order so a re-create gets the same ports; existing reservations are
   kept as they are. A `ports:` entry named like an `engines[].kind`, which
   shared that engine's registry key, is now a config error.
 

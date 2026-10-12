@@ -194,7 +194,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	}
 
 	// Repeated WorktreeCreate reuses a matching container and records its image.
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot, req.Datadir)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {
