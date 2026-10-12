@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- On Linux, `bough remove` now deletes the mysql, postgres, redis and
+  elasticsearch datadirs. The engine writes them as its own uid, and the
+  daemon created the mysql/postgres/redis datadir and its `.local` parent as
+  root, so `Cleanup` used to log `permission denied` and leave the worktree
+  behind. `Cleanup` now deletes the datadir from a one-shot root
+  `alpine:3.20` container when the host cannot (`dockerutil.RemoveDatadir`),
+  which also clears worktrees made by earlier versions, and `Up` creates the
+  datadir as the host user. macOS was not affected.
+
+### Changed
+
+- CI runs `make integration-test`, so the mysql E2E and the `pkg/dockerutil`
+  daemon tests (the image-swap refusal and volume ownership) now gate every
+  PR. The E2E fails instead of skipping when `dist/` lacks the binaries.
+
 ## v0.29.0
 
 ### Removed

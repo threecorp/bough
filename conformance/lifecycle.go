@@ -315,7 +315,8 @@ func portsStillAnswering(ports []int, wait time.Duration) []int {
 
 // assertCleanup runs the two terminal Cleanup sub-tests (initial +
 // idempotent). The container-uid permission case is a Skip, not a
-// Fail, because the underlying chown follow-up is plugin-side.
+// Fail: reclaiming those files is the plugin's job (the bundled
+// engines call dockerutil.RemoveDatadir), not a contract violation.
 func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, ports []int, checkRemoved bool) {
 	t.Helper()
 	t.Run("Cleanup", func(t *testing.T) {
@@ -323,7 +324,8 @@ func assertCleanup(t *testing.T, prov engineapi.EngineProvider, datadir string, 
 			"Cleanup hit permission-denied — typical when the container "+
 				"writes as a non-host uid (e.g. mysql/redis run as their own user "+
 				"and host non-root cannot rm -rf the result). Not a contract "+
-				"violation per se; tracked as a plugin-side follow-up. Raw: %v")
+				"violation per se; a Docker-SDK plugin can call "+
+				"dockerutil.RemoveDatadir as the bundled engines do. Raw: %v")
 	})
 	t.Run("Cleanup_idempotent", func(t *testing.T) {
 		runCleanupCall(t, prov, datadir, ports, checkRemoved, "Cleanup (2nd call)",
@@ -503,9 +505,9 @@ func pickFreePort(low, high int, claimed map[int]bool) int {
 // macOS Docker Desktop's VirtioFS hides the uid mismatch so this only
 // fires on Linux runners, which is where it most matters.
 //
-// This is a Skip, not a Pass, so the plugin-side follow-up (chown
-// via `docker run --rm -v datadir:/data alpine chown` or similar)
-// stays visible.
+// This is a Skip, not a Pass, so a plugin that leaves those files
+// behind stays visible; the bundled engines delete them from a root
+// container through dockerutil.RemoveDatadir.
 func isPermissionDeniedFromContainerUID(err error) bool {
 	if err == nil {
 		return false

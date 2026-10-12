@@ -13,10 +13,9 @@
 //
 // Local invocation:
 //
-//	make build
 //	make integration-test
 //
-// No CI job runs it today.
+// CI runs it in the `integration` job.
 
 package integration
 
@@ -29,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,7 +47,10 @@ type monorepoFixture struct {
 }
 
 // v0.4CanonicalYAML is the schema_version:2 shape (engines: /
-// port_ranges: / initial_resources: / role: engine-provider).
+// port_ranges: / initial_resources: / role: engine-provider). Both
+// fixtures use 23000-23999, below the Linux (32768+) and macOS (49152+)
+// ephemeral ranges, where a loopback client's source port can make Up
+// see the picked port as taken (seen once on a CI runner).
 const v0_4CanonicalYAML = `schema_version: 2
 monorepo_root: "."
 repositories:
@@ -61,7 +64,7 @@ engines:
   - kind: mysql
     version: "8.4"
     port_ranges:
-      main: [42000, 42999]
+      main: [23000, 23999]
     initial_resources:
       - { type: database, name: bough }
 registry:
@@ -95,7 +98,7 @@ repositories:
 databases:
   - kind: mysql
     version: "8.4"
-    port_range: [42000, 42999]
+    port_range: [23000, 23999]
     initial_databases: ["bough"]
 registry:
   path: ".bough-ports.json"
@@ -116,9 +119,8 @@ func newFixtureWithYAML(t *testing.T, yaml string) *monorepoFixture {
 	root := t.TempDir()
 
 	// Resolve bough + bough-plugin-mysql binaries to ./dist (built by
-	// `make build` before integration-test fires). Fail loudly if
-	// they're missing so the operator gets a clear hint rather than a
-	// vague "plugin not found".
+	// `make build` before integration-test fires). Fail rather than skip
+	// when they're missing: a skip would pass the CI job without testing.
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -127,7 +129,7 @@ func newFixtureWithYAML(t *testing.T, yaml string) *monorepoFixture {
 	hostBinDir := filepath.Clean(filepath.Join(repoRoot, "..", "..", "dist"))
 	for _, b := range []string{"bough", "bough-plugin-mysql"} {
 		if _, err := os.Stat(filepath.Join(hostBinDir, b)); err != nil {
-			t.Skipf("missing %s in dist/ — run `make build` before `make integration-test`", b)
+			t.Fatalf("missing %s in dist/ — run `make build` before `make integration-test`", b)
 		}
 	}
 
@@ -205,7 +207,7 @@ func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {
 		t.Fatalf("load registry: %v", err)
 	}
 	port, ok := registry.Get(reg, wtName, "mysql.main")
-	if !ok || port < 42000 || port > 42999 {
+	if !ok || port < 23000 || port > 23999 {
 		t.Fatalf("registry missing mysql entry or out of range: port=%d ok=%v", port, ok)
 	}
 
@@ -218,6 +220,10 @@ func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {
 	// test would pass against any mysqld on that port, which is exactly
 	// what "the omitted backend field runs docker" needs to prove.
 	assertContainerRunning(ctx, t, fmt.Sprintf("bough-mysql-%d", port))
+
+	// The plugin, not the daemon, must create the datadir's parent: a
+	// root-owned one on Linux leaves a worktree the host user cannot remove.
+	assertOwnedByHostUser(t, filepath.Join(fx.root, "worktrees", wtName, ".local"))
 
 	// .env.local must exist in the demo-db worktree and contain the
 	// templated port.
@@ -264,6 +270,21 @@ func runCLI(ctx context.Context, args ...string) error {
 // container the mysql plugin names for this port. The fixtures declare
 // no `backend:`, so this is what distinguishes "the default resolved to
 // docker" from "something is listening on that port".
+func assertOwnedByHostUser(t *testing.T, path string) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat %s: no owner information", path)
+	}
+	if int(st.Uid) != os.Getuid() {
+		t.Errorf("%s is owned by uid %d, not the host user (%d)", path, st.Uid, os.Getuid())
+	}
+}
+
 func assertContainerRunning(ctx context.Context, t *testing.T, name string) {
 	t.Helper()
 	cli, err := dockerutil.NewClient()

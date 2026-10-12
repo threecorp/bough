@@ -108,6 +108,9 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Datadir == "" {
 		return errors.New("postgres docker: datadir is required")
 	}
+	if err := dockerutil.EnsureDatadir(req.Datadir); err != nil {
+		return fmt.Errorf("postgres docker: mkdir datadir: %w", err)
+	}
 
 	imageRef, err := dockerImage.Resolve(req.Extras)
 	if err != nil {

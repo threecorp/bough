@@ -99,6 +99,9 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Datadir == "" {
 		return errors.New("redis docker: datadir is required")
 	}
+	if err := dockerutil.EnsureDatadir(req.Datadir); err != nil {
+		return fmt.Errorf("redis docker: mkdir datadir: %w", err)
+	}
 
 	imageRef, err := dockerImage.Resolve(req.Extras)
 	if err != nil {

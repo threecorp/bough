@@ -125,7 +125,8 @@ through `client.FromEnv`. On Linux it talks to the system docker
 socket. A plugin built on the Docker SDK needs no `docker` CLI to run;
 the bundled `compose` plugin does, since it runs `docker compose`. On
 Linux the suite's own cleanup may run `docker run … chown` to reclaim a
-datadir the container's user owns.
+datadir the container's user owns. Your `Cleanup` meets the same files
+there; `dockerutil.RemoveDatadir` removes them as the bundled engines do.
 
 ## Running in CI
 
