@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -217,6 +218,10 @@ func runE2ECreateReadyRemove(t *testing.T, fx *monorepoFixture, wtName string) {
 	// what "the omitted backend field runs docker" needs to prove.
 	assertContainerRunning(ctx, t, fmt.Sprintf("bough-mysql-%d", port))
 
+	// The plugin, not the daemon, must create the datadir's parent: a
+	// root-owned one on Linux leaves a worktree the host user cannot remove.
+	assertOwnedByHostUser(t, filepath.Join(fx.root, "worktrees", wtName, ".local"))
+
 	// .env.local must exist in the demo-db worktree and contain the
 	// templated port.
 	envPath := filepath.Join(fx.root, "worktrees", wtName, "demo-db", ".env.local")
@@ -262,6 +267,21 @@ func runCLI(ctx context.Context, args ...string) error {
 // container the mysql plugin names for this port. The fixtures declare
 // no `backend:`, so this is what distinguishes "the default resolved to
 // docker" from "something is listening on that port".
+func assertOwnedByHostUser(t *testing.T, path string) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat %s: no owner information", path)
+	}
+	if int(st.Uid) != os.Getuid() {
+		t.Errorf("%s is owned by uid %d, not the host user (%d)", path, st.Uid, os.Getuid())
+	}
+}
+
 func assertContainerRunning(ctx context.Context, t *testing.T, name string) {
 	t.Helper()
 	cli, err := dockerutil.NewClient()

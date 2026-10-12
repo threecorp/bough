@@ -19,6 +19,18 @@ import (
 // conformance suite already pulls it for its own datadir cleanup.
 const reclaimImage = "alpine:3.20"
 
+// EnsureDatadir creates a bind-mounted datadir as the host user, so the
+// daemon does not create it (and a missing `.local` parent) as root, which
+// on Linux leaves a worktree the host user cannot remove. A worktree made
+// by an earlier version can have a root-owned parent already; the daemon
+// still creates the datadir there, as it used to.
+func EnsureDatadir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil && !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	return nil
+}
+
 // RemoveDatadir is the bundled engines' Cleanup. On Linux an engine writes
 // its bind-mounted datadir as its own uid (mysql 999, …), and a datadir the
 // daemon created sits in a root-owned parent; the host user can unlink

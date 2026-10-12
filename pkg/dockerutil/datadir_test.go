@@ -10,6 +10,42 @@ import (
 	"testing"
 )
 
+func TestEnsureDatadir_CreatesTheDirAndItsParent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".local", "redis-data")
+	if err := EnsureDatadir(dir); err != nil {
+		t.Fatalf("EnsureDatadir: %v", err)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("datadir not created: %v", err)
+	}
+}
+
+// A worktree from an earlier version can carry a root-owned .local; Up must
+// still go ahead and let the daemon create the datadir there.
+func TestEnsureDatadir_LeavesAnUnwritableParentToTheDaemon(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory mode this test relies on")
+	}
+	parent := filepath.Join(t.TempDir(), ".local")
+	if err := os.Mkdir(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	if err := EnsureDatadir(filepath.Join(parent, "redis-data")); err != nil {
+		t.Fatalf("EnsureDatadir: %v", err)
+	}
+}
+
+func TestEnsureDatadir_ReportsOtherErrors(t *testing.T) {
+	file := filepath.Join(t.TempDir(), ".local")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDatadir(filepath.Join(file, "redis-data")); err == nil {
+		t.Fatal("EnsureDatadir succeeded under a regular file")
+	}
+}
+
 func TestRemoveDatadir_RemovesAHostOwnedTree(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "mysql-data")
 	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {

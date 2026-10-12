@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"regexp"
 	"time"
 
@@ -100,10 +99,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	if req.Datadir == "" {
 		return errors.New("redis docker: datadir is required")
 	}
-	// Created here, not by the daemon for the bind mount: the daemon would
-	// create it (and a missing parent) as root, which on Linux leaves a
-	// worktree the host user cannot remove.
-	if err := os.MkdirAll(req.Datadir, 0o755); err != nil {
+	if err := dockerutil.EnsureDatadir(req.Datadir); err != nil {
 		return fmt.Errorf("redis docker: mkdir datadir: %w", err)
 	}
 

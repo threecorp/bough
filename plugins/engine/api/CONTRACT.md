@@ -71,8 +71,8 @@ and the suite will treat the clause as not-applicable rather than failed.
    `datadir` + `ports` must return nil. The suite skips, rather than
    fails, a permission error from a datadir the container's user owns;
    the bundled engines avoid it with `dockerutil.RemoveDatadir`, which
-   deletes such files from a root container. A plugin that owns no datadir (compose) sets
-   `conformance.Config.SkipDatadirRemovalCheck`.
+   deletes such files from a root container. A plugin that owns no
+   datadir (compose) sets `conformance.Config.SkipDatadirRemovalCheck`.
 
 ## EnvVars
 
