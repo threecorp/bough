@@ -138,6 +138,7 @@ func TestRenderOverride(t *testing.T) {
 			ContainerName string `yaml:"container_name"`
 			Ports         []struct {
 				Target    int    `yaml:"target"`
+				HostIP    string `yaml:"host_ip"`
 				Published string `yaml:"published"`
 				Protocol  string `yaml:"protocol"`
 			} `yaml:"ports"`
@@ -163,6 +164,9 @@ func TestRenderOverride(t *testing.T) {
 	}
 	if svc.Ports[0].Published != "56123" {
 		t.Errorf("ports[0].published = %q, want %q", svc.Ports[0].Published, "56123")
+	}
+	if svc.Ports[0].HostIP != "127.0.0.1" {
+		t.Errorf("ports[0].host_ip = %q, want 127.0.0.1 (other engines publish on loopback only)", svc.Ports[0].HostIP)
 	}
 	if svc.Ports[0].Protocol != "tcp" {
 		t.Errorf("ports[0].protocol = %q, want %q", svc.Ports[0].Protocol, "tcp")

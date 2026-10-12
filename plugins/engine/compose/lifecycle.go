@@ -96,6 +96,13 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
+	// Before reuse or removal: a container made before the worktree label
+	// is only provably this worktree's through the compose files compose
+	// recorded on it, which UpOrReuse does not read, and compose up
+	// recreates whatever the project runs, dependencies included.
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, project); err != nil {
+		return fmt.Errorf("compose: Up: %w", err)
+	}
 	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
@@ -121,11 +128,6 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		// exact helper.
 		if !dockerutil.IsPortFree(port) {
 			return fmt.Errorf("compose: Up: port %d already in use on 127.0.0.1 — stop the conflicting service or move bough's port range", port)
-		}
-		// compose up recreates whatever the project already runs for this
-		// service, so another worktree's container there must stop it.
-		if err := p.checkOwner(ctx, port, req.WorktreeRoot, project, service); err != nil {
-			return fmt.Errorf("compose: Up: %w", err)
 		}
 
 		upCmd := exec.CommandContext(ctx, "docker", "compose",
@@ -226,7 +228,7 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
-	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project, st.Service); err != nil {
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project); err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
 	}
 

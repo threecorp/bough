@@ -206,6 +206,7 @@ type composeOverrideService struct {
 // instead of appending a second, colliding short-form mapping.
 type composePortSpec struct {
 	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip"`
 	Published string `yaml:"published"`
 	Protocol  string `yaml:"protocol"`
 }
@@ -247,7 +248,9 @@ func overrideLabels(spec overrideSpec) map[string]string {
 func renderOverride(spec overrideSpec) ([]byte, error) {
 	var portsNode yaml.Node
 	if err := portsNode.Encode([]composePortSpec{
-		{Target: spec.TargetPort, Published: strconv.Itoa(spec.HostPort), Protocol: "tcp"},
+		// Loopback only, like the other engines: without host_ip Docker
+		// publishes on every interface and the dev service reaches the LAN.
+		{Target: spec.TargetPort, HostIP: "127.0.0.1", Published: strconv.Itoa(spec.HostPort), Protocol: "tcp"},
 	}); err != nil {
 		return nil, fmt.Errorf("encode ports node: %w", err)
 	}

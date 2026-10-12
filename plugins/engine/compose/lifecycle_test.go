@@ -354,8 +354,10 @@ func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, row := range map[string]string{
-		"labelled": "c1\\tbough-t\\t" + filepath.Join(other, "demo-api") + "\\t",
-		"legacy":   "c1\\tbough-t\\t\\t" + otherFile,
+		"labelled":                    "c1\\tbough-t\\t" + filepath.Join(other, "demo-api") + "\\t",
+		"legacy":                      "c1\\tbough-t\\t\\t" + otherFile,
+		"legacy whose files are gone": "c1\\tbough-t\\t\\t" + filepath.Join(other, "gone", "compose.yml"),
+		"no labels at all":            "c1\\tbough-t\\t\\t",
 	} {
 		t.Run(name, func(t *testing.T) {
 			record := fakeDockerPS(t, `printf '`+row+`\n'`)
@@ -365,13 +367,60 @@ func TestProvider_Down_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 				t.Fatal(err)
 			}
 			err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot})
-			if err == nil || !strings.Contains(err.Error(), other) {
-				t.Errorf("Down = %v, want a refusal naming %s", err, other)
+			if err == nil {
+				t.Error("Down accepted a container not provably this worktree's")
 			}
 			if b, _ := os.ReadFile(record); strings.Contains(string(b), " stop ") || strings.Contains(string(b), " rm ") {
 				t.Errorf("Down stopped another worktree's container; calls:\n%s", b)
 			}
 		})
+	}
+}
+
+// TestProvider_Down_StopsItsOwnLegacyContainer: a container made before
+// the worktree label is this worktree's when compose recorded this
+// worktree's compose file on it.
+func TestProvider_Down_StopsItsOwnLegacyContainer(t *testing.T) {
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	ownFile := filepath.Join(worktreeRoot, "compose.yml")
+	record := fakeDockerPS(t, `printf 'c1\tbough-t\t\t`+ownFile+`\n'`)
+	st := &upState{File: "compose.yml", Service: "redis", Project: "bough-t", TargetPort: 6379, HostPort: 56130}
+	if err := writeSidecarState(worktreeRoot, st.HostPort, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().Down(context.Background(), &api.DownReq{Ports: []int{st.HostPort}, WorktreeRoot: worktreeRoot}); err != nil {
+		t.Fatalf("Down of this worktree's own legacy container: %v", err)
+	}
+	if b, _ := os.ReadFile(record); !strings.Contains(string(b), " stop ") {
+		t.Errorf("Down never stopped its own container; calls:\n%s", b)
+	}
+}
+
+// TestProvider_Up_RefusesAnotherWorktreesLegacyContainer: UpOrReuse reads
+// only the bough label and datadir binds, so a legacy compose container of
+// another clone under the same container name was reused, or removed when
+// stopped. The compose owner check runs first.
+func TestProvider_Up_RefusesAnotherWorktreesLegacyContainer(t *testing.T) {
+	other := t.TempDir()
+	otherFile := filepath.Join(other, "demo-api", "compose.yml")
+	record := fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\tbough-old\t\t`+otherFile+`\n';; esac`)
+	worktreeRoot := filepath.Join(t.TempDir(), "demo-api")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "compose.yml"), []byte("services: {redis: {image: redis:7-alpine}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := New().Up(context.Background(), &api.UpReq{
+		WorktreeRoot: worktreeRoot,
+		Ports:        []api.PortSpec{{Role: "main", Port: 56131}},
+		Extras:       map[string]string{"compose.file": "demo-api/compose.yml", "compose.service": "redis", "compose.target_port": "6379"},
+	})
+	if err == nil {
+		t.Error("Up accepted another worktree's legacy container")
+	}
+	if b, _ := os.ReadFile(record); strings.Contains(string(b), "compose -f") {
+		t.Errorf("Up ran docker compose after the refusal; calls:\n%s", b)
 	}
 }
 
@@ -426,6 +475,7 @@ func TestResolveProject(t *testing.T) {
 		{"no sidecar, own container records the project", false,
 			`case "$*" in *name=*) printf 'c1\t` + recorded + `\t` + worktreeRoot + `\t\n';; esac`, recorded},
 		{"no sidecar, no container", false, "true", hashed},
+		{"docker ps fails", true, "echo boom >&2; exit 1", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -439,6 +489,12 @@ func TestResolveProject(t *testing.T) {
 				t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(root, ".local")) })
 			}
 			got, err := New().resolveProject(context.Background(), root, 56129, "demo-api/compose.yml", "redis", "")
+			if tc.want == "" {
+				if err == nil {
+					t.Errorf("resolveProject = %q although docker ps failed, want an error", got)
+				}
+				return
+			}
 			if err != nil || got != tc.want {
 				t.Errorf("resolveProject = (%q, %v), want %q", got, err, tc.want)
 			}

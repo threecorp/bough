@@ -47,23 +47,28 @@
   worktree. The owner is the worktree directory, which also holds the
   datadir, so deleting only the engine-provider repo does not free the
   database. A container made before this release has no label; create and
-  remove find its worktree from its `.local/<kind>-data` bind mount, or
-  for a `kind: compose` service from the compose files docker compose
-  recorded on it.
+  remove find its worktree from its `.local/<kind>-data` bind mount (for
+  `kind: compose`, see below).
 - **A `kind: compose` service of another clone is no longer recreated.**
   The default project name came from the worktree name and the compose
   file alone, so two clones with a same-named worktree shared a project,
   and one clone's `compose up` recreated the other's service. The name now
   ends with a hash of the worktree directory, and create and remove refuse
-  a project whose container for the service belongs to another worktree.
+  a project holding any container (dependencies included) that is not
+  provably this worktree's: its worktree label, or for an older container
+  the compose files docker compose recorded on it, must point into this
+  worktree.
   A service started earlier keeps its project (from its state file, or
   from its container when the state file was never written) unless that
   project holds another clone's container.
+- **`kind: compose` publishes its port on 127.0.0.1 only.** The override
+  set no `host_ip`, so Docker published the service on every interface,
+  unlike the other engines.
 - **A container Docker cannot inspect is no longer force-removed.** Up
   took a failed inspect as "stopped" and removed the container without
-  checking its image; it now reports the error. A `kind: compose` remove
-  likewise stops only when `docker inspect` succeeds or reports the
-  container gone.
+  checking its image; it now reports the error. A `kind: compose` create
+  or remove likewise stops when `docker ps` cannot list the project's
+  containers.
 - **Registry backups written in the same second all survive.** The
   backup name carried the time to the second, so each save in that second
   replaced the backup before it, also across monorepos sharing one

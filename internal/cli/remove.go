@@ -69,16 +69,11 @@ func newRemoveCmd() *cobra.Command {
 }
 
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
-	release, err := lockWorktree(monorepoRoot, name)
+	release, err := lockWorktreeChecked(monorepoRoot, strings.TrimSuffix(worktreePath, string(filepath.Separator)+name), name)
 	if err != nil {
 		return err
 	}
 	defer release()
-	// Again under the lock: a create of a case alias may have made the
-	// directory while this remove waited.
-	if err := checkWorktreeEntry(strings.TrimSuffix(worktreePath, string(filepath.Separator)+name), name); err != nil {
-		return err
-	}
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.

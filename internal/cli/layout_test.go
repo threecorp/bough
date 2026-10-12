@@ -539,40 +539,27 @@ func TestRunRemove_RechecksTheCaseAliasUnderTheLock(t *testing.T) {
 	}
 }
 
-// TestCreate_RechecksTheCaseAliasUnderTheLock is the create half: a create
-// of F-AUTH that waited on the lock while F-Auth was created went on into
-// F-Auth's directory under another registry name.
-func TestCreate_RechecksTheCaseAliasUnderTheLock(t *testing.T) {
+// TestLockWorktreeChecked_RefusesACaseAliasMadeWhileWaiting is the create
+// half: a create of F-AUTH that waited on the lock while F-Auth was created
+// went on into F-Auth's directory under another registry name. Calling the
+// lock step directly, after F-Auth exists, needs no timing.
+func TestLockWorktreeChecked_RefusesACaseAliasMadeWhileWaiting(t *testing.T) {
 	root, wt := sameNameFixture(t, "F-Auth")
-	if !caseInsensitive(t, root) {
-		t.Skip("case-sensitive filesystem: F-AUTH is a different directory")
-	}
-	release, err := lockWorktree(root, "F-Auth")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := newCreateCmd()
-	cmd.SetArgs([]string{"--name", "F-AUTH", "--cwd", root, "--no-fetch"})
-	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetErr(&bytes.Buffer{})
-	done := make(chan error, 1)
-	go func() { done <- cmd.Execute() }()
-	time.Sleep(500 * time.Millisecond)
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if !caseInsensitive(t, root) {
+		t.Skip("case-sensitive filesystem: F-AUTH is a different directory")
+	}
+	if release, err := lockWorktreeChecked(root, worktreesDir(root), "F-AUTH"); err == nil {
+		release()
+		t.Fatal("lockWorktreeChecked accepted F-AUTH for the existing F-Auth")
+	}
+	release, err := lockWorktreeChecked(root, worktreesDir(root), "F-Auth")
+	if err != nil {
+		t.Fatalf("the refused call kept the lock, or the exact name was refused: %v", err)
+	}
 	release()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("create F-AUTH succeeded after F-Auth appeared, want the case alias refused")
-		}
-	case <-time.After(60 * time.Second):
-		t.Fatal("create never finished")
-	}
-	if _, err := os.Stat(filepath.Join(root, ".bough", "ports.json")); !os.IsNotExist(err) {
-		t.Errorf("create reserved ports under the case alias: %v", err)
-	}
 }
 
 // TestLockWorktree_CaseAliasesShareALock: names that differ only by case
@@ -666,5 +653,44 @@ func TestResolveRemoveTarget_NestedPath(t *testing.T) {
 	gotRoot, name, path, err := resolveRemoveTarget("", nested)
 	if err != nil || name != "feat/x" || path != nested || gotRoot != root {
 		t.Errorf("resolveRemoveTarget = (%q, %q, %q, %v), want (%q, feat/x, %q, nil)", gotRoot, name, path, err, root, nested)
+	}
+}
+
+// TestResolveRemoveTarget_NestedPathHoldingAWorktreesComponent: a nested
+// name such as feat/worktrees/x contains a "worktrees" component, and the
+// nearest one is not the monorepo's; the one under .bough.yaml is.
+func TestResolveRemoveTarget_NestedPathHoldingAWorktreesComponent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".bough.yaml"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(worktreesDir(root), "feat", worktreesName, "x")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, name, _, err := resolveRemoveTarget("", nested)
+	if err != nil || gotRoot != root || name != "feat/"+worktreesName+"/x" {
+		t.Errorf("resolveRemoveTarget = (%q, %q, %v), want (%q, feat/worktrees/x, nil)", gotRoot, name, err, root)
+	}
+}
+
+// TestRemove_RefusesTheRootThroughACaseAlias: the root reached in another
+// letter case resolved to a different string, so a string comparison let
+// a worktrees dir symlinked to the root's parent delete the root.
+func TestRemove_RefusesTheRootThroughACaseAlias(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mono")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !caseInsensitive(t, parent) {
+		t.Skip("case-sensitive filesystem")
+	}
+	if err := os.Symlink(parent, filepath.Join(root, worktreesName)); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "MONO")
+	if err := checkNotAboveRoot(alias, filepath.Join(alias, worktreesName, "mono")); err == nil {
+		t.Error("checkNotAboveRoot accepted the root reached through a case alias")
 	}
 }

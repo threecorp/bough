@@ -235,14 +235,27 @@ func engineProviderRepo(cfg *config.Config) *config.Repository {
 }
 
 // splitWorktreePath finds the worktrees dir (worktrees/ or .worktrees/)
-// nearest above path and returns it with path relative to it: the parent
-// for a plain worktree, an ancestor for a nested one an older bough made.
+// above path and returns it with path relative to it: the parent for a
+// plain worktree, an ancestor for a nested one an older bough made. A
+// nested name may itself hold a "worktrees" component, so the dir whose
+// parent holds .bough.yaml (hasMonorepoMarker) wins; without one, the
+// nearest.
 func splitWorktreePath(path string) (dir, rel string, ok bool) {
 	for p := filepath.Dir(path); p != filepath.Dir(p); p = filepath.Dir(p) {
-		if base := filepath.Base(p); base == worktreesName || base == legacyWtName {
-			rel, err := filepath.Rel(p, path)
-			return p, rel, err == nil
+		if base := filepath.Base(p); base != worktreesName && base != legacyWtName {
+			continue
+		}
+		if !ok {
+			dir, ok = p, true
+		}
+		if hasMonorepoMarker(filepath.Dir(p)) {
+			dir = p
+			break
 		}
 	}
-	return "", "", false
+	if !ok {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(dir, path)
+	return dir, rel, err == nil
 }

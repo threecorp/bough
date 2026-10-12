@@ -108,16 +108,11 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	if err != nil {
 		return err
 	}
-	release, err := lockWorktree(monorepoRoot, name)
+	release, err := lockWorktreeChecked(monorepoRoot, filepath.Dir(worktreeRoot), name)
 	if err != nil {
 		return err
 	}
 	defer release()
-	// Again under the lock: a create of a case alias may have made the
-	// directory while this one waited.
-	if err := checkWorktreeEntry(filepath.Dir(worktreeRoot), name); err != nil {
-		return err
-	}
 	// One probe, two consumers: whether the root is inside a work tree
 	// decides both the heads-up below and how the container is materialised,
 	// and monorepoRoot cannot change between them.

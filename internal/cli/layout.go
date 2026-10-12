@@ -104,44 +104,34 @@ func legacyNestedName(name string) bool {
 	return true
 }
 
-// checkNotAboveRoot refuses a worktree path that resolves to the monorepo
-// root or above it: a worktrees dir symlinked to the root's parent turned
-// `remove --name <root's name>` into rm -rf of the root.
+// checkNotAboveRoot refuses a worktree path that is the monorepo root or
+// one of its ancestors: a worktrees dir symlinked to the root's parent
+// turned `remove --name <root's name>` into rm -rf of the root. It compares
+// the directories themselves (os.SameFile), so a symlink, a ".."-prefixed
+// name or another letter case cannot make one look like another.
 func checkNotAboveRoot(monorepoRoot, path string) error {
-	real, err := resolveExisting(path)
+	target, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing there to delete
+	}
 	if err != nil {
 		return err
 	}
-	root, err := filepath.EvalSymlinks(monorepoRoot)
-	if err != nil {
-		return nil // no root on disk yet, nothing above it to reach
+	starts := []string{monorepoRoot}
+	if real, err := filepath.EvalSymlinks(monorepoRoot); err == nil {
+		starts = append(starts, real)
 	}
-	// The first component decides: "..mono" is a directory name, not a
-	// step up, so a plain string prefix misjudged it.
-	if rel, err := filepath.Rel(real, root); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("worktree %s resolves to %s, which holds the monorepo root %s", path, real, monorepoRoot)
+	for _, start := range starts {
+		for p := start; ; p = filepath.Dir(p) {
+			if info, err := os.Stat(p); err == nil && os.SameFile(info, target) {
+				return fmt.Errorf("worktree %s is the monorepo root %s or a directory above it", path, monorepoRoot)
+			}
+			if filepath.Dir(p) == p {
+				break
+			}
+		}
 	}
 	return nil
-}
-
-// resolveExisting resolves symlinks in path's longest existing prefix and
-// appends the rest, so a path that does not exist yet still resolves
-// through a symlinked parent.
-func resolveExisting(path string) (string, error) {
-	rest := ""
-	for p := path; ; p = filepath.Dir(p) {
-		real, err := filepath.EvalSymlinks(p)
-		if err == nil {
-			return filepath.Join(real, rest), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		if filepath.Dir(p) == p {
-			return path, nil
-		}
-		rest = filepath.Join(filepath.Base(p), rest)
-	}
 }
 
 // checkWorktreeEntry refuses <dir>/<name> when any component of name
@@ -208,6 +198,21 @@ func lockWorktree(monorepoRoot, name string) (release func(), err error) {
 	release, err = fsutil.Lock(path)
 	if err != nil {
 		return nil, fmt.Errorf("lock worktree %s: %w", name, err)
+	}
+	return release, nil
+}
+
+// lockWorktreeChecked takes the worktree lock and checks the entry again
+// under it: a create of a case alias may have made the directory while
+// this caller waited. dir is the worktrees dir the name sits in.
+func lockWorktreeChecked(monorepoRoot, dir, name string) (release func(), err error) {
+	release, err = lockWorktree(monorepoRoot, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkWorktreeEntry(dir, name); err != nil {
+		release()
+		return nil, err
 	}
 	return release, nil
 }
