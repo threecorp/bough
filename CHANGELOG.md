@@ -5,10 +5,13 @@
 ### Fixed
 
 - On Linux, `bough remove` now deletes the mysql, postgres, redis and
-  elasticsearch datadirs. The engine writes them as its own uid, which the
-  host user cannot unlink, so `Cleanup` used to log `permission denied` and
-  leave the worktree behind. It now deletes those files from a one-shot root
-  `alpine:3.20` container (`dockerutil.RemoveDatadir`). macOS was not affected.
+  elasticsearch datadirs. The engine writes them as its own uid, and the
+  daemon created the mysql/postgres/redis datadir and its `.local` parent as
+  root, so `Cleanup` used to log `permission denied` and leave the worktree
+  behind. `Cleanup` now deletes the datadir from a one-shot root
+  `alpine:3.20` container when the host cannot (`dockerutil.RemoveDatadir`),
+  which also clears worktrees made by earlier versions, and `Up` creates the
+  datadir as the host user. macOS was not affected.
 
 ### Changed
 
