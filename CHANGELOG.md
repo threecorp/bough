@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **A same-named container binding another datadir no longer bypasses this datadir's image record or records itself as its legacy writer.**
+
 - **Concurrent `bough create` runs no longer lose each other's port
   reservations.** Create, remove and backfill each loaded the registry,
   changed it and saved it with nothing held in between, so the last save

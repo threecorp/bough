@@ -407,7 +407,7 @@ func TestDockerUp_ImageMismatchRemedy(t *testing.T) {
 			name := dockerContainerName(42001)
 			datadir := filepath.Join(t.TempDir(), "engine data")
 			worktree := filepath.Join(filepath.Dir(datadir), "repo")
-			dockertest.StartDaemon(t, name, "old:1", running, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree))
+			dockertest.StartDaemon(t, name, "old:1", running, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 			err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
 				Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
 				Datadir:      datadir,
@@ -443,7 +443,7 @@ func TestDockerUp_ReuseRecordsImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := filepath.Join(filepath.Dir(datadir), "repo")
-	dockertest.StartDaemon(t, name, "old:1", true, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree))
+	dockertest.StartDaemon(t, name, "old:1", true, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
 		Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
 		Datadir:      datadir,

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/containerd/errdefs"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
 
@@ -19,24 +21,30 @@ func datadirImagePath(dir string) string {
 	return filepath.Clean(dir) + ".image"
 }
 
-// CheckDatadirImage protects data even after its container has disappeared.
-// Data with neither a record nor a container has an unknown writer and is
-// refused (HaveImage ""); an empty directory has no image. With a container,
-// UpOrReuse decides.
+// CheckDatadirImage consults the record unless the named container binds dir.
+// A matching bind leaves the image check to UpOrReuse and records a legacy writer.
 func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantImage string) error {
 	empty, err := datadirEmpty(dir)
-	if err != nil {
+	if err != nil || empty {
 		return err
-	}
-	if empty {
-		return nil
 	}
 	id, err := LookupByName(ctx, cli, name)
 	if err != nil {
 		return err
 	}
 	if id != "" {
-		return recordLegacyWriter(ctx, cli, id, name, dir, wantImage)
+		info, err := cli.ContainerInspect(ctx, id)
+		if err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("inspect container %s: %w", name, err)
+		}
+		if err == nil && info.HostConfig != nil {
+			for _, bind := range info.HostConfig.Binds {
+				host, _, _ := strings.Cut(bind, ":")
+				if samePath(host, dir) {
+					return recordLegacyWriter(ctx, cli, info, dir, wantImage)
+				}
+			}
+		}
 	}
 	data, err := os.ReadFile(datadirImagePath(dir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -59,23 +67,25 @@ func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantI
 	return &ImageMismatchError{HaveImage: have, WantImage: wantImage}
 }
 
-// recordLegacyWriter leaves the image check to UpOrReuse but first records an
-// unrecorded datadir's matching container, which UpOrReuse may remove when
-// stopped, so a failed recreate does not leave the data with an unknown writer.
-// A mismatched container is kept by UpOrReuse, so it is left to refuse.
-func recordLegacyWriter(ctx context.Context, cli *client.Client, id, name, dir, wantImage string) error {
+// recordLegacyWriter keeps a matching bind's writer known if recreating fails.
+// A mismatched image is kept by UpOrReuse, so it is left to refuse.
+func recordLegacyWriter(ctx context.Context, cli *client.Client, info container.InspectResponse, dir, wantImage string) error {
 	if _, err := os.Stat(datadirImagePath(dir)); !errors.Is(err, fs.ErrNotExist) {
 		return nil
-	}
-	info, err := cli.ContainerInspect(ctx, id)
-	if err != nil {
-		return fmt.Errorf("inspect container %s: %w", name, err)
 	}
 	ref := configImage(info.Config)
 	if ref == "" || (imageSwapped(wantImage, ref) && !sameImageID(ctx, cli, wantImage, info.Image)) {
 		return nil
 	}
-	return RecordDatadirImage(ctx, cli, name, dir, ref)
+	imageID := info.Image
+	if imageID == "" {
+		var err error
+		imageID, err = inspectImageID(ctx, cli, ref)
+		if err != nil {
+			return err
+		}
+	}
+	return recordDatadirImage(ctx, dir, ref, imageID)
 }
 
 // An engine-owned 0700 directory cannot be proved empty by the host user.
@@ -112,8 +122,12 @@ func RecordDatadirImage(ctx context.Context, cli *client.Client, name, dir, imag
 	if err != nil {
 		return err
 	}
+	return recordDatadirImage(ctx, dir, imageRef, imageID)
+}
+
+func recordDatadirImage(ctx context.Context, dir, imageRef, imageID string) error {
 	path := datadirImagePath(dir)
-	err = writeImageRecord(path, imageRef, imageID)
+	err := writeImageRecord(path, imageRef, imageID)
 	if err == nil || !errors.Is(err, fs.ErrPermission) {
 		return err
 	}
@@ -144,6 +158,10 @@ func writerImageID(ctx context.Context, cli *client.Client, name, imageRef strin
 			return info.Image, nil
 		}
 	}
+	return inspectImageID(ctx, cli, imageRef)
+}
+
+func inspectImageID(ctx context.Context, cli *client.Client, imageRef string) (string, error) {
 	img, err := cli.ImageInspect(ctx, imageRef)
 	if err != nil {
 		return "", fmt.Errorf("inspect image %s: %w", imageRef, err)
