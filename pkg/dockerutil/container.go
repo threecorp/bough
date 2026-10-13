@@ -117,7 +117,7 @@ func (e *ImageMismatchError) WithDatadir(datadir string) error {
 		return fmt.Errorf("%w; resolve data directory: %w", e, err)
 	}
 	return fmt.Errorf("%w; to start over with an empty data directory while keeping the worktree, "+
-		"first run `docker rm -f %s`, then empty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
+		"first run `docker rm -fv %s`, then empty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
 		"on Linux its files belong to the container's user, so empty it as root), "+
 		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name); or run `bough remove` to discard the whole worktree and create it again",
 		e, e.ContainerName, absolute)

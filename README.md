@@ -191,7 +191,7 @@ holds across PostgreSQL majors. While the worktree's container exists,
 running or stopped, `bough create` refuses a `version:` (or
 `docker.image`) that resolves to another image reference and names both,
 rather than start it on the old data directory. To keep the worktree,
-`docker rm -f` the container, then empty the data directory the error names:
+`docker rm -fv` the container, then empty the data directory the error names:
 delete everything inside it and keep the directory itself. All data in that
 directory is lost. On Linux its files belong to the container's user, so
 empty it as root. Resume the same worktree the same way it was created

@@ -417,7 +417,7 @@ func TestDockerUp_ImageMismatchRemedy(t *testing.T) {
 			if !errors.As(err, &mismatch) {
 				t.Fatalf("Up error lost ImageMismatchError: %v", err)
 			}
-			for _, want := range []string{"docker rm -f " + name, "empty the data directory " + fmt.Sprintf("%q", datadir), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "keeping the worktree", "WorktreeCreate hook", "`bough create` with the same worktree name", "bough remove", "discard the whole worktree"} {
+			for _, want := range []string{"docker rm -fv " + name, "empty the data directory " + fmt.Sprintf("%q", datadir), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "keeping the worktree", "WorktreeCreate hook", "`bough create` with the same worktree name", "bough remove", "discard the whole worktree"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("remedy missing %q: %v", want, err)
 				}

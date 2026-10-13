@@ -39,13 +39,13 @@ and the suite will treat the clause as not-applicable rather than failed.
    the data directory the old one wrote is never safe. The error names
    the bind-mounted datadir too (`dockerutil.ImageMismatchError.WithDatadir`),
    because removing only the container leaves that data for the new image.
-   To keep the worktree, remove the container, then empty the datadir: delete
-   everything inside it and keep the directory itself. All data in that
+   To keep the worktree, run `docker rm -fv <container>`, then empty the datadir:
+   delete everything inside it and keep the directory itself. All data in that
    directory is lost. On Linux its files belong to the container's user, so
    empty it as root. Resume the same worktree the same way it was created
    (the WorktreeCreate hook, or `bough create` with the same worktree name).
-   The suite asserts this in the `UpReuse` phase — it calls `Up` a second time
-   while the service is up, requires a nil return, then re-checks
+   The suite checks reuse of the unchanged image in the `UpReuse` phase: it
+   calls `Up` again while the service is up, requires a nil return, then re-checks
    readiness. It does not compare container identity, so a plugin that
    recreates the container can still pass.
    (Running the full lifecycle `IdempotentCount` times, by contrast,

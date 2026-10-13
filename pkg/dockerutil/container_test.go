@@ -131,7 +131,7 @@ func TestImageMismatchError_WithDatadir(t *testing.T) {
 		if absErr != nil {
 			t.Fatal(absErr)
 		}
-		for _, want := range []string{mismatch.Error(), "first run `docker rm -f " + mismatch.ContainerName + "`, then empty the data directory " + fmt.Sprintf("%q", absolute), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "resume the same worktree the same way it was created", "WorktreeCreate hook", "`bough create` with the same worktree name", "`bough remove` to discard the whole worktree"} {
+		for _, want := range []string{mismatch.Error(), "first run `docker rm -fv " + mismatch.ContainerName + "`, then empty the data directory " + fmt.Sprintf("%q", absolute), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "resume the same worktree the same way it was created", "WorktreeCreate hook", "`bough create` with the same worktree name", "`bough remove` to discard the whole worktree"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("WithDatadir missing %q: %v", want, err)
 			}
