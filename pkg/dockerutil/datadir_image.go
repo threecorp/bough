@@ -20,12 +20,10 @@ func datadirImagePath(dir string) string {
 }
 
 // CheckDatadirImage protects data even after its container has disappeared.
-// Missing records leave older worktrees usable; an empty directory has no image.
+// Data with neither a record nor a container has an unknown writer and is
+// refused (HaveImage ""); an empty directory has no image. With a container,
+// UpOrReuse decides.
 func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantImage string) error {
-	_, err := os.Stat(datadirImagePath(dir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
 	empty, err := datadirEmpty(dir)
 	if err != nil {
 		return err
@@ -38,9 +36,12 @@ func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantI
 		return err
 	}
 	if id != "" {
-		return nil
+		return recordLegacyWriter(ctx, cli, id, name, dir, wantImage)
 	}
 	data, err := os.ReadFile(datadirImagePath(dir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return &ImageMismatchError{WantImage: wantImage}
+	}
 	if err != nil {
 		return fmt.Errorf("read image record: %w", err)
 	}
@@ -58,8 +59,27 @@ func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantI
 	return &ImageMismatchError{HaveImage: have, WantImage: wantImage}
 }
 
+// recordLegacyWriter leaves the image check to UpOrReuse but first records an
+// unrecorded datadir's matching container, which UpOrReuse may remove when
+// stopped, so a failed recreate does not leave the data with an unknown writer.
+// A mismatched container is kept by UpOrReuse, so it is left to refuse.
+func recordLegacyWriter(ctx context.Context, cli *client.Client, id, name, dir, wantImage string) error {
+	if _, err := os.Stat(datadirImagePath(dir)); !errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return fmt.Errorf("inspect container %s: %w", name, err)
+	}
+	ref := configImage(info.Config)
+	if ref == "" || (imageSwapped(wantImage, ref) && !sameImageID(ctx, cli, wantImage, info.Image)) {
+		return nil
+	}
+	return RecordDatadirImage(ctx, cli, name, dir, ref)
+}
+
 // An engine-owned 0700 directory cannot be proved empty by the host user.
-// Keep checking its record; recovery explicitly deletes that record too.
+// Keep checking its record; recovery replaces it with the wanted ref.
 func datadirEmpty(dir string) (bool, error) {
 	f, err := os.Open(dir)
 	if errors.Is(err, fs.ErrNotExist) {

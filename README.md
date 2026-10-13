@@ -194,17 +194,20 @@ records the running container's image ID. Existing containers are
 validated by `UpOrReuse`. Only when no container exists is the record
 consulted for old data: different refs are
 accepted only when the wanted ref resolves to the recorded image ID.
-Older worktrees without a record keep working; their next `Up` writes one.
+A worktree from before v0.29.4 has no record: while its container exists,
+the next `Up` records that container's image. With data but neither a
+record nor a container, the writer is unknown and `Up` refuses; the error
+gives the one-line `printf` that records the wanted image if it wrote the
+data, or the steps below to start over.
 
 To keep the worktree, `docker rm -fv` the container if it still exists,
 then empty the data directory the error names: delete everything inside
 it and keep the directory itself. All data in that directory is lost.
-Delete the sibling image record too. On Linux the container's files and
-a root-owned parent may require root for these steps. Resume the same
-worktree the same way it was created (the WorktreeCreate hook, or
-`bough create` with the same worktree name). An empty or missing data
-directory makes a stale record irrelevant when bough can read the directory;
-if engine permissions prevent that check, deleting the record clears it.
+Then record the wanted image with the `printf` the error prints, since
+bough cannot list an engine-owned `0700` directory to see it is empty.
+On Linux the container's files and a root-owned parent may require root
+for these steps. Resume the same worktree the same way it was created
+(the WorktreeCreate hook, or `bough create` with the same worktree name).
 `bough remove --name <name>` discards the whole worktree and removes the
 record with the data directory. Compose-managed data is unchanged. A tag
 rebuilt in place keeps its name, so it is not compared.

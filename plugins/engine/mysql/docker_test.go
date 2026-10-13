@@ -167,7 +167,7 @@ func TestDockerUp_DatadirImageMismatchWithoutContainer(t *testing.T) {
 	if !errors.As(err, &mismatch) || mismatch.ContainerName != "" {
 		t.Fatalf("Up = %v, want mismatch without container", err)
 	}
-	if strings.Contains(err.Error(), "docker rm") || !strings.Contains(err.Error(), "delete the image record") {
+	if strings.Contains(err.Error(), "docker rm") || !strings.Contains(err.Error(), "record the wanted image with") {
 		t.Fatalf("incorrect recovery without a container: %v", err)
 	}
 }

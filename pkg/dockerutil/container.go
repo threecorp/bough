@@ -103,6 +103,10 @@ type ImageMismatchError struct {
 }
 
 func (e *ImageMismatchError) Error() string {
+	if e.HaveImage == "" {
+		return fmt.Sprintf("data directory has no image record and no container, so bough cannot tell which image wrote it; "+
+			"bough does not start %s on data another image may have written", e.WantImage)
+	}
 	if e.ContainerName == "" {
 		return fmt.Sprintf("data directory was written by %s, not the %s this config asks for; "+
 			"bough does not start another image on the data directory the first one wrote", e.HaveImage, e.WantImage)
@@ -112,23 +116,36 @@ func (e *ImageMismatchError) Error() string {
 		e.ContainerName, e.HaveImage, e.WantImage)
 }
 
-// WithDatadir names the data and record to clear, plus the container if present.
+// WithDatadir names the data to clear, plus the container if present.
 // Keeping the directory permits reuse under a root-owned parent on Linux.
+// Recovery records the wanted ref rather than deleting the record: an
+// engine-owned 0700 datadir cannot be proved empty by the host user.
 func (e *ImageMismatchError) WithDatadir(datadir string) error {
 	absolute, err := filepath.Abs(datadir)
 	if err != nil {
 		return fmt.Errorf("%w; resolve data directory: %w", e, err)
 	}
+	record := fmt.Sprintf("`printf '%%s\\n' %s > %s` (in a root shell if the data directory's parent is root-owned)",
+		shellQuote(e.WantImage), shellQuote(datadirImagePath(absolute)))
 	removeContainer := ""
 	if e.ContainerName != "" {
 		removeContainer = fmt.Sprintf("first run `docker rm -fv %s`, then ", e.ContainerName)
 	}
-	return fmt.Errorf("%w; to start over with an empty data directory while keeping the worktree, "+
+	keepData := ""
+	if e.HaveImage == "" {
+		keepData = fmt.Sprintf("if %s wrote this data, record that with %s and resume the same worktree; otherwise ", e.WantImage, record)
+	}
+	return fmt.Errorf("%w; %sto start over with an empty data directory while keeping the worktree, "+
 		"%sempty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
 		"on Linux its files belong to the container's user, so empty it as root), "+
-		"delete the image record %q too, if present (on Linux a root-owned parent may require root), "+
+		"record the wanted image with %s, "+
 		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name); or run `bough remove` to discard the whole worktree and create it again",
-		e, removeContainer, absolute, datadirImagePath(absolute))
+		e, keepData, removeContainer, absolute, record)
+}
+
+// shellQuote makes a remedy command safe to paste: only ' is special inside '…'.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // UpOrReuse implements the --resume idempotency contract for Up.

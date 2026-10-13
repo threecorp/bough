@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A worktree created before v0.29.4 has no `<datadir>.image`. When its
+  container was gone, v0.29.4 skipped the check, started the configured
+  image on the old data (Elasticsearch 9 on 7.x data exits 1) and recorded
+  that image as the writer. `Up` now refuses data that has neither a record
+  nor a container, and the error offers recording the wanted ref or
+  emptying the datadir. With a container and no record, `Up` first records
+  the container's image, so removing a stopped one cannot lose the writer.
+- The recovery step after emptying the datadir is now "record the wanted
+  image" instead of "delete the record": on Linux the host cannot list an
+  engine-owned `0700` datadir to see it is empty. The printed `printf`
+  single-quotes its arguments, so `$` or a backtick in the path is not
+  expanded.
+
 ## v0.29.4
 
 ### Fixed

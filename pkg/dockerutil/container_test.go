@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -150,7 +151,35 @@ func TestImageMismatchError_WithDatadirWithoutContainer(t *testing.T) {
 	if strings.Contains(err.Error(), "docker rm") || strings.Contains(err.Error(), "container  was") {
 		t.Fatalf("remedy names a nonexistent container: %v", err)
 	}
-	for _, want := range []string{"redis:7-alpine", "redis:8-alpine", "empty the data directory", datadir, "keep the directory itself", "delete the image record", datadir + ".image", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
+	for _, want := range []string{"redis:7-alpine", "redis:8-alpine", "empty the data directory", datadir, "keep the directory itself", "record the wanted image with", datadir + ".image", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("remedy missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestShellQuote_RoundTripsThroughSh(t *testing.T) {
+	for _, s := range []string{"plain", "a b", "it's", "$HOME", "`id`", "$(id)", "line\nbreak", `back\slash`} {
+		out, err := exec.Command("sh", "-c", "printf '%s' "+shellQuote(s)).Output()
+		if err != nil || string(out) != s {
+			t.Errorf("shellQuote(%q) via sh = %q, err=%v", s, out, err)
+		}
+	}
+}
+
+func TestImageMismatchError_WithDatadirUnknownWriter(t *testing.T) {
+	mismatch := &ImageMismatchError{WantImage: "redis:8-alpine"}
+	datadir := filepath.Join(t.TempDir(), "redis data")
+	err := mismatch.WithDatadir(datadir)
+	if strings.Contains(err.Error(), "docker rm") || strings.Contains(err.Error(), "written by ,") {
+		t.Fatalf("unknown writer remedy names a container or an empty image: %v", err)
+	}
+	for _, want := range []string{
+		"no image record and no container", "if redis:8-alpine wrote this data",
+		"in a root shell if the data directory's parent is root-owned",
+		"printf '%s\\n' 'redis:8-alpine' > '" + datadir + ".image'",
+		"otherwise to start over", "empty the data directory " + fmt.Sprintf("%q", datadir),
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("remedy missing %q: %v", want, err)
 		}
