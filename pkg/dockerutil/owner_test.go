@@ -214,6 +214,9 @@ func TestUpOrReuse_UnlabelledContainerOfAnotherWorktree(t *testing.T) {
 		{"datadir of another live worktree", legacyBinds(other), true, false},
 		{"datadir of this worktree", legacyBinds(own), false, true},
 		{"remove container with a datadir of a worktree that no longer exists", legacyBinds(gone), false, false},
+		// One path and no ":" is an anonymous volume at that container
+		// path, not a host dir, so it names no worktree.
+		{"anonymous volume at another worktree's datadir path", []string{filepath.Join(filepath.Dir(other), ".local", "mysql-data")}, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

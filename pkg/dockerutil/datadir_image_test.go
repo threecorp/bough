@@ -435,6 +435,18 @@ func TestCheckDatadirImage_ContainerBinds(t *testing.T) {
 	}
 }
 
+// TestCheckDatadirImage_AnonymousVolumeIsNotWriter: a bind entry with one
+// path and no ":" is an anonymous volume at that container path, so it
+// writes no host dir even when the path spells this datadir.
+func TestCheckDatadirImage_AnonymousVolumeIsNotWriter(t *testing.T) {
+	for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+		t.Run(fmt.Sprintf("record=%v", stamp != ""), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "redis-data")
+			checkNonWriterBind(t, dir, dir, stamp)
+		})
+	}
+}
+
 func TestCheckDatadirImage_NamedVolumeIsNotWriter(t *testing.T) {
 	t.Chdir(t.TempDir())
 	dir, err := filepath.Abs("redis-data")

@@ -43,9 +43,10 @@ func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantI
 	}
 	if err == nil && info.HostConfig != nil {
 		for _, bind := range info.HostConfig.Binds {
-			host, rest, _ := strings.Cut(bind, ":")
+			// One path and no ":" is an anonymous volume, not a host dir.
+			host, rest, isBind := strings.Cut(bind, ":")
 			_, options, _ := strings.Cut(rest, ":")
-			if filepath.IsAbs(host) && !slices.Contains(strings.Split(options, ","), "ro") && samePath(host, dir) {
+			if isBind && filepath.IsAbs(host) && !slices.Contains(strings.Split(options, ","), "ro") && samePath(host, dir) {
 				return recordLegacyWriter(ctx, cli, info, dir, wantImage)
 			}
 		}

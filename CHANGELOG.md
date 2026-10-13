@@ -5,6 +5,8 @@
 ### Fixed
 
 - **A same-named container binding another datadir no longer bypasses this datadir's image record or records itself as its legacy writer.**
+  Only a writable bind of the datadir from an absolute host path counts;
+  a named or anonymous volume, or a read-only bind, does not.
 
 - **Concurrent `bough create` runs no longer lose each other's port
   reservations.** Create, remove and backfill each loaded the registry,

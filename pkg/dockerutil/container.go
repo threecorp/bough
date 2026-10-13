@@ -256,8 +256,9 @@ func containerWorktree(cfg *container.Config, hostCfg *container.HostConfig) str
 		return ""
 	}
 	for _, bind := range hostCfg.Binds {
-		src, _, _ := strings.Cut(bind, ":")
-		if filepath.Base(filepath.Dir(src)) == ".local" && strings.HasSuffix(filepath.Base(src), "-data") {
+		// One path and no ":" is an anonymous volume, not a host dir.
+		src, _, isBind := strings.Cut(bind, ":")
+		if isBind && filepath.Base(filepath.Dir(src)) == ".local" && strings.HasSuffix(filepath.Base(src), "-data") {
 			return filepath.Dir(filepath.Dir(src))
 		}
 	}
