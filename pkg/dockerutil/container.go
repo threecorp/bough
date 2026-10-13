@@ -5,6 +5,7 @@ package dockerutil
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/containerd/errdefs"
@@ -94,6 +95,34 @@ func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool
 	return info.State.Running
 }
 
+// ImageMismatchError lets callers name the bind-mounted datadir in the remedy.
+type ImageMismatchError struct {
+	ContainerName string
+	HaveImage     string
+	WantImage     string
+}
+
+func (e *ImageMismatchError) Error() string {
+	return fmt.Sprintf("container %s was created from %s, not the %s this config asks for; "+
+		"bough does not start another image on the data directory the first one wrote",
+		e.ContainerName, e.HaveImage, e.WantImage)
+}
+
+// WithDatadir pairs container removal with emptying its data directory, so
+// the next Up cannot start a new image on files written by the old one. Keeping
+// the directory lets Up reuse it even when its parent is root-owned on Linux.
+func (e *ImageMismatchError) WithDatadir(datadir string) error {
+	absolute, err := filepath.Abs(datadir)
+	if err != nil {
+		return fmt.Errorf("%w; resolve data directory: %w", e, err)
+	}
+	return fmt.Errorf("%w; to start over with an empty data directory while keeping the worktree, "+
+		"first run `docker rm -f %s`, then empty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
+		"on Linux its files belong to the container's user, so empty it as root), "+
+		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name); or run `bough remove` to discard the whole worktree and create it again",
+		e, e.ContainerName, absolute)
+}
+
 // UpOrReuse implements the --resume idempotency contract for Up.
 //
 // Returns skip=true if a container with `name` is already running the
@@ -106,8 +135,9 @@ func IsBackendRunning(ctx context.Context, cli *client.Client, name string) bool
 // error rather than a reuse or a recreate: engines[].version picks the
 // image, and either path would leave the new version serving, or about to
 // serve, a data directory the old one wrote, while .bough.yaml names the
-// new one. wantImage == "" skips the comparison, for a caller whose image
-// is not bough's to choose.
+// new one. Callers can use ImageMismatchError.WithDatadir to name both
+// the container and its data directory in the remedy. wantImage == ""
+// skips the comparison, for a caller whose image is not bough's to choose.
 //
 // Mirrors threecorp scripts/worktree-create.sh:46-50 — "skip if
 // worktree already exists" but at the container layer.
@@ -123,9 +153,7 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage string) 
 	if ierr == nil {
 		have := configImage(info.Config)
 		if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
-			return false, fmt.Errorf("container %s was created from %s, not the %s this config asks for; "+
-				"bough does not start another image on the data directory the first one wrote — "+
-				"`bough remove` this worktree (or docker rm -f %s) and create it again", name, have, wantImage, name)
+			return false, &ImageMismatchError{ContainerName: name, HaveImage: have, WantImage: wantImage}
 		}
 		if info.State != nil && info.State.Running {
 			return true, nil

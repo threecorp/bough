@@ -185,12 +185,18 @@ refuses a shape that registry does not carry at `Up`, naming the YAML key.
 `extras.docker.image` sets the image ref verbatim and is the only way
 to a variant tag such as `mysql:8.4-oracle`.
 
-Changing the version of a running engine wants a fresh worktree: an
-Elasticsearch 7 data directory does not open under 9, and the same holds
-across PostgreSQL majors. `bough remove --name <name>` first: while the
-worktree's container exists, running or stopped, `bough create` refuses
-a `version:` (or `docker.image`) that resolves to another image reference
-and names both, rather than start it on the old data directory. A tag
+Changing the version of a running engine wants a fresh data directory:
+an Elasticsearch 7 data directory does not open under 9, and the same
+holds across PostgreSQL majors. While the worktree's container exists,
+running or stopped, `bough create` refuses a `version:` (or
+`docker.image`) that resolves to another image reference and names both,
+rather than start it on the old data directory. To keep the worktree,
+`docker rm -f` the container, then empty the data directory the error names:
+delete everything inside it and keep the directory itself. All data in that
+directory is lost. On Linux its files belong to the container's user, so
+empty it as root. Resume the same worktree the same way it was created
+(the WorktreeCreate hook, or `bough create` with the same worktree name).
+`bough remove --name <name>` discards the whole worktree instead. A tag
 rebuilt in place keeps its name, so it is not compared.
 
 ### Wire it into `claude --worktree`
