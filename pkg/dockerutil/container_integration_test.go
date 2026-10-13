@@ -433,10 +433,10 @@ func TestUpOrReuse_RemovingAnAlreadyGoneContainerIsNotFatal(t *testing.T) {
 // written at create time is what the check reads back.
 func TestUpOrReuse_RefusesAnotherWorktreesContainerOnTheDaemon(t *testing.T) {
 	cli := newTestClient(t)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
-	owner, other := filepath.Join(t.TempDir(), "api"), filepath.Join(t.TempDir(), "api")
+	owner, other :=filepath.Join(t.TempDir(), "api"), filepath.Join(t.TempDir(), "api")
 	name := fmt.Sprintf("bough-test-owner-%d", time.Now().UnixNano())
 	ctx := context.Background()
 	labels := Labels("test", testImage, 0, owner)
