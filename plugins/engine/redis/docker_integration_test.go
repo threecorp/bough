@@ -94,7 +94,7 @@ func TestDockerUp_ImageMismatchRecovery(t *testing.T) {
 	if err != nil || info.State == nil || !info.State.Running || info.Config.Image != "redis:7-alpine" {
 		t.Fatalf("mismatch changed the old container: info=%+v, err=%v", info, err)
 	}
-	if err := cli.ContainerRemove(ctx, oldID, container.RemoveOptions{Force: true}); err != nil {
+	if err := cli.ContainerRemove(ctx, oldID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 		t.Fatal(err)
 	}
 	emptyRedisRecoveryDatadir(t, ctx, cli, datadir)

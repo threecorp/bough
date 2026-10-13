@@ -83,8 +83,8 @@ jobs:
       - name: Entry-point smoke
         run: ./scripts/entrypoint-smoke.sh /tmp/boughbin/bough
 
-  # The image-swap refusal and anonymous-volume ownership in pkg/dockerutil
-  # are only exercised against a real daemon, so `go test ./...` cannot see them.
+  # Unit tests cover image-swap refusal with a fake daemon; the real daemon
+  # run covers anonymous-volume ownership and Redis image-mismatch recovery.
   integration:
     name: Integration tests (real Docker)
     needs: test

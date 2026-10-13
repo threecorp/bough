@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The image-mismatch remedy now says `docker rm -fv`. With `-f` alone, a
+  PostgreSQL 18 container left its anonymous volume (the image declares
+  `/var/lib/postgresql`, bough binds only `.../data`) dangling. `-v` removes
+  anonymous volumes only, never the bind-mounted datadir.
+
 ## v0.29.2
 
 ### Fixed
