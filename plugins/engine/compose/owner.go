@@ -57,10 +57,11 @@ func (p *Provider) listContainers(ctx context.Context, filters ...string) ([]com
 	return rows, nil
 }
 
-// foreignOwner returns "" only when c is provably this worktree's: its
-// worktree-root label names this worktree (or a worktree that no longer
-// exists, like the native engines), or, for a container made before the
-// label or a dependency the override does not label, a compose file
+// foreignOwner returns "" only when c may be acted on: its worktree-root
+// label names this worktree (or a worktree that no longer exists, whose
+// container may be replaced or stopped but whose project is not inherited;
+// see ownedHere), or, for a container made before the label or a
+// dependency the override does not label, a compose file
 // recorded on it is the same file as one of ownFiles: this worktree's
 // override for the port, which no other worktree uses, unlike a compose
 // file several worktrees may share. Anything else is foreign, including a
@@ -79,6 +80,17 @@ func foreignOwner(c composeContainer, worktreeRoot string, ownFiles []string) st
 		return "the worktree of " + c.ConfigFiles
 	}
 	return "an unknown owner (no bough label, no compose files recorded)"
+}
+
+// A gone owner's container may be replaced, but its project still owns data.
+// Only this worktree's container can hand us its project and named volumes.
+func ownedHere(c composeContainer, worktreeRoot string, ownFiles []string) bool {
+	if c.WorktreeRoot != "" && filepath.Clean(filepath.Dir(c.WorktreeRoot)) != filepath.Clean(filepath.Dir(worktreeRoot)) {
+		if _, err := os.Stat(filepath.Dir(c.WorktreeRoot)); errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return foreignOwner(c, worktreeRoot, ownFiles) == ""
 }
 
 // recordedFiles splits compose's comma-joined config file label. A path
@@ -156,12 +168,13 @@ func (p *Provider) checkOwner(ctx context.Context, port int, worktreeRoot, proje
 // resolveProject picks the compose project for one service: an explicit
 // compose.project as is; else the project this worktree already used for
 // it, from its sidecar or, when the sidecar was never written, from its
-// own container's label, so an existing service keeps its project and its
-// named volumes; else composeProjectName for this worktree. A recorded
-// project is never swapped for another, by bough or by a changed
-// compose.project while this worktree's container exists: the container
-// would stay in the old one while the sidecar named the new one. Up
-// refuses a recorded project that holds another worktree's container.
+// own container's label (not a gone owner's), so an existing service
+// keeps its project and its named volumes; else composeProjectName for
+// this worktree. A recorded project is never swapped for another, by
+// bough or by a changed compose.project while this worktree's container
+// exists: the container would stay in the old one while the sidecar named
+// the new one. Up refuses a recorded project that holds another worktree's
+// container.
 func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port int, file, service, explicit string, ownFiles []string) (string, error) {
 	if explicit != "" {
 		// This worktree's container keeps the project it was created in,
@@ -174,7 +187,7 @@ func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port
 			return "", err
 		}
 		for _, c := range own {
-			if c.Project != "" && c.Project != explicit && foreignOwner(c, worktreeRoot, ownFiles) == "" {
+			if c.Project != "" && c.Project != explicit && ownedHere(c, worktreeRoot, ownFiles) {
 				return "", fmt.Errorf("compose.project is %s, but this worktree's container bough-compose-%d is in project %s: "+
 					"`bough remove` this worktree and create it again to move it", explicit, port, c.Project)
 			}
@@ -193,7 +206,7 @@ func (p *Provider) resolveProject(ctx context.Context, worktreeRoot string, port
 		return "", err
 	}
 	for _, c := range own {
-		if c.Project != "" && foreignOwner(c, worktreeRoot, ownFiles) == "" {
+		if c.Project != "" && ownedHere(c, worktreeRoot, ownFiles) {
 			return c.Project, nil
 		}
 	}

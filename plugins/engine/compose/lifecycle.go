@@ -85,7 +85,7 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	// treating its own published port as a foreign conflict — unless its
 	// worktree-root label names another checkout's worktree of the same
 	// name, which UpOrReuse refuses.
-	// UpOrReuse also removes a stale STOPPED container of this name
+	// UpOrReuse also removes a stopped container or a gone owner's container
 	// (e.g. left over from an interrupted prior run) before signalling
 	// "not reusable," so the create path below never hits a stale
 	// name collision either.

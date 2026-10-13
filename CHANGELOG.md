@@ -48,7 +48,10 @@
   create and remove refuse a container whose label names another existing
   worktree. The owner is the worktree directory, which also holds the
   datadir, so deleting only the engine-provider repo does not free the
-  database. A container made before this release has no label; create and
+  database. If the owner worktree itself is gone, create removes its
+  container after the image check instead of reusing it; compose also
+  avoids inheriting its project and named volumes. Remove may still stop it.
+  A container made before this release has no label; create and
   remove find its worktree from its `.local/<kind>-data` bind mount (for
   `kind: compose`, see below).
 - **A `kind: compose` service of another clone is no longer recreated.**

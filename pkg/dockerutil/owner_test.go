@@ -5,6 +5,7 @@ package dockerutil
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,8 +27,9 @@ type fakeDaemon struct {
 	binds         []string
 	running       bool
 
-	mu      sync.Mutex
-	removed bool
+	mu            sync.Mutex
+	removed       bool
+	removeVolumes bool
 }
 
 const fakeID = "c0ffee"
@@ -52,6 +54,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasSuffix(path, "/containers/"+fakeID):
 		f.mu.Lock()
 		f.removed = true
+		f.removeVolumes = r.URL.Query().Get("v") == "1"
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -64,6 +67,12 @@ func (f *fakeDaemon) wasRemoved() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.removed
+}
+
+func (f *fakeDaemon) removedVolumes() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.removeVolumes
 }
 
 func newFakeClient(t *testing.T, f *fakeDaemon) *client.Client {
@@ -117,7 +126,7 @@ func TestUpOrReuse_LeavesAnotherWorktreesContainerAlone(t *testing.T) {
 	}
 }
 
-func TestUpOrReuse_ReusesItsOwnWorktreesContainer(t *testing.T) {
+func TestUpOrReuse_ReusesOwnOrRemovesGoneWorktreesContainer(t *testing.T) {
 	owner := providerRoot(t)
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(filepath.Dir(owner), link); err != nil {
@@ -129,19 +138,23 @@ func TestUpOrReuse_ReusesItsOwnWorktreesContainer(t *testing.T) {
 		labels map[string]string
 		binds  []string
 		want   string
+		reuse  bool
 	}{
-		{"same path", worktreeLabels(owner), nil, owner},
-		{"same worktree through a symlink", worktreeLabels(owner), nil, filepath.Join(link, "api")},
-		{"no label and no datadir bind", map[string]string{LabelManaged: "true"}, []string{"/etc/hosts:/etc/hosts:ro"}, owner},
-		{"labelled worktree no longer exists", worktreeLabels(gone), nil, owner},
-		{"caller names no worktree (compose)", worktreeLabels(owner), nil, ""},
+		{"same path", worktreeLabels(owner), nil, owner, true},
+		{"same worktree through a symlink", worktreeLabels(owner), nil, filepath.Join(link, "api"), true},
+		{"no label and no datadir bind", map[string]string{LabelManaged: "true"}, []string{"/etc/hosts:/etc/hosts:ro"}, owner, true},
+		{"remove container of a labelled worktree that no longer exists", worktreeLabels(gone), nil, owner, false},
+		{"caller names no worktree (compose)", worktreeLabels(owner), nil, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeDaemon{name: "bough-mysql-36000", labels: tc.labels, binds: tc.binds, running: true}
 			skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:8.4", tc.want)
-			if err != nil || !skip {
-				t.Errorf("UpOrReuse = (%v, %v), want (true, nil)", skip, err)
+			if err != nil || skip != tc.reuse {
+				t.Errorf("UpOrReuse = (%v, %v), want (%v, nil)", skip, err, tc.reuse)
+			}
+			if f.wasRemoved() != !tc.reuse {
+				t.Errorf("container removed = %v, want %v", f.wasRemoved(), !tc.reuse)
 			}
 		})
 	}
@@ -196,10 +209,11 @@ func TestUpOrReuse_UnlabelledContainerOfAnotherWorktree(t *testing.T) {
 		name    string
 		binds   []string
 		refused bool
+		reuse   bool
 	}{
-		{"datadir of another live worktree", legacyBinds(other), true},
-		{"datadir of this worktree", legacyBinds(own), false},
-		{"datadir of a worktree that no longer exists", legacyBinds(gone), false},
+		{"datadir of another live worktree", legacyBinds(other), true, false},
+		{"datadir of this worktree", legacyBinds(own), false, true},
+		{"remove container with a datadir of a worktree that no longer exists", legacyBinds(gone), false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,11 +222,12 @@ func TestUpOrReuse_UnlabelledContainerOfAnotherWorktree(t *testing.T) {
 			if tc.refused && err == nil {
 				t.Error("UpOrReuse reused a legacy container of another worktree")
 			}
-			if !tc.refused && (err != nil || !skip) {
-				t.Errorf("UpOrReuse = (%v, %v), want (true, nil)", skip, err)
+			if !tc.refused && (err != nil || skip != tc.reuse) {
+				t.Errorf("UpOrReuse = (%v, %v), want (%v, nil)", skip, err, tc.reuse)
 			}
-			if f.wasRemoved() {
-				t.Error("UpOrReuse removed the container")
+			wantRemoved := !tc.refused && !tc.reuse
+			if f.wasRemoved() != wantRemoved {
+				t.Errorf("container removed = %v, want %v", f.wasRemoved(), wantRemoved)
 			}
 		})
 	}
@@ -262,5 +277,57 @@ func TestOtherWorktree_CaseDifferentSpelling(t *testing.T) {
 	}
 	if got := OtherWorktree(filepath.Join(owner, "api"), filepath.Join(alias, "api")); got != "" {
 		t.Errorf("OtherWorktree = %q, want \"\" (same worktree)", got)
+	}
+}
+
+// A gone owner permits recreation only after the unchanged image check.
+func TestUpOrReuse_GoneOwnerImageMismatchKeepsContainer(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone", "api")
+	for _, running := range []bool{true, false} {
+		f := &fakeDaemon{name: "bough-mysql-36000", labels: worktreeLabels(gone), running: running}
+		skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, "mysql:9", providerRoot(t))
+		var mismatch *ImageMismatchError
+		if skip || !errors.As(err, &mismatch) || mismatch.ContainerName != f.name {
+			t.Errorf("running=%v: UpOrReuse = (%v, %v), want ImageMismatchError", running, skip, err)
+		}
+		if f.wasRemoved() {
+			t.Errorf("running=%v: removed the mismatched container", running)
+		}
+	}
+}
+
+func TestUpOrReuse_GoneOwnerKeepsVolumeRemovalPolicy(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone", "api")
+	for _, tc := range []struct {
+		name, image            string
+		managed, removeVolumes bool
+	}{
+		{"managed native", "mysql:8.4", true, true},
+		{"unmanaged native", "mysql:8.4", false, false},
+		{"compose image", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			labels := map[string]string{LabelWorktreeRoot: gone}
+			if tc.managed {
+				labels[LabelManaged] = "true"
+			}
+			f := &fakeDaemon{name: "bough-mysql-36000", labels: labels, running: true}
+			skip, err := UpOrReuse(context.Background(), newFakeClient(t, f), f.name, tc.image, providerRoot(t))
+			if err != nil || skip || !f.wasRemoved() || f.removedVolumes() != tc.removeVolumes {
+				t.Errorf("UpOrReuse = (%v, %v), removed=%v, volumes=%v; want recreate, volumes=%v",
+					skip, err, f.wasRemoved(), f.removedVolumes(), tc.removeVolumes)
+			}
+		})
+	}
+}
+
+func TestCheckWorktree_AllowsContainerWhoseOwnerIsGone(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone", "api")
+	f := &fakeDaemon{name: "bough-mysql-36000", labels: worktreeLabels(gone), running: true}
+	if err := CheckWorktree(context.Background(), newFakeClient(t, f), fakeID, f.name, providerRoot(t)); err != nil {
+		t.Errorf("CheckWorktree = %v, want nil", err)
+	}
+	if f.wasRemoved() {
+		t.Error("CheckWorktree removed the container")
 	}
 }

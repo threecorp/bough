@@ -103,6 +103,37 @@ func TestLookupByName_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpOrReuse_RemovesRunningContainerWhoseWorktreeIsGone(t *testing.T) {
+	cli := newTestClient(t)
+	defer func() { _ = cli.Close() }()
+	pullTestImage(t, cli)
+	ctx := context.Background()
+	name := fmt.Sprintf("bough-test-goneowner-%d", time.Now().UnixNano())
+	gone := filepath.Join(t.TempDir(), "gone", "api")
+	labels := Labels("test", testImage, 42001, gone)
+	labels["com.bough.test"] = "dockerutil"
+	resp, err := cli.ContainerCreate(ctx, &container.Config{
+		Image: testImage, Cmd: []string{"sleep", "3600"},
+		Labels: labels,
+	}, &container.HostConfig{}, nil, nil, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	})
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	skip, err := UpOrReuse(ctx, cli, name, testImage, filepath.Join(t.TempDir(), "api"))
+	if err != nil || skip {
+		t.Fatalf("UpOrReuse = (%v, %v), want (false, nil)", skip, err)
+	}
+	if _, err := cli.ContainerInspect(ctx, resp.ID); !errdefs.IsNotFound(err) {
+		t.Errorf("container inspect = %v, want NotFound", err)
+	}
+}
+
 func TestRemoveIfExists_Idempotent(t *testing.T) {
 	cli := newTestClient(t)
 	defer func() { _ = cli.Close() }()
@@ -436,7 +467,7 @@ func TestUpOrReuse_RefusesAnotherWorktreesContainerOnTheDaemon(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 	pullTestImage(t, cli)
 
-	owner, other :=filepath.Join(t.TempDir(), "api"), filepath.Join(t.TempDir(), "api")
+	owner, other := filepath.Join(t.TempDir(), "api"), filepath.Join(t.TempDir(), "api")
 	name := fmt.Sprintf("bough-test-owner-%d", time.Now().UnixNano())
 	ctx := context.Background()
 	labels := Labels("test", testImage, 0, owner)

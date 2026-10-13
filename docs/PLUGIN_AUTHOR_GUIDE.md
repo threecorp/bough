@@ -129,7 +129,11 @@ datadir the container's user owns. Your `Cleanup` meets the same files
 there; `dockerutil.RemoveDatadir` removes them as the bundled engines do.
 
 For a Docker plugin that owns a datadir, call `dockerutil.CheckDatadirImage`
-before `UpOrReuse`. Call `dockerutil.RecordDatadirImage` with the Docker client
+before `UpOrReuse`. `UpOrReuse` refuses a different live worktree's container
+and removes a different gone worktree's container after the image check,
+even while running, so the fresh create uses this worktree's datadir.
+`CheckWorktree` still permits stopping a gone owner's container.
+Call `dockerutil.RecordDatadirImage` with the Docker client
 and container name after the image is available and the datadir exists, before
 container creation; return on failure. Call it again on reuse, where it records
 the running container's image ID. It stores the ref and immutable image ID in

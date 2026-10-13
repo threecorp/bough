@@ -156,9 +156,9 @@ func shellQuote(s string) string {
 //
 // Returns skip=true if a container with `name` is already running the
 // image in wantImage, so the caller can early-return without
-// recreating. If the container exists but is stopped (a previous Up
-// partially failed), the stale container is removed and skip=false is
-// returned so the caller proceeds with a fresh create + start.
+// recreating. A stopped container, or one whose different owner worktree
+// is gone, is removed after the image check and returns skip=false for a
+// fresh create + start; the latter must not serve another datadir.
 //
 // A container another worktree created (LabelWorktreeRoot names a live
 // directory other than wantWorktree) is an error too, running or stopped:
@@ -194,14 +194,16 @@ func UpOrReuse(ctx context.Context, cli *client.Client, name, wantImage, wantWor
 		}
 		return false, err
 	}
-	if owner := otherOwner(containerWorktree(info.Config, info.HostConfig), wantWorktree); owner != "" {
-		return false, WorktreeConflict(name, owner, filepath.Dir(wantWorktree))
+	owner := containerWorktree(info.Config, info.HostConfig)
+	if other := otherOwner(owner, wantWorktree); other != "" {
+		return false, WorktreeConflict(name, other, filepath.Dir(wantWorktree))
 	}
 	have := configImage(info.Config)
 	if imageSwapped(wantImage, have) && !sameImageID(ctx, cli, wantImage, info.Image) {
 		return false, &ImageMismatchError{ContainerName: name, HaveImage: have, WantImage: wantImage}
 	}
-	if info.State != nil && info.State.Running {
+	sameOwner := owner == "" || wantWorktree == "" || samePath(owner, filepath.Dir(wantWorktree))
+	if sameOwner && info.State != nil && info.State.Running {
 		return true, nil
 	}
 	// The container LookupByName just found stopped can vanish before
@@ -266,9 +268,11 @@ func containerWorktree(cfg *container.Config, hostCfg *container.HostConfig) str
 // LabelWorktreeRoot, when it is a live worktree other than want's. Both
 // are engine-provider repo paths (UpReq.WorktreeRoot); the worktree is
 // their parent, which also holds the datadir, so a deleted repo dir does
-// not free the database. Names are bough-<engine>-<port> and the port is a
-// hash of the worktree name, so a second clone of the same monorepo with a
-// same-named worktree lands on the same name.
+// not free the database. A gone owner is not a conflict: UpOrReuse removes
+// its container after the image check, and Down may stop it. Names are
+// bough-<engine>-<port> and the port is a hash of the worktree name, so a
+// second clone of the same monorepo with a same-named worktree lands on
+// the same name.
 func OtherWorktree(have, want string) string {
 	if have == "" {
 		return ""
@@ -278,8 +282,8 @@ func OtherWorktree(have, want string) string {
 
 // otherOwner returns owner when it names a live worktree dir other than
 // the parent of want. An unknown owner, an empty want, or an owner dir
-// that no longer exists is not a conflict, so none of them blocks what
-// worked before.
+// that no longer exists is not a conflict. UpOrReuse separately prevents
+// reuse for a different gone owner; Down may stop its container.
 func otherOwner(owner, want string) string {
 	if owner == "" || want == "" || samePath(owner, filepath.Dir(want)) {
 		return ""

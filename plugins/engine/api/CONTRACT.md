@@ -34,7 +34,11 @@ and the suite will treat the clause as not-applicable rather than failed.
    `PluginSpec.Location` before `Up`, so a plugin sees a finished URL.
 3. **`Up` is up-or-reuse**: if a container with the canonical name is
    already running the image `Up` resolved, `Up` returns nil without
-   recreating it. The four native Docker plugins record the image ref and
+   recreating it. A different live owner worktree is refused. A different
+   gone owner causes removal after the image check and recreation, even
+   while running; `Down` may still stop it. Compose must not inherit that
+   container's project and named volumes.
+   The four native Docker plugins record the image ref and
    immutable image ID in `<datadir>.image` before container creation, and
    on reuse record the running container's image ID. `CheckDatadirImage` leaves
    the image check to `UpOrReuse` only for a named container whose bind source

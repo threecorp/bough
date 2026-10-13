@@ -212,6 +212,11 @@ for these steps. Resume the same worktree the same way it was created
 record with the data directory. Compose-managed data is unchanged. A tag
 rebuilt in place keeps its name, so it is not compared.
 
+A container owned by a different live worktree is refused. If that worktree
+directory is gone, `Up` removes the container after the image check and
+recreates it instead of reusing its data. Compose also avoids inheriting
+that container's project and named volumes; `Down` may still stop it.
+
 ### Wire it into `claude --worktree`
 
 `bough claude hook install --scope project` writes both hooks into

@@ -582,6 +582,37 @@ func TestResolveProject_ChangedProjectIsRefusedInEveryState(t *testing.T) {
 	}
 }
 
+// A vanished owner's project may still hold its data in named volumes.
+func TestResolveProject_DoesNotInheritGoneOwnersProject(t *testing.T) {
+	worktree := t.TempDir()
+	root := filepath.Join(worktree, "demo-api")
+	gone := filepath.Join(t.TempDir(), "gone", "demo-api")
+	for _, explicit := range []string{"", "new"} {
+		for _, state := range []string{"running", "exited"} {
+			fakeDockerPS(t, `case "$*" in *name=*) printf 'c1\told\t`+gone+`\t\t`+state+`\n';; esac`)
+			project, err := New().resolveProject(context.Background(), root, 56135, "demo-api/compose.yml", "redis", explicit, nil)
+			want := explicit
+			if want == "" {
+				want = composeProjectName(filepath.Base(worktree), "demo-api/compose.yml", worktree)
+			}
+			if err != nil || project != want {
+				t.Errorf("explicit=%q state=%s: resolveProject = (%q, %v), want %q", explicit, state, project, err, want)
+			}
+		}
+	}
+}
+
+func TestCheckOwner_AllowsGoneOwnerForReplacementAndDown(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "demo-api")
+	gone := filepath.Join(t.TempDir(), "gone", "demo-api")
+	for _, service := range []string{"", "redis"} {
+		fakeDockerPS(t, `printf 'c1\told\t`+gone+`\t\trunning\n'`)
+		if err := New().checkOwner(context.Background(), 56135, root, "old", service, nil); err != nil {
+			t.Errorf("service=%q: checkOwner = %v, want nil", service, err)
+		}
+	}
+}
+
 // TestCheckOwner_RefusalNeverAdvisesDeletingTheOtherContainer: the refused
 // container may be another worktree's; the message must not tell the user
 // to delete it.

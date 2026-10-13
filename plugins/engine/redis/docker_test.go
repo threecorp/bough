@@ -106,6 +106,42 @@ func TestDockerUp_ReuseRecordsImage(t *testing.T) {
 	}
 }
 
+// TestDockerUp_GoneOwnerContainerChecksOwnRecord: a same-named container
+// left by a worktree that no longer exists binds that worktree's datadir,
+// so its image says nothing about this datadir. Up checks this datadir's
+// own record before UpOrReuse may remove that container, and refuses
+// without removing it (the fake daemon fails the test on any delete).
+func TestDockerUp_GoneOwnerContainerChecksOwnRecord(t *testing.T) {
+	name := dockerContainerName(42001)
+	datadir := filepath.Join(t.TempDir(), "engine data")
+	if err := os.Mkdir(datadir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(datadir, "data"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := "old:1\nsha256:stale\n"
+	if err := os.WriteFile(datadir+".image", []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone", "repo")
+	goneData := filepath.Join(filepath.Dir(gone), ".local", "redis-data")
+	dockertest.StartDaemon(t, name, "wanted:2", true, dockerutil.Labels(dockerEngine, "wanted:2", 42001, gone), goneData+":"+dockerDataDir)
+	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
+		Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
+		Datadir:      datadir,
+		WorktreeRoot: filepath.Join(filepath.Dir(datadir), "repo"),
+		Extras:       map[string]string{"docker.image": "wanted:2"},
+	})
+	var mismatch *dockerutil.ImageMismatchError
+	if !errors.As(err, &mismatch) || mismatch.ContainerName != "" || mismatch.HaveImage != "old:1" {
+		t.Fatalf("Up = %v, want this datadir's record mismatch (old:1) naming no container", err)
+	}
+	if data, err := os.ReadFile(datadir + ".image"); err != nil || string(data) != record {
+		t.Errorf("record = %q, %v, want unchanged %q", data, err, record)
+	}
+}
+
 func TestDockerUp_DatadirImageMismatchWithoutContainer(t *testing.T) {
 	datadir := filepath.Join(t.TempDir(), "engine data")
 	if err := os.Mkdir(datadir, 0o755); err != nil {
