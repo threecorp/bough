@@ -41,16 +41,19 @@ and the suite will treat the clause as not-applicable rather than failed.
    record consulted for old data.
    A different image is refused with both refs named; different refs are
    accepted only when the wanted ref resolves to the recorded image ID.
-   A missing record preserves compatibility with older worktrees. A missing
-   or readable empty datadir makes a stale record irrelevant.
+   Data with neither a record nor a container has an unknown writer and is
+   refused (`HaveImage` empty); the remedy offers recording the wanted ref.
+   A missing or readable empty datadir makes a stale record irrelevant.
    The error names the datadir and record
    (`dockerutil.ImageMismatchError.WithDatadir`). To keep the worktree,
    run `docker rm -fv <container>` only if the container exists, then empty
    the datadir: delete everything inside it and keep the directory itself.
-   All data in that directory is lost. Delete the sibling image record too,
-   including when engine permissions prevent checking whether the datadir
-   is empty. On Linux these steps may require root. Resume the same worktree
-   the same way it was created (the WorktreeCreate hook, or `bough create`
+   All data in that directory is lost. Then record the wanted ref in the
+   record (the error prints the `printf`), since engine permissions can
+   prevent checking that the datadir is empty. With a container present and
+   no record, `Up` first records that container's image, so a failed
+   recreate leaves the writer known. On Linux these steps may require root.
+   Resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create`
    with the same worktree name). `Cleanup` removes the record with the datadir
    through `dockerutil.RemoveDatadir`. Compose owns its data and is exempt.
    The suite checks reuse of the unchanged image in the `UpReuse` phase: it

@@ -67,6 +67,10 @@ func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
 	if err := os.WriteFile(filepath.Join(datadir, ".old-data"), []byte("discard me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Data with no record and no container is refused, so name its writer.
+	if err := os.WriteFile(datadir+".image", []byte("redis:7-alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Redis writes as its own uid on Linux; remove test data as root if needed.
 	// Registered before container cleanup so no Redis process writes during it.
 	t.Cleanup(func() {
@@ -116,7 +120,7 @@ func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
 	if gone && strings.Contains(err.Error(), "docker rm") {
 		t.Fatalf("remedy removes a nonexistent container: %v", err)
 	}
-	for _, want := range []string{"delete the image record", datadir + ".image", datadir, "empty the data directory", "keep the directory itself", "all data in that directory is lost", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
+	for _, want := range []string{"record the wanted image with", datadir + ".image", datadir, "empty the data directory", "keep the directory itself", "all data in that directory is lost", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("remedy missing %q: %v", want, err)
 		}
@@ -139,7 +143,8 @@ func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("recovery did not empty all data: entries=%v, err=%v", entries, err)
 	}
-	if err := os.Remove(datadir + ".image"); err != nil {
+	// The remedy's last step: record the wanted image.
+	if err := os.WriteFile(datadir+".image", []byte("redis:8-alpine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.Up(ctx, req); err != nil {

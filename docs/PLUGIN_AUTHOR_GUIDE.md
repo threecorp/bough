@@ -136,8 +136,9 @@ the running container's image ID. It stores the ref and immutable image ID in
 `<datadir>.image`, beside the datadir to preserve initialization.
 Existing containers are validated by `UpOrReuse`; only when no container exists
 is the record consulted. Different refs are accepted only when the wanted ref
-resolves to the recorded image ID. Missing records allow older
-worktrees; readable empty or missing datadirs ignore stale records. Wrap
+resolves to the recorded image ID. Data with neither a record nor a
+container is refused as an unknown writer; readable empty or missing
+datadirs ignore stale records. Wrap
 `ImageMismatchError` with `WithDatadir` for the recovery steps.
 `RemoveDatadir` deletes both the datadir and its record, including under
 a root-owned parent. The bundled compose plugin owns no datadir and does

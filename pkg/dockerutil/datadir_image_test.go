@@ -49,10 +49,15 @@ func TestCheckDatadirImage(t *testing.T) {
 		want       string
 		container  bool
 		mismatch   bool
+		unknown    bool
+		recorded   string // record expected after the check when none was stamped
 	}{
 		{name: "missing ID refuses swapped refs", stamp: "redis:7-alpine", data: true, want: "docker.io/library/redis:7-alpine", mismatch: true},
 		{name: "retagged recorded ref cannot authorize new ID", stamp: "redis:7-alpine\nsha256:old\n", data: true, want: "retagged:latest", mismatch: true},
-		{name: "missing record allows legacy data", data: true, want: "redis:8-alpine"},
+		{name: "missing record without container refuses an unknown writer", data: true, want: "redis:8-alpine", mismatch: true, unknown: true},
+		{name: "missing record with a matching container records it", data: true, want: "redis:7-alpine", container: true, recorded: "redis:7-alpine\nsha256:running\n"},
+		{name: "missing record with a mismatched container leaves the refusal to UpOrReuse", data: true, want: "redis:8-alpine", container: true},
+		{name: "missing record and empty directory", want: "redis:8-alpine"},
 		{name: "same reference", stamp: "redis:7-alpine\nsha256:old\n", data: true, want: "redis:7-alpine"},
 		{name: "empty wanted reference", stamp: "redis:7-alpine\nsha256:old\n", data: true},
 		{name: "missing directory ignores stale record", stamp: "redis:7-alpine\nsha256:old\n", missingDir: true, want: "redis:8-alpine"},
@@ -88,7 +93,11 @@ func TestCheckDatadirImage(t *testing.T) {
 					t.Fatalf("CheckDatadirImage = %v, want ImageMismatchError", err)
 				}
 				wantName := ""
-				if mismatch.HaveImage != "redis:7-alpine" || mismatch.WantImage != tc.want || mismatch.ContainerName != wantName {
+				wantHave := "redis:7-alpine"
+				if tc.unknown {
+					wantHave = ""
+				}
+				if mismatch.HaveImage != wantHave || mismatch.WantImage != tc.want || mismatch.ContainerName != wantName {
 					t.Fatalf("mismatch = %+v", mismatch)
 				}
 			} else if err != nil {
@@ -98,6 +107,15 @@ func TestCheckDatadirImage(t *testing.T) {
 				data, err := os.ReadFile(dir + ".image")
 				if err != nil || string(data) != tc.stamp {
 					t.Fatalf("check changed record: %q, %v", data, err)
+				}
+			}
+			if tc.stamp == "" {
+				data, err := os.ReadFile(dir + ".image")
+				if tc.recorded == "" && !os.IsNotExist(err) {
+					t.Fatalf("check wrote a record: %q, %v", data, err)
+				}
+				if tc.recorded != "" && (err != nil || string(data) != tc.recorded) {
+					t.Fatalf("container's writer not recorded: %q, %v", data, err)
 				}
 			}
 		})
@@ -140,6 +158,25 @@ func TestCheckDatadirImage_UnreadableDatadirStillRefusesMismatch(t *testing.T) {
 	var mismatch *ImageMismatchError
 	if err := CheckDatadirImage(context.Background(), cli, "bough-postgres-42001", dir, "postgres:17-alpine"); !errors.As(err, &mismatch) {
 		t.Fatalf("unreadable directory bypassed mismatch: %v", err)
+	}
+}
+
+// The remedy records the wanted ref because the host cannot list a 0700 dir.
+func TestCheckDatadirImage_UnreadableDatadirPassesWithWantedRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory mode")
+	}
+	dir := filepath.Join(t.TempDir(), "postgres-data")
+	if err := os.Mkdir(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := os.WriteFile(dir+".image", []byte("postgres:17-alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cli := datadirImageTestClient(t, "bough-postgres-42001", false)
+	if err := CheckDatadirImage(context.Background(), cli, "bough-postgres-42001", dir, "postgres:17-alpine"); err != nil {
+		t.Fatalf("recorded wanted ref was refused: %v", err)
 	}
 }
 
