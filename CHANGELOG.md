@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The mysql, postgres, redis and elasticsearch Docker plugins record the
+  image ref and immutable ID beside their datadirs before container creation
+  and refresh the record on reuse. When no container exists, old data refuses
+  different refs unless the wanted ref resolves to the recorded ID.
+  Cleanup removes the datadir and record; older worktrees without a record
+  remain usable.
+
 ## v0.29.3
 
 ### Fixed

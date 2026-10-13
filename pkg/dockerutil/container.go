@@ -103,24 +103,32 @@ type ImageMismatchError struct {
 }
 
 func (e *ImageMismatchError) Error() string {
+	if e.ContainerName == "" {
+		return fmt.Sprintf("data directory was written by %s, not the %s this config asks for; "+
+			"bough does not start another image on the data directory the first one wrote", e.HaveImage, e.WantImage)
+	}
 	return fmt.Sprintf("container %s was created from %s, not the %s this config asks for; "+
 		"bough does not start another image on the data directory the first one wrote",
 		e.ContainerName, e.HaveImage, e.WantImage)
 }
 
-// WithDatadir pairs container removal with emptying its data directory, so
-// the next Up cannot start a new image on files written by the old one. Keeping
-// the directory lets Up reuse it even when its parent is root-owned on Linux.
+// WithDatadir names the data and record to clear, plus the container if present.
+// Keeping the directory permits reuse under a root-owned parent on Linux.
 func (e *ImageMismatchError) WithDatadir(datadir string) error {
 	absolute, err := filepath.Abs(datadir)
 	if err != nil {
 		return fmt.Errorf("%w; resolve data directory: %w", e, err)
 	}
+	removeContainer := ""
+	if e.ContainerName != "" {
+		removeContainer = fmt.Sprintf("first run `docker rm -fv %s`, then ", e.ContainerName)
+	}
 	return fmt.Errorf("%w; to start over with an empty data directory while keeping the worktree, "+
-		"first run `docker rm -fv %s`, then empty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
+		"%sempty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
 		"on Linux its files belong to the container's user, so empty it as root), "+
+		"delete the image record %q too, if present (on Linux a root-owned parent may require root), "+
 		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name); or run `bough remove` to discard the whole worktree and create it again",
-		e, e.ContainerName, absolute)
+		e, removeContainer, absolute, datadirImagePath(absolute))
 }
 
 // UpOrReuse implements the --resume idempotency contract for Up.

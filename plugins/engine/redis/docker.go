@@ -116,6 +116,14 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	name := dockerContainerName(port)
 
+	if err := dockerutil.CheckDatadirImage(ctx, cli, name, req.Datadir, imageRef); err != nil {
+		var mismatch *dockerutil.ImageMismatchError
+		if errors.As(err, &mismatch) {
+			err = mismatch.WithDatadir(req.Datadir)
+		}
+		return fmt.Errorf("redis docker: data image check: %w", err)
+	}
+
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
@@ -125,7 +133,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("redis docker: reuse check %s: %w", name, err)
 	}
 	if skip {
-		return nil
+		return dockerutil.RecordDatadirImage(ctx, cli, name, req.Datadir, imageRef)
 	}
 
 	if !dockerutil.IsPortFree(port) {
@@ -171,6 +179,10 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		Binds:         []string{req.Datadir + ":" + dockerDataDir},
 		PortBindings:  portBindings,
 		RestartPolicy: container.RestartPolicy{Name: "no"},
+	}
+
+	if err := dockerutil.RecordDatadirImage(ctx, cli, name, req.Datadir, imageRef); err != nil {
+		return err
 	}
 
 	resp, err := cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)

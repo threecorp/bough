@@ -185,18 +185,28 @@ refuses a shape that registry does not carry at `Up`, naming the YAML key.
 `extras.docker.image` sets the image ref verbatim and is the only way
 to a variant tag such as `mysql:8.4-oracle`.
 
-Changing the version of a running engine wants a fresh data directory:
+Changing the version of an engine wants a fresh data directory:
 an Elasticsearch 7 data directory does not open under 9, and the same
-holds across PostgreSQL majors. While the worktree's container exists,
-running or stopped, `bough create` refuses a `version:` (or
-`docker.image`) that resolves to another image reference and names both,
-rather than start it on the old data directory. To keep the worktree,
-`docker rm -fv` the container, then empty the data directory the error names:
-delete everything inside it and keep the directory itself. All data in that
-directory is lost. On Linux its files belong to the container's user, so
-empty it as root. Resume the same worktree the same way it was created
-(the WorktreeCreate hook, or `bough create` with the same worktree name).
-`bough remove --name <name>` discards the whole worktree instead. A tag
+holds across PostgreSQL majors. Before creating a Docker container,
+the four native plugins record the image ref and immutable image ID in
+`<datadir>.image` beside the data directory, never inside it; reuse
+records the running container's image ID. Existing containers are
+validated by `UpOrReuse`. Only when no container exists is the record
+consulted for old data: different refs are
+accepted only when the wanted ref resolves to the recorded image ID.
+Older worktrees without a record keep working; their next `Up` writes one.
+
+To keep the worktree, `docker rm -fv` the container if it still exists,
+then empty the data directory the error names: delete everything inside
+it and keep the directory itself. All data in that directory is lost.
+Delete the sibling image record too. On Linux the container's files and
+a root-owned parent may require root for these steps. Resume the same
+worktree the same way it was created (the WorktreeCreate hook, or
+`bough create` with the same worktree name). An empty or missing data
+directory makes a stale record irrelevant when bough can read the directory;
+if engine permissions prevent that check, deleting the record clears it.
+`bough remove --name <name>` discards the whole worktree and removes the
+record with the data directory. Compose-managed data is unchanged. A tag
 rebuilt in place keeps its name, so it is not compared.
 
 ### Wire it into `claude --worktree`

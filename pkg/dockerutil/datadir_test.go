@@ -4,6 +4,10 @@ package dockerutil
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,8 +67,35 @@ func TestRemoveDatadir_RemovesAHostOwnedTree(t *testing.T) {
 }
 
 func TestRemoveDatadir_MissingDirIsNotAnError(t *testing.T) {
-	if err := RemoveDatadir(context.Background(), filepath.Join(t.TempDir(), "never-created")); err != nil {
-		t.Fatalf("RemoveDatadir: %v", err)
+	for _, dir := range []string{"", filepath.Join(t.TempDir(), "never-created")} {
+		if err := RemoveDatadir(context.Background(), dir); err != nil {
+			t.Fatalf("RemoveDatadir(%q): %v", dir, err)
+		}
+	}
+}
+
+func TestRemoveDatadir_RemovesImageRecord(t *testing.T) {
+	for _, exists := range []bool{true, false} {
+		t.Run(fmt.Sprintf("datadir exists=%v", exists), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "redis-data")
+			if exists {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(dir+".image", []byte("redis:7-alpine\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := RemoveDatadir(context.Background(), dir+string(filepath.Separator)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(dir + ".image"); !os.IsNotExist(err) {
+				t.Fatalf("image record remains: %v", err)
+			}
+			if err := RemoveDatadir(context.Background(), dir); err != nil {
+				t.Fatalf("second RemoveDatadir: %v", err)
+			}
+		})
 	}
 }
 
@@ -133,5 +164,40 @@ func TestRemoveDatadir_ReportsBothErrorsWhenTheRootContainerFails(t *testing.T) 
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
+	}
+}
+
+func TestRunInDatadirParent_FailureNamesOperation(t *testing.T) {
+	for _, operation := range []string{"cleanup", "writing the image record"} {
+		t.Run(operation, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:helper"})
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(map[string]any{"Id": "helper"})
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/helper/start"):
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/helper/wait"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"StatusCode": 17})
+				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/containers/helper"):
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			defer srv.Close()
+			t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(srv.URL, "http://"))
+			t.Setenv("DOCKER_API_VERSION", "1.47")
+			t.Setenv("DOCKER_TLS_VERIFY", "")
+			t.Setenv("DOCKER_CERT_PATH", "")
+			t.Setenv("DOCKER_CONTEXT", "")
+			err := runInDatadirParent(context.Background(), filepath.Join(t.TempDir(), "data"), []string{"false"}, operation)
+			if err == nil || !strings.Contains(err.Error(), operation+" exited 17") || strings.Contains(err.Error(), "rm -rf exited") {
+				t.Fatalf("helper failure = %v", err)
+			}
+		})
 	}
 }

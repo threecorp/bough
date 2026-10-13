@@ -34,7 +34,7 @@ func newEngineDatadir(t *testing.T) (root, dir string) {
 		Image: testImage,
 		User:  "0:0",
 		Cmd: []string{"sh", "-c", "mkdir -p /w/.local/mysql-data/a/b && echo x > /w/.local/mysql-data/a/b/f && " +
-			"touch /w/.local/mysql-data/.hidden && chown -R 999:999 /w/.local/mysql-data && chmod -R 0700 /w/.local/mysql-data/a"},
+			"touch /w/.local/mysql-data/.hidden && printf 'mysql:8.4\\n' > /w/.local/mysql-data.image && chown -R 999:999 /w/.local/mysql-data && chmod -R 0700 /w/.local/mysql-data/a"},
 		Labels: testLabels,
 	}, &container.HostConfig{Binds: []string{root + ":/w"}}, nil, nil, "")
 	if err != nil {
@@ -43,7 +43,7 @@ func newEngineDatadir(t *testing.T) (root, dir string) {
 	t.Cleanup(func() {
 		_ = cli.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
 	})
-	if err := runToExit(ctx, cli, resp.ID); err != nil {
+	if err := runToExit(ctx, cli, resp.ID, "preparing test data"); err != nil {
 		t.Fatalf("writer: %v", err)
 	}
 	return root, filepath.Join(root, ".local", "mysql-data")
@@ -56,8 +56,10 @@ func TestRemoveDatadir_RemovesAContainerOwnedTree(t *testing.T) {
 	if err := RemoveDatadir(context.Background(), dir); err != nil {
 		t.Fatalf("RemoveDatadir: %v", err)
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("datadir still present: %v", err)
+	for _, path := range []string{dir, dir + ".image"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("cleanup left %s: %v", path, err)
+		}
 	}
 	// What the host does next in bough remove: rm -rf the worktree.
 	if err := os.RemoveAll(root); err != nil {
@@ -71,7 +73,48 @@ func TestRemoveAsRoot_DeletesTheDir(t *testing.T) {
 	if err := removeAsRoot(context.Background(), dir); err != nil {
 		t.Fatalf("removeAsRoot: %v", err)
 	}
-	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
-		t.Fatalf("datadir still present: %v", err)
+	for _, path := range []string{dir, dir + ".image"} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("root cleanup left %s: %v", path, err)
+		}
+	}
+}
+
+func TestRecordDatadirImage_ContainerOwnedParent(t *testing.T) {
+	_, dir := newEngineDatadir(t)
+	cli := newTestClient(t)
+	defer func() { _ = cli.Close() }()
+	img, err := cli.ImageInspect(context.Background(), testImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordDatadirImage(context.Background(), cli, "bough-record-test-absent", dir, testImage); err != nil {
+		t.Fatalf("record in container-owned parent: %v", err)
+	}
+	data, err := os.ReadFile(dir + ".image")
+	if err != nil || string(data) != testImage+"\n"+img.ID+"\n" {
+		t.Fatalf("record = %q, err=%v", data, err)
+	}
+	if err := RemoveDatadir(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir + ".image"); !os.IsNotExist(err) {
+		t.Fatalf("image record left behind: %v", err)
+	}
+}
+
+func TestRemoveAsRoot_SupportsSymlinkedParent(t *testing.T) {
+	root, dir := newEngineDatadir(t)
+	parentLink := filepath.Join(root, "linked-local")
+	if err := os.Symlink(filepath.Dir(dir), parentLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeAsRoot(context.Background(), filepath.Join(parentLink, filepath.Base(dir))); err != nil {
+		t.Fatalf("cleanup through a symlinked parent: %v", err)
+	}
+	for _, path := range []string{dir, dir + ".image"} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("cleanup left %s: %v", path, err)
+		}
 	}
 }
