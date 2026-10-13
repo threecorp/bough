@@ -3,9 +3,17 @@
 package mysql
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
+	"github.com/ikeikeikeike/bough/pkg/dockerutil/dockertest"
+	"github.com/ikeikeikeike/bough/plugins/engine/api"
 )
 
 // TestBuildDockerEnv_ReservedKeysAreNotDuplicated is the regression
@@ -78,5 +86,32 @@ func TestDockerImageTable(t *testing.T) {
 		case !c.wantErr && got != c.want:
 			t.Errorf("%s: Resolve = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestDockerUp_ImageMismatchRemedy(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
+			name := dockerContainerName(42001)
+			datadir := filepath.Join(t.TempDir(), "engine data")
+			dockertest.StartDaemon(t, name, "old:1", running)
+			err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
+				Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
+				Datadir: datadir,
+				Extras:  map[string]string{"docker.image": "wanted:2"},
+			})
+			if err == nil {
+				t.Fatal("Up returned nil for an image mismatch")
+			}
+			var mismatch *dockerutil.ImageMismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("Up error lost ImageMismatchError: %v", err)
+			}
+			for _, want := range []string{"docker rm -f " + name, "empty the data directory " + fmt.Sprintf("%q", datadir), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "keeping the worktree", "WorktreeCreate hook", "`bough create` with the same worktree name", "bough remove", "discard the whole worktree"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("remedy missing %q: %v", want, err)
+				}
+			}
+		})
 	}
 }

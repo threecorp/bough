@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The refusal to reuse a container built from another image no longer
+  suggests `docker rm -f` alone.** That left the old data directory in
+  place, so the next create started the new image on it (Elasticsearch 9
+  then fails on 7.x data). The error now names the datadir's absolute
+  path: remove the container, then empty that directory (delete everything
+  inside it and keep the directory itself). All data in that directory is
+  lost. On Linux its files belong to the container's user, so empty it as
+  root. Resume the same worktree the same way it was created (the
+  WorktreeCreate hook, or `bough create` with the same worktree name);
+  `bough remove` still discards the whole worktree.
+
 ## v0.29.1
 
 ### Fixed

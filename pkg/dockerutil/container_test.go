@@ -3,8 +3,14 @@
 package dockerutil
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/ikeikeikeike/bough/pkg/dockerutil/dockertest"
 )
 
 // TestImageSwapped is the guard for the post-v0.27.0 review finding:
@@ -77,5 +83,58 @@ func TestIsPortConflictError_RecognizesBothDaemonErrorShapes(t *testing.T) {
 				t.Errorf("isPortConflictError(%v) = %v, want %v", c.err, got, c.want)
 			}
 		})
+	}
+}
+
+func TestUpOrReuse_ImageMismatch(t *testing.T) {
+	// Shell TLS settings must not reach the plain HTTP fake daemon.
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", filepath.Join(t.TempDir(), "missing-certs"))
+	t.Setenv("DOCKER_CONTEXT", "unrelated-context")
+	for _, running := range []bool{true, false} {
+		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
+			name := "bough-mysql-42001"
+			dockertest.StartDaemon(t, name, "mysql:8.4", running)
+			cli, err := NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cli.Close() })
+			skip, err := UpOrReuse(context.Background(), cli, name, "mysql:9")
+			var mismatch *ImageMismatchError
+			if !errors.As(fmt.Errorf("reuse: %w", err), &mismatch) {
+				t.Fatalf("UpOrReuse error = %v, want ImageMismatchError", err)
+			}
+			if skip {
+				t.Fatal("image mismatch reused or removed the container")
+			}
+			if mismatch.ContainerName != name || mismatch.HaveImage != "mysql:8.4" || mismatch.WantImage != "mysql:9" {
+				t.Fatalf("mismatch = %+v", mismatch)
+			}
+			want := "container bough-mysql-42001 was created from mysql:8.4, not the mysql:9 this config asks for; bough does not start another image on the data directory the first one wrote"
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestImageMismatchError_WithDatadir(t *testing.T) {
+	mismatch := &ImageMismatchError{ContainerName: "bough-elasticsearch-42001", HaveImage: "es:7", WantImage: "es:9"}
+	for _, datadir := range []string{filepath.Join(t.TempDir(), "es data"), "relative-es-data"} {
+		err := mismatch.WithDatadir(datadir)
+		var got *ImageMismatchError
+		if !errors.As(err, &got) || got != mismatch {
+			t.Fatalf("WithDatadir lost the original error: %v", err)
+		}
+		absolute, absErr := filepath.Abs(datadir)
+		if absErr != nil {
+			t.Fatal(absErr)
+		}
+		for _, want := range []string{mismatch.Error(), "first run `docker rm -f " + mismatch.ContainerName + "`, then empty the data directory " + fmt.Sprintf("%q", absolute), "all data in that directory is lost", "on Linux its files belong to the container's user, so empty it as root", "keep the directory itself", "resume the same worktree the same way it was created", "WorktreeCreate hook", "`bough create` with the same worktree name", "`bough remove` to discard the whole worktree"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("WithDatadir missing %q: %v", want, err)
+			}
+		}
 	}
 }
