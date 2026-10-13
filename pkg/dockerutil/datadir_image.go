@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/containerd/errdefs"
@@ -21,8 +22,9 @@ func datadirImagePath(dir string) string {
 	return filepath.Clean(dir) + ".image"
 }
 
-// CheckDatadirImage consults the record unless the named container binds dir.
-// A matching bind leaves the image check to UpOrReuse and records a legacy writer.
+// CheckDatadirImage consults the record unless the named container binds dir
+// writable from an absolute host path in HostConfig.Binds. That bind leaves
+// the image check to UpOrReuse and records a legacy writer.
 func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantImage string) error {
 	empty, err := datadirEmpty(dir)
 	if err != nil || empty {
@@ -32,20 +34,26 @@ func CheckDatadirImage(ctx context.Context, cli *client.Client, name, dir, wantI
 	if err != nil {
 		return err
 	}
-	if id != "" {
-		info, err := cli.ContainerInspect(ctx, id)
-		if err != nil && !errdefs.IsNotFound(err) {
-			return fmt.Errorf("inspect container %s: %w", name, err)
-		}
-		if err == nil && info.HostConfig != nil {
-			for _, bind := range info.HostConfig.Binds {
-				host, _, _ := strings.Cut(bind, ":")
-				if samePath(host, dir) {
-					return recordLegacyWriter(ctx, cli, info, dir, wantImage)
-				}
+	if id == "" {
+		return checkDatadirImageRecord(ctx, cli, dir, wantImage)
+	}
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect container %s: %w", name, err)
+	}
+	if err == nil && info.HostConfig != nil {
+		for _, bind := range info.HostConfig.Binds {
+			host, rest, _ := strings.Cut(bind, ":")
+			_, options, _ := strings.Cut(rest, ":")
+			if filepath.IsAbs(host) && !slices.Contains(strings.Split(options, ","), "ro") && samePath(host, dir) {
+				return recordLegacyWriter(ctx, cli, info, dir, wantImage)
 			}
 		}
 	}
+	return checkDatadirImageRecord(ctx, cli, dir, wantImage)
+}
+
+func checkDatadirImageRecord(ctx context.Context, cli *client.Client, dir, wantImage string) error {
 	data, err := os.ReadFile(datadirImagePath(dir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return &ImageMismatchError{WantImage: wantImage}

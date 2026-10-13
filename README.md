@@ -190,8 +190,9 @@ an Elasticsearch 7 data directory does not open under 9, and the same
 holds across PostgreSQL majors. Before creating a Docker container,
 the four native plugins record the image ref and immutable image ID in
 `<datadir>.image` beside the data directory, never inside it; reuse
-records the running container's image ID. Only a named container whose bind
-source points to this datadir leaves the image check to `UpOrReuse`; otherwise
+records the running container's image ID. Only a named container with a
+writable bind whose absolute source path points to this datadir leaves
+the image check to `UpOrReuse`; otherwise
 the record is consulted for old data: different refs are
 accepted only when the wanted ref resolves to the recorded image ID.
 A worktree from before v0.29.4 has no record: while its container binds this
@@ -200,9 +201,10 @@ record nor a container binding this datadir, the writer is unknown and `Up`
 refuses; the error gives the one-line `printf` that records the wanted image if it wrote the
 data, or the steps below to start over.
 
-To keep the worktree, `docker rm -fv` the container if it still exists,
-then empty the data directory the error names: delete everything inside
-it and keep the directory itself. All data in that directory is lost.
+To keep the worktree, `docker rm -fv` only the container named by the error,
+if any; a record mismatch names no container. Then empty the data directory
+the error names: delete everything inside it and keep the directory itself.
+All data in that directory is lost.
 Then record the wanted image with the `printf` the error prints, since
 bough cannot list an engine-owned `0700` directory to see it is empty.
 On Linux the container's files and a root-owned parent may require root

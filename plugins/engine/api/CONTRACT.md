@@ -41,8 +41,9 @@ and the suite will treat the clause as not-applicable rather than failed.
    The four native Docker plugins record the image ref and
    immutable image ID in `<datadir>.image` before container creation, and
    on reuse record the running container's image ID. `CheckDatadirImage` leaves
-   the image check to `UpOrReuse` only for a named container whose bind source
-   points to this datadir; otherwise it consults the record for old data.
+   the image check to `UpOrReuse` only for a named container whose writable
+   absolute bind source points to this datadir; otherwise it consults the
+   record for old data.
    A different image is refused with both refs named; different refs are
    accepted only when the wanted ref resolves to the recorded image ID.
    Data with neither a record nor a container binding this datadir has an
@@ -51,7 +52,8 @@ and the suite will treat the clause as not-applicable rather than failed.
    A missing or readable empty datadir makes a stale record irrelevant.
    The error names the datadir and record
    (`dockerutil.ImageMismatchError.WithDatadir`). To keep the worktree,
-   run `docker rm -fv <container>` only if the container exists, then empty
+   run `docker rm -fv <container>` only for the container named by the error,
+   if any; a record mismatch names no container. Then empty
    the datadir: delete everything inside it and keep the directory itself.
    All data in that directory is lost. Then record the wanted ref in the
    record (the error prints the `printf`), since engine permissions can

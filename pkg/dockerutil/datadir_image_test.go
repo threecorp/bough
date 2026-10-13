@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -431,5 +432,60 @@ func TestCheckDatadirImage_ContainerBinds(t *testing.T) {
 				t.Errorf("container inspect calls = %d, want 1", calls)
 			}
 		})
+	}
+}
+
+func TestCheckDatadirImage_NamedVolumeIsNotWriter(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir, err := filepath.Abs("redis-data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+		t.Run(fmt.Sprintf("record=%v", stamp != ""), func(t *testing.T) {
+			checkNonWriterBind(t, dir, "redis-data:/data", stamp)
+		})
+	}
+}
+
+func TestCheckDatadirImage_ReadOnlyBindIsNotWriter(t *testing.T) {
+	for _, mode := range []string{"ro", "ro,z", "z,ro", "rprivate,ro"} {
+		for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+			t.Run(fmt.Sprintf("mode=%s/record=%v", mode, stamp != ""), func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "redis-data")
+				checkNonWriterBind(t, dir, dir+":/data:"+mode, stamp)
+			})
+		}
+	}
+}
+
+func checkNonWriterBind(t *testing.T, dir, bind, stamp string) {
+	t.Helper()
+	if err := EnsureDatadir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data"), []byte("old data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if stamp != "" {
+		if err := os.WriteFile(dir+".image", []byte(stamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info := &datadirImageTestContainer{binds: []string{bind}}
+	cli := datadirImageTestClient(t, "bough-redis-42001", true, info)
+	err := CheckDatadirImage(context.Background(), cli, "bough-redis-42001", dir, "redis:7-alpine")
+	var mismatch *ImageMismatchError
+	wantHave := strings.Split(stamp, "\n")[0]
+	if !errors.As(err, &mismatch) || mismatch.ContainerName != "" || mismatch.HaveImage != wantHave || mismatch.WantImage != "redis:7-alpine" {
+		t.Errorf("CheckDatadirImage = %v, want record mismatch with HaveImage %q", err, wantHave)
+	}
+	data, readErr := os.ReadFile(dir + ".image")
+	if stamp == "" {
+		if !errors.Is(readErr, os.ErrNotExist) {
+			t.Errorf("non-writer recorded as legacy writer: %q, %v", data, readErr)
+		}
+	} else if readErr != nil || string(data) != stamp {
+		t.Errorf("record = %q, %v, want unchanged %q", data, readErr, stamp)
 	}
 }

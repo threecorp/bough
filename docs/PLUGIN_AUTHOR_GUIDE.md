@@ -139,8 +139,10 @@ container creation; return on failure. Call it again on reuse, where it records
 the running container's image ID. It stores the ref and immutable image ID in
 `<datadir>.image`, beside the datadir to preserve initialization.
 `CheckDatadirImage` leaves the image check to `UpOrReuse` only for a named
-container whose bind source points to this datadir; otherwise it consults the
-record. Different refs are accepted only when the wanted ref
+container with a writable absolute bind source in `HostConfig.Binds` pointing
+to this datadir; otherwise it consults the record. A container using only
+`HostConfig.Mounts` also falls back to the record.
+Different refs are accepted only when the wanted ref
 resolves to the recorded image ID. Data with neither a record nor a container
 binding this datadir is refused as an unknown writer; readable empty or missing
 datadirs ignore stale records. Wrap
