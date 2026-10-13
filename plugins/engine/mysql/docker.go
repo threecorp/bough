@@ -15,10 +15,10 @@
 //
 // Stable-operation choices:
 //
-//   - Resume idempotency: a running container with the same name is
-//     reused as-is (dockerutil.UpOrReuse); a stopped one (mysqld
-//     crashed, or a prior Up partially failed) is removed so create
-//     doesn't collide.
+//   - Resume idempotency: a running container of the same image is reused
+//     and a stopped one is removed so create doesn't collide
+//     (dockerutil.UpOrReuse); another image is refused, and the datadir
+//     image record keeps refusing it after the container is gone.
 //   - IfNotPresent pull: ImageInspect short-circuits the pull when the
 //     image is already in the local cache, so warm cold-starts skip the
 //     network round-trip.
@@ -150,8 +150,15 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 
 	name := dockerContainerName(port)
 
-	// Idempotency: claude --resume re-fires WorktreeCreate, so an
-	// already-running container is a successful no-op.
+	if err := dockerutil.CheckDatadirImage(ctx, cli, name, req.Datadir, imageRef); err != nil {
+		var mismatch *dockerutil.ImageMismatchError
+		if errors.As(err, &mismatch) {
+			err = mismatch.WithDatadir(req.Datadir)
+		}
+		return fmt.Errorf("mysql docker: data image check: %w", err)
+	}
+
+	// Repeated WorktreeCreate reuses a matching container and records its image.
 	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
@@ -161,7 +168,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("mysql docker: reuse check %s: %w", name, err)
 	}
 	if skip {
-		return nil
+		return dockerutil.RecordDatadirImage(ctx, cli, name, req.Datadir, imageRef)
 	}
 
 	// Pre-flight: actionable error instead of the daemon's generic
@@ -202,6 +209,10 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 		Binds:         []string{req.Datadir + ":" + dockerDataDir},
 		PortBindings:  portBindings,
 		RestartPolicy: container.RestartPolicy{Name: "no"},
+	}
+
+	if err := dockerutil.RecordDatadirImage(ctx, cli, name, req.Datadir, imageRef); err != nil {
+		return err
 	}
 
 	resp, err := cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)

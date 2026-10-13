@@ -128,6 +128,21 @@ Linux the suite's own cleanup may run `docker run … chown` to reclaim a
 datadir the container's user owns. Your `Cleanup` meets the same files
 there; `dockerutil.RemoveDatadir` removes them as the bundled engines do.
 
+For a Docker plugin that owns a datadir, call `dockerutil.CheckDatadirImage`
+before `UpOrReuse`. Call `dockerutil.RecordDatadirImage` with the Docker client
+and container name after the image is available and the datadir exists, before
+container creation; return on failure. Call it again on reuse, where it records
+the running container's image ID. It stores the ref and immutable image ID in
+`<datadir>.image`, beside the datadir to preserve initialization.
+Existing containers are validated by `UpOrReuse`; only when no container exists
+is the record consulted. Different refs are accepted only when the wanted ref
+resolves to the recorded image ID. Missing records allow older
+worktrees; readable empty or missing datadirs ignore stale records. Wrap
+`ImageMismatchError` with `WithDatadir` for the recovery steps.
+`RemoveDatadir` deletes both the datadir and its record, including under
+a root-owned parent. The bundled compose plugin owns no datadir and does
+not use these helpers.
+
 ## Running in CI
 
 Use `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (linux/arm64).

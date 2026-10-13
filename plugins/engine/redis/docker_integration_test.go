@@ -5,6 +5,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -22,6 +23,15 @@ import (
 // TestDockerUp_ImageMismatchRecovery follows the remedy with real Redis data.
 // Only containers created by this test are removed, by ID through t.Cleanup.
 func TestDockerUp_ImageMismatchRecovery(t *testing.T) {
+	for _, gone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("container gone=%v", gone), func(t *testing.T) {
+			testDockerImageMismatchRecovery(t, gone)
+		})
+	}
+}
+
+func testDockerImageMismatchRecovery(t *testing.T, gone bool) {
+	t.Helper()
 	cli, err := dockerutil.NewClient()
 	if err != nil {
 		t.Fatalf("docker client: %v", err)
@@ -76,26 +86,49 @@ func TestDockerUp_ImageMismatchRecovery(t *testing.T) {
 		t.Fatalf("old Redis readiness: ready=%v, err=%v", ready, err)
 	}
 
+	oldImage, err := cli.ImageInspect(ctx, "redis:7-alpine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp, err := os.ReadFile(datadir + ".image")
+	if err != nil || string(stamp) != "redis:7-alpine\n"+oldImage.ID+"\n" {
+		t.Fatalf("first Up did not record its image: %q, %v", stamp, err)
+	}
+	if gone {
+		if err := cli.ContainerRemove(ctx, oldID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	req := &api.UpReq{Ports: ports, Datadir: datadir, Extras: map[string]string{"version": "8"}}
 	err = backend.Up(ctx, req)
 	var mismatch *dockerutil.ImageMismatchError
 	if !errors.As(err, &mismatch) {
 		t.Fatalf("Up error = %v, want ImageMismatchError", err)
 	}
-	if mismatch.ContainerName != name || mismatch.HaveImage != "redis:7-alpine" || mismatch.WantImage != "redis:8-alpine" {
+	wantName := name
+	if gone {
+		wantName = ""
+	}
+	if mismatch.ContainerName != wantName || mismatch.HaveImage != "redis:7-alpine" || mismatch.WantImage != "redis:8-alpine" {
 		t.Fatalf("mismatch = %+v", mismatch)
 	}
-	for _, want := range []string{datadir, "empty the data directory", "keep the directory itself", "all data in that directory is lost", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
+	if gone && strings.Contains(err.Error(), "docker rm") {
+		t.Fatalf("remedy removes a nonexistent container: %v", err)
+	}
+	for _, want := range []string{"delete the image record", datadir + ".image", datadir, "empty the data directory", "keep the directory itself", "all data in that directory is lost", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("remedy missing %q: %v", want, err)
 		}
 	}
-	info, err := cli.ContainerInspect(ctx, oldID)
-	if err != nil || info.State == nil || !info.State.Running || info.Config.Image != "redis:7-alpine" {
-		t.Fatalf("mismatch changed the old container: info=%+v, err=%v", info, err)
-	}
-	if err := cli.ContainerRemove(ctx, oldID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
-		t.Fatal(err)
+	if !gone {
+		info, err := cli.ContainerInspect(ctx, oldID)
+		if err != nil || info.State == nil || !info.State.Running || info.Config.Image != "redis:7-alpine" {
+			t.Fatalf("mismatch changed the old container: info=%+v, err=%v", info, err)
+		}
+		if err := cli.ContainerRemove(ctx, oldID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	emptyRedisRecoveryDatadir(t, ctx, cli, datadir)
 	after, err := os.Stat(datadir)
@@ -106,13 +139,24 @@ func TestDockerUp_ImageMismatchRecovery(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("recovery did not empty all data: entries=%v, err=%v", entries, err)
 	}
+	if err := os.Remove(datadir + ".image"); err != nil {
+		t.Fatal(err)
+	}
 	if err := backend.Up(ctx, req); err != nil {
 		t.Fatalf("Up redis:8-alpine after recovery: %v", err)
 	}
 	newID := redisRecoveryContainer(t, ctx, cli, name)
-	info, err = cli.ContainerInspect(ctx, newID)
+	info, err := cli.ContainerInspect(ctx, newID)
 	if err != nil || newID == oldID || info.Config.Image != "redis:8-alpine" || info.State == nil || !info.State.Running {
 		t.Fatalf("recovered container: info=%+v, err=%v", info, err)
+	}
+	newImage, err := cli.ImageInspect(ctx, "redis:8-alpine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp, err = os.ReadFile(datadir + ".image")
+	if err != nil || string(stamp) != "redis:8-alpine\n"+newImage.ID+"\n" {
+		t.Fatalf("recovery did not update image record: %q, %v", stamp, err)
 	}
 	if ready, err := backend.ReadyCheck(ctx, port, 30); err != nil || !ready {
 		t.Fatalf("new Redis readiness: ready=%v, err=%v", ready, err)

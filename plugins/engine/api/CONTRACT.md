@@ -34,16 +34,25 @@ and the suite will treat the clause as not-applicable rather than failed.
    `PluginSpec.Location` before `Up`, so a plugin sees a finished URL.
 3. **`Up` is up-or-reuse**: if a container with the canonical name is
    already running the image `Up` resolved, `Up` returns nil without
-   recreating it. One created from a different image, running or
-   stopped, is refused with both refs named: starting the new image on
-   the data directory the old one wrote is never safe. The error names
-   the bind-mounted datadir too (`dockerutil.ImageMismatchError.WithDatadir`),
-   because removing only the container leaves that data for the new image.
-   To keep the worktree, run `docker rm -fv <container>`, then empty the datadir:
-   delete everything inside it and keep the directory itself. All data in that
-   directory is lost. On Linux its files belong to the container's user, so
-   empty it as root. Resume the same worktree the same way it was created
-   (the WorktreeCreate hook, or `bough create` with the same worktree name).
+   recreating it. The four native Docker plugins record the image ref and
+   immutable image ID in `<datadir>.image` before container creation, and
+   on reuse record the running container's image ID. Existing containers
+   are validated by `UpOrReuse`; only when no container exists is the
+   record consulted for old data.
+   A different image is refused with both refs named; different refs are
+   accepted only when the wanted ref resolves to the recorded image ID.
+   A missing record preserves compatibility with older worktrees. A missing
+   or readable empty datadir makes a stale record irrelevant.
+   The error names the datadir and record
+   (`dockerutil.ImageMismatchError.WithDatadir`). To keep the worktree,
+   run `docker rm -fv <container>` only if the container exists, then empty
+   the datadir: delete everything inside it and keep the directory itself.
+   All data in that directory is lost. Delete the sibling image record too,
+   including when engine permissions prevent checking whether the datadir
+   is empty. On Linux these steps may require root. Resume the same worktree
+   the same way it was created (the WorktreeCreate hook, or `bough create`
+   with the same worktree name). `Cleanup` removes the record with the datadir
+   through `dockerutil.RemoveDatadir`. Compose owns its data and is exempt.
    The suite checks reuse of the unchanged image in the `UpReuse` phase: it
    calls `Up` again while the service is up, requires a nil return, then re-checks
    readiness. It does not compare container identity, so a plugin that

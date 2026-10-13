@@ -138,3 +138,21 @@ func TestImageMismatchError_WithDatadir(t *testing.T) {
 		}
 	}
 }
+
+func TestImageMismatchError_WithDatadirWithoutContainer(t *testing.T) {
+	mismatch := &ImageMismatchError{HaveImage: "redis:7-alpine", WantImage: "redis:8-alpine"}
+	datadir := filepath.Join(t.TempDir(), "redis data")
+	err := mismatch.WithDatadir(datadir)
+	var got *ImageMismatchError
+	if !errors.As(err, &got) || got != mismatch {
+		t.Fatalf("WithDatadir lost the original error: %v", err)
+	}
+	if strings.Contains(err.Error(), "docker rm") || strings.Contains(err.Error(), "container  was") {
+		t.Fatalf("remedy names a nonexistent container: %v", err)
+	}
+	for _, want := range []string{"redis:7-alpine", "redis:8-alpine", "empty the data directory", datadir, "keep the directory itself", "delete the image record", datadir + ".image", "WorktreeCreate hook", "`bough create` with the same worktree name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("remedy missing %q: %v", want, err)
+		}
+	}
+}

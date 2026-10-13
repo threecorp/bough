@@ -31,70 +31,84 @@ func EnsureDatadir(dir string) error {
 	return nil
 }
 
-// RemoveDatadir is the bundled engines' Cleanup. On Linux an engine writes
-// its bind-mounted datadir as its own uid (mysql 999, …), and a datadir the
-// daemon created sits in a root-owned parent; the host user can unlink
-// neither. On that permission error the datadir is deleted from a root
-// container instead. Docker Desktop maps the uid on macOS, where the first
-// RemoveAll already succeeds.
+// RemoveDatadir removes the datadir and sibling image record idempotently.
+// Engine-owned files or a root-owned parent use a root container on Linux.
 func RemoveDatadir(ctx context.Context, dir string) error {
+	if dir == "" {
+		return nil
+	}
+	dir = filepath.Clean(dir)
 	err := os.RemoveAll(dir)
+	if err == nil {
+		err = os.Remove(datadirImagePath(dir))
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+	}
 	if err == nil || !errors.Is(err, fs.ErrPermission) {
 		return err
 	}
 	if rerr := removeAsRoot(ctx, dir); rerr != nil {
 		return fmt.Errorf("%w; deleting it from a root container also failed: %w", err, rerr)
 	}
-	if _, serr := os.Lstat(dir); !errors.Is(serr, fs.ErrNotExist) {
-		return fmt.Errorf("%w; %s is still present after deleting it from a root container", err, dir)
+	for _, path := range []string{dir, datadirImagePath(dir)} {
+		if _, serr := os.Lstat(path); !errors.Is(serr, fs.ErrNotExist) {
+			return fmt.Errorf("%w; %s is still present after deleting it from a root container", err, path)
+		}
 	}
 	return nil
 }
 
-// removeAsRoot deletes dir from a root container that mounts dir's parent,
-// so a root-owned parent does not stop it. It deletes rather than chowns:
-// under rootless Docker the host user is the container's root, not the
-// host uid. A symlink is refused, since the mount would follow it.
+// removeAsRoot deletes the datadir and record through their parent mount.
+// A symlinked datadir is refused before starting a root container.
 func removeAsRoot(ctx context.Context, dir string) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
 	fi, err := os.Lstat(abs)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err == nil && !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory (mode %s); refusing to delete it as root", abs, fi.Mode().Type())
+	}
+	return runInDatadirParent(ctx, abs, []string{"rm", "-rf", "--", "/parent/" + filepath.Base(abs), "/parent/" + filepath.Base(datadirImagePath(abs))}, "cleanup")
+}
+
+// Both Cleanup and image recording need access to a legacy root-owned parent.
+func runInDatadirParent(ctx context.Context, dir string, cmd []string, operation string) error {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
-	if !fi.IsDir() {
-		return fmt.Errorf("%s is not a directory (mode %s); refusing to delete it as root", abs, fi.Mode().Type())
-	}
 	parent := filepath.Dir(abs)
 	if parent == abs {
-		return fmt.Errorf("refusing to delete %s as root", abs)
+		return fmt.Errorf("refusing to mount the parent of %s as root", abs)
 	}
-
 	cli, err := NewClient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 	if err := PullIfMissing(ctx, cli, reclaimImage); err != nil {
-		return fmt.Errorf("pull %s: %w", reclaimImage, err)
+		return fmt.Errorf("%s: pull %s: %w", operation, reclaimImage, err)
 	}
 	resp, err := cli.ContainerCreate(ctx, &container.Config{
 		Image: reclaimImage,
 		User:  "0:0",
-		Cmd:   []string{"rm", "-rf", "--", "/parent/" + filepath.Base(abs)},
+		Cmd:   cmd,
 	}, &container.HostConfig{Binds: []string{parent + ":/parent"}}, nil, nil, "")
 	if err != nil {
-		return fmt.Errorf("create %s: %w", reclaimImage, err)
+		return fmt.Errorf("%s: create %s: %w", operation, reclaimImage, err)
 	}
-	runErr := runToExit(ctx, cli, resp.ID)
+	runErr := runToExit(ctx, cli, resp.ID, operation)
 	// The caller's ctx may already be done; the removal gets its own bound.
 	const removeTimeout = 30 * time.Second
 	rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
 	defer cancel()
 	if err := cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true}); err != nil {
-		return errors.Join(runErr, fmt.Errorf("remove %s container %s: %w", reclaimImage, resp.ID, err))
+		return errors.Join(runErr, fmt.Errorf("%s: remove %s container %s: %w", operation, reclaimImage, resp.ID, err))
 	}
 	return runErr
 }
@@ -103,18 +117,18 @@ func removeAsRoot(ctx context.Context, dir string) error {
 // Waiting after the start for not-running, rather than registering
 // next-exit before it, also returns for a container that already exited,
 // which older Podman releases would otherwise miss.
-func runToExit(ctx context.Context, cli *client.Client, id string) error {
+func runToExit(ctx context.Context, cli *client.Client, id, operation string) error {
 	if err := cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
-		return fmt.Errorf("start %s: %w", reclaimImage, err)
+		return fmt.Errorf("%s: start %s: %w", operation, reclaimImage, err)
 	}
 	waitC, errC := cli.ContainerWait(ctx, id, container.WaitConditionNotRunning)
 	select {
 	case w := <-waitC:
 		if w.StatusCode != 0 {
-			return fmt.Errorf("%s rm -rf exited %d", reclaimImage, w.StatusCode)
+			return fmt.Errorf("%s %s exited %d", reclaimImage, operation, w.StatusCode)
 		}
 		return nil
 	case err := <-errC:
-		return fmt.Errorf("wait %s: %w", reclaimImage, err)
+		return fmt.Errorf("%s: wait %s: %w", operation, reclaimImage, err)
 	}
 }
