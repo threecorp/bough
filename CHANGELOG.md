@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.29.6
 
 ### Fixed
 
