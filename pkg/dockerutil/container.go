@@ -135,16 +135,19 @@ func (e *ImageMismatchError) WithDatadir(datadir string) error {
 	if e.ContainerName != "" {
 		removeContainer = fmt.Sprintf("first run `docker rm -fv %s`, then ", e.ContainerName)
 	}
+	// Recording the wanted image over an older image's data would start the
+	// new image on it, so with an unknown writer that option comes last.
 	keepData := ""
 	if e.HaveImage == "" {
-		keepData = fmt.Sprintf("if %s wrote this data, record that with %s and resume the same worktree; otherwise ", e.WantImage, record)
+		keepData = fmt.Sprintf(". Only if you know %s wrote this data, keep it instead: record that with %s and resume the same worktree", e.WantImage, record)
 	}
-	return fmt.Errorf("%w; %sto start over with an empty data directory while keeping the worktree, "+
+	return fmt.Errorf("%w. To start over with an empty data directory while keeping the worktree, "+
 		"%sempty the data directory %q (delete everything inside it, keep the directory itself; all data in that directory is lost; "+
 		"on Linux its files belong to the container's user, so empty it as root), "+
 		"record the wanted image with %s, "+
-		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name); or run `bough remove` to discard the whole worktree and create it again",
-		e, keepData, removeContainer, absolute, record)
+		"and resume the same worktree the same way it was created (the WorktreeCreate hook, or `bough create` with the same worktree name). "+
+		"Or run `bough remove` to discard the whole worktree and create it again%s",
+		e, removeContainer, absolute, record, keepData)
 }
 
 // shellQuote makes a remedy command safe to paste: only ' is special inside '…'.

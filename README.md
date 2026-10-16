@@ -198,8 +198,10 @@ accepted only when the wanted ref resolves to the recorded image ID.
 A worktree from before v0.29.4 has no record: while its container binds this
 datadir, the next `Up` records that container's image. With data but neither a
 record nor a container binding this datadir, the writer is unknown and `Up`
-refuses; the error gives the one-line `printf` that records the wanted image if it wrote the
-data, or the steps below to start over.
+refuses; the error gives the steps below to start over first, and last the
+one-line `printf` that keeps the data, for use only when the wanted image is
+known to have written it: recording it over an older image's data starts the
+new image on that data.
 
 To keep the worktree, `docker rm -fv` only the container named by the error,
 if any; a record mismatch names no container. Then empty the data directory

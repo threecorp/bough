@@ -48,7 +48,8 @@ and the suite will treat the clause as not-applicable rather than failed.
    accepted only when the wanted ref resolves to the recorded image ID.
    Data with neither a record nor a container binding this datadir has an
    unknown writer and is refused (`HaveImage` empty); the remedy offers
-   recording the wanted ref.
+   starting over first and recording the wanted ref last, only for data the
+   wanted image is known to have written.
    A missing or readable empty datadir makes a stale record irrelevant.
    The error names the datadir and record
    (`dockerutil.ImageMismatchError.WithDatadir`). To keep the worktree,

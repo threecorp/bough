@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **The unknown-writer remedy no longer offers recording the wanted image first.**
+  Following it on an older image's data (an Elasticsearch 7 datadir under a
+  9.x config) started the new image on that data; starting over now comes
+  first, and recording is offered last, only for data the wanted image wrote.
+
 - **A same-named container binding another datadir no longer bypasses this datadir's image record or records itself as its legacy writer.**
   Only a writable bind of the datadir from an absolute host path counts;
   a named or anonymous volume, or a read-only bind, does not.

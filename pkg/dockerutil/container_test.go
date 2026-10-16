@@ -176,13 +176,19 @@ func TestImageMismatchError_WithDatadirUnknownWriter(t *testing.T) {
 		t.Fatalf("unknown writer remedy names a container or an empty image: %v", err)
 	}
 	for _, want := range []string{
-		"no image record and no container", "if redis:8-alpine wrote this data",
+		"no image record and no container", "Only if you know redis:8-alpine wrote this data",
 		"in a root shell if the data directory's parent is root-owned",
 		"printf '%s\\n' 'redis:8-alpine' > '" + datadir + ".image'",
-		"otherwise to start over", "empty the data directory " + fmt.Sprintf("%q", datadir),
+		"To start over", "empty the data directory " + fmt.Sprintf("%q", datadir),
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("remedy missing %q: %v", want, err)
 		}
+	}
+	// Recording the wanted image over an older image's data starts the new
+	// image on it, so the safe remedy comes first and recording is last.
+	msg := err.Error()
+	if strings.Index(msg, "To start over") > strings.Index(msg, "Only if you know") {
+		t.Errorf("remedy offers recording the wanted image before starting over: %v", err)
 	}
 }
