@@ -10,7 +10,7 @@ import (
 )
 
 // StartDaemon serves list and inspect requests; an empty name means no container.
-func StartDaemon(t *testing.T, name, image string, running bool) {
+func StartDaemon(t *testing.T, name, image string, running bool, labels map[string]string, binds ...string) {
 	t.Helper()
 	startDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -22,9 +22,10 @@ func StartDaemon(t *testing.T, name, image string, running bool) {
 			_ = json.NewEncoder(w).Encode(list)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/old/json"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"Image":  "sha256:old",
-				"Config": map[string]any{"Image": image},
-				"State":  map[string]any{"Running": running},
+				"Image":      "sha256:old",
+				"Config":     map[string]any{"Image": image, "Labels": labels},
+				"State":      map[string]any{"Running": running},
+				"HostConfig": map[string]any{"Binds": binds},
 			})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/"):
 			if strings.HasSuffix(r.URL.Path, "/images/"+image+"/json") && image != "" {

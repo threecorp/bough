@@ -97,11 +97,13 @@ func TestDockerUp_ImageMismatchRemedy(t *testing.T) {
 		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
 			name := dockerContainerName(42001)
 			datadir := filepath.Join(t.TempDir(), "engine data")
-			dockertest.StartDaemon(t, name, "old:1", running)
+			worktree := filepath.Join(filepath.Dir(datadir), "repo")
+			dockertest.StartDaemon(t, name, "old:1", running, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 			err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
-				Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
-				Datadir: datadir,
-				Extras:  map[string]string{"docker.image": "wanted:2"},
+				Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
+				Datadir:      datadir,
+				WorktreeRoot: worktree,
+				Extras:       map[string]string{"docker.image": "wanted:2"},
 			})
 			if err == nil {
 				t.Fatal("Up returned nil for an image mismatch")
@@ -131,11 +133,13 @@ func TestDockerUp_ReuseRecordsImage(t *testing.T) {
 	if err := os.WriteFile(datadir+".image", []byte("stale:1\nsha256:stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dockertest.StartDaemon(t, name, "old:1", true)
+	worktree := filepath.Join(filepath.Dir(datadir), "repo")
+	dockertest.StartDaemon(t, name, "old:1", true, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
-		Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
-		Datadir: datadir,
-		Extras:  map[string]string{"docker.image": "old:1"},
+		Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
+		Datadir:      datadir,
+		WorktreeRoot: worktree,
+		Extras:       map[string]string{"docker.image": "old:1"},
 	})
 	if err != nil {
 		t.Fatalf("reuse: %v", err)
@@ -157,7 +161,7 @@ func TestDockerUp_DatadirImageMismatchWithoutContainer(t *testing.T) {
 	if err := os.WriteFile(datadir+".image", []byte("old:1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dockertest.StartDaemon(t, "", "", false)
+	dockertest.StartDaemon(t, "", "", false, nil)
 	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
 		Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
 		Datadir: datadir,
@@ -210,5 +214,33 @@ func TestDockerUp_RecordsBeforeCreate(t *testing.T) {
 				t.Fatalf("create: err=%v, creates=%d", err, creates.Load())
 			}
 		})
+	}
+}
+
+// TestReadyCheckEnv: an extras root_password becomes MYSQL_ROOT_PASSWORD,
+// and the in-container SELECT 1 logged in as root without it, so create
+// waited out the whole ready timeout on a server that was up.
+func TestReadyCheckEnv(t *testing.T) {
+	env := buildDockerEnv("bough", map[string]string{"root_password": "s3cret"})
+	if got := readyCheckEnv(env); !slices.Equal(got, []string{"MYSQL_PWD=s3cret"}) {
+		t.Errorf("readyCheckEnv(%v) = %v, want [MYSQL_PWD=s3cret]", env, got)
+	}
+	if got := readyCheckEnv(buildDockerEnv("bough", nil)); got != nil {
+		t.Errorf("no root password: readyCheckEnv = %v, want nil", got)
+	}
+}
+
+// TestCheckRootLogin: with a random or one-time root password nobody
+// can give the ready check root's password, so create used to time out;
+// Up now says why before starting anything.
+func TestCheckRootLogin(t *testing.T) {
+	for _, key := range []string{"random_root_password", "onetime_password", "root_password_file", "RANDOM_ROOT_PASSWORD"} {
+		err := checkRootLogin(map[string]string{key: "yes"})
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("extras %s: checkRootLogin = %v, want an error naming the key", key, err)
+		}
+	}
+	if err := checkRootLogin(map[string]string{"root_password": "s3cret", "user": "app"}); err != nil {
+		t.Errorf("a known root password: checkRootLogin = %v, want nil", err)
 	}
 }

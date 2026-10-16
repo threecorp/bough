@@ -58,12 +58,15 @@ package compose
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ikeikeikeike/bough/pkg/dockerutil"
 	api "github.com/ikeikeikeike/bough/plugins/engine/api"
 
 	"gopkg.in/yaml.v3"
@@ -117,12 +120,17 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 }
 
 // composeProjectName derives a deterministic, worktree-scoped
-// `docker compose -p` project name from the worktree name and the
-// compose file's declared path. Determinism matters twice over: Up
+// `docker compose -p` project name from the worktree name, the compose
+// file's declared path and a hash of checkout, the worktree's directory:
+// two clones of one monorepo with a same-named worktree would otherwise
+// share a project, and one clone's `compose up` would recreate the other
+// clone's service. A hash prefix can still collide, so Up and Down also
+// check who owns the project's containers (checkOwner). Determinism
+// matters twice over: Up
 // and Down must independently derive the identical name (Down has no
 // channel to receive whatever Up computed, besides the sidecar state
 // file which stores it verbatim), and two different worktrees
-// referencing the textually-identical compose file must NEVER derive
+// referencing the textually-identical compose file should not derive
 // the same name — compose's own up-or-reuse would otherwise silently
 // hand one worktree a container actually owned by another.
 //
@@ -130,8 +138,13 @@ func (p *Provider) PortRangeDefault(_ context.Context) (map[string]api.PortRange
 // always starts with the literal "bough-" prefix, which is already a
 // valid lowercase-alnum start regardless of how degenerate the inputs
 // are.
-func composeProjectName(worktreeName, file string) string {
-	return "bough-" + sanitizeComposeToken(worktreeName) + "-" + sanitizeComposeToken(file)
+// projectHashLen is how many hex digits of the checkout hash the name keeps.
+const projectHashLen = 16
+
+func composeProjectName(worktreeName, file, checkout string) string {
+	sum := sha256.Sum256([]byte(checkout))
+	return "bough-" + sanitizeComposeToken(worktreeName) + "-" + sanitizeComposeToken(file) +
+		"-" + hex.EncodeToString(sum[:])[:projectHashLen]
 }
 
 // sanitizeComposeToken lowercases s and collapses every run of
@@ -159,9 +172,10 @@ func sanitizeComposeToken(s string) string {
 // facts needed to isolate one worktree's use of one compose service
 // without editing the operator's own compose file.
 type overrideSpec struct {
-	Service    string
-	TargetPort int
-	HostPort   int
+	Service      string
+	TargetPort   int
+	HostPort     int
+	WorktreeRoot string
 }
 
 // composeOverrideDoc mirrors just enough of the compose file schema
@@ -192,21 +206,37 @@ type composeOverrideService struct {
 // instead of appending a second, colliding short-form mapping.
 type composePortSpec struct {
 	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip"`
 	Published string `yaml:"published"`
 	Protocol  string `yaml:"protocol"`
 }
 
 // com.bough.* label keys this plugin writes into the generated
-// override. Write-only today (nothing reads them back), mirroring
+// override. Write-only (nothing reads them back), mirroring
 // pkg/dockerutil/labels.go's own stated rationale: schema stability
-// for a future label-based discovery tool, not a load-bearing
-// dependency of this plugin's own Up/Down.
+// for a future label-based discovery tool. The one label Up and Down
+// do read, dockerutil.LabelWorktreeRoot, comes from that package.
 const (
 	labelManaged        = "com.bough.managed"
 	labelEngine         = "com.bough.engine"
 	labelComposeService = "com.bough.compose-service"
 	labelHostPort       = "com.bough.host-port"
 )
+
+// overrideLabels stamps the worktree root when known, so Up and Down can
+// tell this worktree's container from another checkout's of the same name.
+func overrideLabels(spec overrideSpec) map[string]string {
+	labels := map[string]string{
+		labelManaged:        "true",
+		labelEngine:         "compose",
+		labelComposeService: spec.Service,
+		labelHostPort:       strconv.Itoa(spec.HostPort),
+	}
+	if spec.WorktreeRoot != "" {
+		labels[dockerutil.LabelWorktreeRoot] = spec.WorktreeRoot
+	}
+	return labels
+}
 
 // renderOverride generates the worktree-scoped compose override
 // fragment for spec.Service: a fixed host port (never left to
@@ -218,7 +248,9 @@ const (
 func renderOverride(spec overrideSpec) ([]byte, error) {
 	var portsNode yaml.Node
 	if err := portsNode.Encode([]composePortSpec{
-		{Target: spec.TargetPort, Published: strconv.Itoa(spec.HostPort), Protocol: "tcp"},
+		// Loopback only, like the other engines: without host_ip Docker
+		// publishes on every interface and the dev service reaches the LAN.
+		{Target: spec.TargetPort, HostIP: "127.0.0.1", Published: strconv.Itoa(spec.HostPort), Protocol: "tcp"},
 	}); err != nil {
 		return nil, fmt.Errorf("encode ports node: %w", err)
 	}
@@ -229,12 +261,7 @@ func renderOverride(spec overrideSpec) ([]byte, error) {
 			spec.Service: {
 				ContainerName: fmt.Sprintf("bough-compose-%d", spec.HostPort),
 				Ports:         portsNode,
-				Labels: map[string]string{
-					labelManaged:        "true",
-					labelEngine:         "compose",
-					labelComposeService: spec.Service,
-					labelHostPort:       strconv.Itoa(spec.HostPort),
-				},
+				Labels:        overrideLabels(spec),
 			},
 		},
 	}

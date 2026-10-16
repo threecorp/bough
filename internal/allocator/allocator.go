@@ -46,10 +46,10 @@ var ErrRangeExhausted = errors.New("allocator: all ports in range are taken")
 // On collision, candidates step forward by one modulo rangeSize until
 // an open slot is found or the range is exhausted.
 //
-// `taken` should be the set of ports already held by other worktrees
-// for the same (kind, role) — the registry layer loads it from
-// .bough-ports.json before invoking Allocate. Pass nil for "no ports
-// taken yet".
+// `taken` should be every port the registry already holds, whatever its
+// kind (registry.Taken): every kind starts at the same offset for one
+// worktree name, so kinds with overlapping ranges would otherwise land on
+// the same port. Pass nil for "no ports taken yet".
 func Allocate(name, role string, base, rangeSize int, taken map[int]bool) (int, error) {
 	if rangeSize <= 0 {
 		return 0, fmt.Errorf("allocator: rangeSize must be positive, got %d", rangeSize)

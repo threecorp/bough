@@ -46,6 +46,10 @@ func newCreateCmd() *cobra.Command {
 					return err
 				}
 				name, cwd = in.Name, in.Cwd
+				// The payload comes from a WorktreeCreate hook installed
+				// before `bough hook handle`; like that dispatcher, an
+				// incomplete environment must fail the hook.
+				strict = true
 			}
 			if name == "" {
 				return errors.New("--name is required (or pass --stdin-json with a {name, cwd} payload)")
@@ -61,7 +65,7 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cwd, "cwd", "", "monorepo root (defaults to current working dir; overridden by --stdin-json)")
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")
-	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists)")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists; always on with --stdin-json, the hook payload path)")
 	return cmd
 }
 
@@ -100,12 +104,20 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// wrapper and behave as before.
 	stderr = termio.Wrap(stderr)
 	logf(stderr, "[bough] create %s @ %s", name, monorepoRoot)
+	worktreeRoot, err := worktreePathFor(monorepoRoot, name)
+	if err != nil {
+		return err
+	}
+	release, err := lockWorktreeChecked(monorepoRoot, filepath.Dir(worktreeRoot), name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// One probe, two consumers: whether the root is inside a work tree
 	// decides both the heads-up below and how the container is materialised,
 	// and monorepoRoot cannot change between them.
 	rootInGit, gitDetermined := insideGitWorkTree(monorepoRoot)
 	warnIfRootNotGit(stderr, cfg, monorepoRoot, rootInGit, gitDetermined)
-	worktreeRoot := filepath.Join(worktreesDir(monorepoRoot), name)
 	if err := materializeWorktreeRoot(ctx, stderr, monorepoRoot, worktreeRoot, rootInGit && gitDetermined); err != nil {
 		return err
 	}
@@ -173,10 +185,10 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		skipRepo[e.Repo] = true
 	}
 
-	// 5. post_create hooks. Best-effort: a failing migration here is
-	// reported to stderr but does not unwind the entire create — the
-	// operator usually wants the worktree materialised even when seed
-	// data is missing.
+	// 5. post_create hooks. A failing migration here is reported to
+	// stderr and skips that repo's later commands (its seed), but does
+	// not unwind the entire create — the operator usually wants the
+	// worktree materialised even when seed data is missing.
 	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
 
 	// 5b. Expose the monorepo's root CLAUDE.md and CLAUDE.local.md to the
@@ -193,14 +205,13 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 
 	// 6. stdout — the WorktreeCreate hook contract REQUIRES exactly
 	// the absolute worktree root path on stdout so Claude Code can
-	// cd into it. Everything else goes to stderr. Emit it even on
-	// partial failure so the operator still lands in the worktree.
+	// cd into it. Everything else goes to stderr. On partial failure,
+	// retain the path for manual inspection and retry even if strict fails.
 	fmt.Fprintln(stdout, worktreeRoot)
 
-	// 7. Surface partial failures loudly. By default create still
-	// returns success once the worktree exists (the hook's cd
-	// contract); --strict turns any worktree-add or post_create
-	// failure into a non-zero exit for CI / scripted callers.
+	// 7. Surface partial failures loudly. Ordinary create remains
+	// best-effort; --strict and the WorktreeCreate dispatcher return
+	// nonzero when the materialised environment is incomplete.
 	if n := len(failedRepos) + len(failedEnv) + len(failedHooks); n > 0 {
 		logf(stderr, "[bough] WARNING: create finished with %d problem(s); the worktree exists but its environment may be incomplete:", n)
 		for _, r := range failedRepos {
@@ -213,7 +224,7 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 			logf(stderr, "[bough]   - post_create failed: %s", h)
 		}
 		if strict {
-			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d) with --strict",
+			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d); strict setup failed",
 				name, n, len(failedRepos), len(failedEnv), len(failedHooks))
 		}
 	}
@@ -232,20 +243,18 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 func allocateAllPorts(cfg *config.Config, monorepoRoot, name string) (map[string]int, map[string]int, error) {
 	registryPath := resolveRegistryPath(monorepoRoot, cfg.Registry.Path)
 	store := registry.NewStore(registryPath, cfg.Registry.BackupDir)
-	reg, err := store.Load()
+	var enginePorts, nonEnginePorts map[string]int
+	err := store.Update("allocate", func(reg registry.Registry) (bool, error) {
+		var err error
+		enginePorts, err = allocateEngines(reg, cfg, name)
+		if err != nil {
+			return false, err
+		}
+		nonEnginePorts, err = allocateNonEnginePorts(reg, cfg, name)
+		return true, err
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("load registry: %w", err)
-	}
-	enginePorts, err := allocateEngines(reg, cfg, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	nonEnginePorts, err := allocateNonEnginePorts(reg, cfg, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := store.Save(reg, "allocate"); err != nil {
-		return nil, nil, fmt.Errorf("save registry: %w", err)
+		return nil, nil, fmt.Errorf("allocate registry: %w", err)
 	}
 	return enginePorts, nonEnginePorts, nil
 }
@@ -670,11 +679,19 @@ func warnIfRootNotGit(stderr io.Writer, cfg *config.Config, monorepoRoot string,
 // layout is in use: `.bough/` (registry + v0.11 checkouts), the real
 // worktrees dir (`worktrees/` or the legacy hidden `.worktrees/`), and
 // — for a monorepo still on the pre-v0.11 layout — every sub-repo whose
-// checkout sits directly at the root, which `.bough/` does not cover.
+// checkout sits directly at the root, plus a registry file (and the
+// `.lock` Store.Update keeps beside it) outside `.bough/`, neither of which
+// `.bough/` covers.
 func gitignoreSuggestions(cfg *config.Config, monorepoRoot string) []string {
 	set := map[string]struct{}{
 		boughDir + "/": {},
 		filepath.Base(worktreesDir(monorepoRoot)) + "/": {},
+	}
+	regPath := resolveRegistryPath(monorepoRoot, cfg.Registry.Path)
+	if rel, err := filepath.Rel(monorepoRoot, regPath); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, boughDir+string(filepath.Separator)) {
+		set[rel] = struct{}{}
+		set[rel+".lock"] = struct{}{}
 	}
 	for _, repo := range cfg.Repositories {
 		if resolveRepoSrc(monorepoRoot, repo.Name) == filepath.Join(monorepoRoot, repo.Name) {
@@ -814,9 +831,8 @@ func renderEnvLocals(
 }
 
 // runPostCreateHooks fires each repository's `post_create:` lines in
-// declaration order. Failures log to stderr and the loop continues —
-// a failed migration should not unwind the entire create, since the
-// worktree materialisation itself is still valuable to the operator.
+// declaration order. A failure skips later commands of that repository
+// so a failed migration cannot run its seed; independent repos continue.
 func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Config, worktreeRoot string, skip map[string]bool) []string {
 	// Hook children must inherit the raw fd, not the SyncWriter: a
 	// non-*os.File writer makes os/exec insert a pipe + copy goroutine
@@ -852,6 +868,7 @@ func runPostCreateHooks(ctx context.Context, stderr io.Writer, cfg *config.Confi
 			if err := c.Run(); err != nil {
 				logf(stderr, "[bough] %s post_create FAILED: %v", repo.Name, err)
 				failed = append(failed, fmt.Sprintf("%s: %s", repo.Name, line))
+				break
 			}
 		}
 	}
@@ -879,7 +896,7 @@ func allocateEngines(reg registry.Registry, cfg *config.Config, name string) (ma
 			continue
 		}
 		port, err := allocator.Allocate(name, "main", mainRange[0], rangeLen(mainRange),
-			registry.TakenByKind(reg, key))
+			registry.Taken(reg))
 		if err != nil {
 			return nil, fmt.Errorf("allocate %s.main port: %w", eng.Kind, err)
 		}
@@ -891,14 +908,22 @@ func allocateEngines(reg registry.Registry, cfg *config.Config, name string) (ma
 
 func allocateNonEnginePorts(reg registry.Registry, cfg *config.Config, name string) (map[string]int, error) {
 	out := make(map[string]int, len(cfg.Ports))
-	for kind, pr := range cfg.Ports {
+	// Name order, not map order: every kind avoids every held port, so
+	// with overlapping ranges the order decides who gets which port.
+	kinds := make([]string, 0, len(cfg.Ports))
+	for kind := range cfg.Ports {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		pr := cfg.Ports[kind]
 		key := kind + ".main"
 		if existing, ok := registry.Get(reg, name, key); ok {
 			out[kind] = existing
 			continue
 		}
 		port, err := allocator.Allocate(name, "main", pr.Range[0], rangeLen(pr.Range),
-			registry.TakenByKind(reg, key))
+			registry.Taken(reg))
 		if err != nil {
 			return nil, fmt.Errorf("allocate %s port: %w", kind, err)
 		}

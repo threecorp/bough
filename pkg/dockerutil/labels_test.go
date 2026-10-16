@@ -5,7 +5,7 @@ package dockerutil
 import "testing"
 
 func TestLabels_Schema(t *testing.T) {
-	got := Labels("mysql", "mysql:8.4", 42345)
+	got := Labels("mysql", "mysql:8.4", 42345, "")
 	want := map[string]string{
 		"com.bough.managed":   "true",
 		"com.bough.engine":    "mysql",
@@ -35,7 +35,7 @@ func TestLabels_EngineDifferentiation(t *testing.T) {
 		{"elasticsearch", "docker.elastic.co/elasticsearch/elasticsearch:7.17.29"},
 	}
 	for _, c := range cases {
-		labels := Labels(c.engine, c.image, 12345)
+		labels := Labels(c.engine, c.image, 12345, "")
 		if labels[LabelEngine] != c.engine {
 			t.Errorf("engine %s: LabelEngine = %q", c.engine, labels[LabelEngine])
 		}

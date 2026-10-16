@@ -1,6 +1,18 @@
 package cli
 
-import "path/filepath"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ikeikeikeike/bough/internal/fsutil"
+)
 
 // Workspace layout (v0.11+): everything bough generates at the monorepo
 // root is grouped so that a git-initialised monorepo root needs only two
@@ -21,6 +33,9 @@ const (
 	portsFile     = "ports.json"
 	worktreesName = "worktrees"
 	legacyWtName  = ".worktrees"
+	locksSubdir   = "locks"
+	// maxLockNameBytes keeps <name>.lock under the common 255-byte limit.
+	maxLockNameBytes = 200
 )
 
 // resolveRepoSrc answers "where does this repo's source checkout live?"
@@ -52,4 +67,152 @@ func worktreesDir(monorepoRoot string) string {
 		return legacy
 	}
 	return filepath.Join(monorepoRoot, worktreesName)
+}
+
+// worktreePathFor is <worktrees-dir>/<name>, refusing a name that is not
+// one plain directory name there: remove rm -rf's this path, so `..` would
+// delete the monorepo root, "feat" would delete a nested "feat/x", and a
+// spelling such as "b/" would reach worktrees/b under a name the registry
+// and the worktree lock do not know.
+func worktreePathFor(monorepoRoot, name string) (string, error) {
+	dir := worktreesDir(monorepoRoot)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return "", fmt.Errorf("worktree name %q must be one directory name inside %s", name, dir)
+	}
+	path := filepath.Join(dir, name)
+	if err := checkWorktreeEntry(dir, name); err != nil {
+		return "", err
+	}
+	if err := checkNotAboveRoot(monorepoRoot, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// legacyNestedName reports whether name is a clean multi-segment name such
+// as feat/x, which bough before v0.30 created under the worktrees dir. Only
+// remove accepts one, and only when the registry holds that exact name.
+func legacyNestedName(name string) bool {
+	if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || !strings.Contains(name, "/") {
+		return false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "." || seg == ".." || seg == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// checkNotAboveRoot refuses a worktree path that is the monorepo root or
+// one of its ancestors: a worktrees dir symlinked to the root's parent
+// turned `remove --name <root's name>` into rm -rf of the root. It compares
+// the directories themselves (os.SameFile), so a symlink, a ".."-prefixed
+// name or another letter case cannot make one look like another.
+func checkNotAboveRoot(monorepoRoot, path string) error {
+	target, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing there to delete
+	}
+	if err != nil {
+		return err
+	}
+	starts := []string{monorepoRoot}
+	if real, err := filepath.EvalSymlinks(monorepoRoot); err == nil {
+		starts = append(starts, real)
+	}
+	for _, start := range starts {
+		for p := start; ; p = filepath.Dir(p) {
+			if info, err := os.Stat(p); err == nil && os.SameFile(info, target) {
+				return fmt.Errorf("worktree %s is the monorepo root %s or a directory above it", path, monorepoRoot)
+			}
+			if filepath.Dir(p) == p {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// checkWorktreeEntry refuses <dir>/<name> when any component of name
+// exists as a symlink or only as a case alias of another entry. remove runs
+// pre_remove, Cleanup and the git fallback rm -rf inside the worktree, so
+// a symlink anywhere in a nested name sent them to its target; a case alias
+// on a case-insensitive filesystem opened another worktree whose registry
+// entry keys on its real name.
+func checkWorktreeEntry(dir, name string) error {
+	parent := dir
+	for _, seg := range strings.Split(name, "/") {
+		p := filepath.Join(parent, seg)
+		info, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("worktree %s: %s is a symlink; bough only manages the directories it created", filepath.Join(dir, name), p)
+		}
+		if err := checkExactEntry(parent, seg); err != nil {
+			return err
+		}
+		parent = p
+	}
+	return nil
+}
+
+// checkExactEntry refuses seg when parent holds it only under another
+// letter case.
+func checkExactEntry(parent, seg string) error {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == seg {
+			return nil
+		}
+	}
+	return fmt.Errorf("worktree name %q matches an existing directory in %s only by letter case; use its exact name", seg, parent)
+}
+
+// lockWorktree serializes create and remove of one worktree name across
+// processes, from the first step to the last: the registry lock covers
+// only its own load-to-save, so a remove could otherwise delete the
+// datadir and worktree a concurrent create of the same name was starting
+// an engine on. The lock file lives at <root>/.bough/locks/<name>.lock
+// and is never deleted (see fsutil.Lock).
+func lockWorktree(monorepoRoot, name string) (release func(), err error) {
+	// Lower-cased: names that differ only by case open one directory on a
+	// case-insensitive filesystem, so they must wait on one lock.
+	key := strings.ToLower(name)
+	file := url.PathEscape(key)
+	if len(file) > maxLockNameBytes {
+		// Escaping turns each UTF-8 byte into %XX; a long non-ASCII name
+		// would exceed the 255-byte file-name limit.
+		sum := sha256.Sum256([]byte(key))
+		file = hex.EncodeToString(sum[:])
+	}
+	path := filepath.Join(monorepoRoot, boughDir, locksSubdir, file+".lock")
+	release, err = fsutil.Lock(path)
+	if err != nil {
+		return nil, fmt.Errorf("lock worktree %s: %w", name, err)
+	}
+	return release, nil
+}
+
+// lockWorktreeChecked takes the worktree lock and checks the entry again
+// under it: a create of a case alias may have made the directory while
+// this caller waited. dir is the worktrees dir the name sits in.
+func lockWorktreeChecked(monorepoRoot, dir, name string) (release func(), err error) {
+	release, err = lockWorktree(monorepoRoot, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkWorktreeEntry(dir, name); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }

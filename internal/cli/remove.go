@@ -69,6 +69,11 @@ func newRemoveCmd() *cobra.Command {
 }
 
 func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monorepoRoot, name, worktreePath string, gracefulSecs int) error {
+	release, err := lockWorktreeChecked(monorepoRoot, strings.TrimSuffix(worktreePath, string(filepath.Separator)+name), name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Same one-mutex-per-fd routing as runCreate: the plugin Down/Cleanup
 	// calls below spawn hclog writers targeting termio.Stderr, so remove's
 	// own logf lines must share that mutex rather than race it on fd 2.
@@ -82,6 +87,9 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 	reg, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("load registry: %w", err)
+	}
+	if err := checkRemovableName(reg, name); err != nil {
+		return err
 	}
 
 	provider := engineProviderRepo(cfg)
@@ -230,8 +238,12 @@ func runRemove(ctx context.Context, stderr io.Writer, cfg *config.Config, monore
 		logf(stderr, "[bough] rm -rf %s: %v", worktreePath, err)
 	}
 
-	registry.Delete(reg, name)
-	if err := store.Save(reg, "cleanup"); err != nil {
+	// Reload after teardown so cleanup cannot overwrite reservations
+	// allocated by another create while engines and hooks were stopping.
+	if err := store.Update("cleanup", func(latest registry.Registry) (bool, error) {
+		_, removed := registry.Delete(latest, name)
+		return removed, nil
+	}); err != nil {
 		return fmt.Errorf("save registry: %w", err)
 	}
 	logf(stderr, "[bough] remove %s: complete", name)
@@ -329,4 +341,22 @@ func answers(ctx context.Context, host string, port int) bool {
 		}
 	}
 	return true
+}
+
+// checkRemovableName refuses a remove that would delete another registered
+// worktree: an older bough created nested names such as feat/x, so the
+// directory of `feat` can hold one. A nested name itself is removable only
+// when the registry holds it (legacyNestedName).
+func checkRemovableName(reg registry.Registry, name string) error {
+	if strings.Contains(name, "/") {
+		if _, ok := reg[name]; !ok {
+			return fmt.Errorf("worktree name %q must be one directory name; nested names are removable only when registered", name)
+		}
+	}
+	for other := range reg {
+		if strings.HasPrefix(other, name+"/") {
+			return fmt.Errorf("worktree %s holds the registered worktree %s; remove that one first", name, other)
+		}
+	}
+	return nil
 }

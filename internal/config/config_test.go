@@ -666,3 +666,16 @@ func loadForTest(t *testing.T, yaml string) (*Config, []string, error) {
 	}
 	return c, warnings, loadErr
 }
+
+// TestLoad_RejectsPortsKindNamedLikeAnEngine: an engine and a ports: entry
+// of the same kind both store <kind>.main in the registry, so the second
+// allocation reused the engine's port for the app server.
+func TestLoad_RejectsPortsKindNamedLikeAnEngine(t *testing.T) {
+	y := "schema_version: 2\nmonorepo_root: \".\"\nrepositories:\n  - name: demo\n    branch_strategy: develop\n    role: engine-provider\n" +
+		"engines:\n  - kind: mysql\n    version: \"8.4\"\n    port_ranges:\n      main: [42000, 42999]\n" +
+		"ports:\n  mysql:\n    range: [43000, 43999]\nregistry:\n  path: \".bough-ports.json\"\n"
+	_, err := LoadFromBytes([]byte(y), "t.yaml")
+	if err == nil || !strings.Contains(err.Error(), "ports[mysql]") {
+		t.Errorf("LoadFromBytes = %v, want an error naming ports[mysql]", err)
+	}
+}

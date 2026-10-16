@@ -64,15 +64,15 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 		return fmt.Errorf("compose: Up: invalid compose.target_port %q", targetPortStr)
 	}
 
-	worktreeName := filepath.Base(filepath.Dir(req.WorktreeRoot))
 	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, file)
 	if _, err := os.Stat(composeFile); err != nil {
 		return fmt.Errorf("compose: Up: compose file %s: %w", composeFile, err)
 	}
 
-	project := req.Extras["compose.project"]
-	if project == "" {
-		project = composeProjectName(worktreeName, file)
+	ownFiles := []string{overrideFilePath(req.WorktreeRoot, port)}
+	project, err := p.resolveProject(ctx, req.WorktreeRoot, port, file, service, req.Extras["compose.project"], ownFiles)
+	if err != nil {
+		return fmt.Errorf("compose: Up: %w", err)
 	}
 	envPrefix := req.Extras["compose.env_prefix"]
 	if envPrefix == "" {
@@ -81,9 +81,11 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 
 	// container_name is deterministic by host port alone (see
 	// renderOverride's doc), so a container already running under this
-	// exact name IS this same worktree's own service — reuse it rather
-	// than treating its own published port as a foreign conflict.
-	// UpOrReuse also removes a stale STOPPED container of this name
+	// exact name is this worktree's own service — reuse it rather than
+	// treating its own published port as a foreign conflict — unless its
+	// worktree-root label names another checkout's worktree of the same
+	// name, which UpOrReuse refuses.
+	// UpOrReuse also removes a stopped container or a gone owner's container
 	// (e.g. left over from an interrupted prior run) before signalling
 	// "not reusable," so the create path below never hits a stale
 	// name collision either.
@@ -95,13 +97,20 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 	defer func() { _ = cli.Close() }()
 	// No wanted image: the wrapped compose file owns it, so a running
 	// container is reused whatever it runs.
-	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "")
+	// Before reuse or removal: a container made before the worktree label
+	// is only provably this worktree's through the compose files compose
+	// recorded on it, which UpOrReuse does not read, and compose up
+	// recreates whatever the project runs, dependencies included.
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, project, "", ownFiles); err != nil {
+		return fmt.Errorf("compose: Up: %w", err)
+	}
+	reuse, err := dockerutil.UpOrReuse(ctx, cli, containerName, "", req.WorktreeRoot)
 	if err != nil {
 		return fmt.Errorf("compose: Up: reuse check %s: %w", containerName, err)
 	}
 
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
-		Service: service, TargetPort: targetPort, HostPort: port,
+		Service: service, TargetPort: targetPort, HostPort: port, WorktreeRoot: req.WorktreeRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("compose: Up: %w", err)
@@ -161,16 +170,20 @@ func (p *Provider) Up(ctx context.Context, req *api.UpReq) error {
 
 // writeOverrideFile renders and persists the override fragment under
 // the engine-provider repo's own .local/ scratch dir.
+// overrideFilePath is where writeOverrideFile puts the fragment for port.
+func overrideFilePath(worktreeRoot string, port int) string {
+	return filepath.Join(worktreeRoot, ".local", fmt.Sprintf("bough-compose-%d-override.yml", port))
+}
+
 func writeOverrideFile(worktreeRoot string, port int, spec overrideSpec) (string, error) {
 	data, err := renderOverride(spec)
 	if err != nil {
 		return "", fmt.Errorf("render override: %w", err)
 	}
-	dir := filepath.Join(worktreeRoot, ".local")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("mkdir %s: %w", dir, err)
+	path := overrideFilePath(worktreeRoot, port)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("bough-compose-%d-override.yml", port))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("write override: %w", err)
 	}
@@ -214,15 +227,24 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 		if os.IsNotExist(err) {
 			// Up never completed for this port (e.g. it failed before
 			// reaching the sidecar write) — Down must still be
-			// idempotent rather than erroring on "nothing to do."
+			// idempotent rather than erroring on "nothing to do," and a
+			// container Up did start is removed if it is provably ours.
+			if err := p.removeOwnContainer(ctx, port, req.WorktreeRoot); err != nil {
+				return fmt.Errorf("compose: Down: %w", err)
+			}
 			return nil
 		}
 		return fmt.Errorf("compose: Down: read sidecar state: %w", err)
 	}
 
 	composeFile := api.ResolveUnderRawWorktreeRoot(req.WorktreeRoot, st.File)
+	ownFiles := []string{overrideFilePath(req.WorktreeRoot, port)}
+	if err := p.checkOwner(ctx, port, req.WorktreeRoot, st.Project, st.Service, ownFiles); err != nil {
+		return fmt.Errorf("compose: Down: %w", err)
+	}
+
 	overridePath, err := writeOverrideFile(req.WorktreeRoot, port, overrideSpec{
-		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort,
+		Service: st.Service, TargetPort: st.TargetPort, HostPort: st.HostPort, WorktreeRoot: req.WorktreeRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("compose: Down: %w", err)
@@ -262,6 +284,9 @@ func (p *Provider) Down(ctx context.Context, req *api.DownReq) error {
 	rmCmd.WaitDelay = p.pipeWait
 	if out, err := rmCmd.CombinedOutput(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Errorf("compose: Down: docker compose rm failed: %w\n%s", err, out)
+	}
+	if err := p.removeEmptyProjectNetworks(ctx, st.Project); err != nil {
+		return fmt.Errorf("compose: Down: %w", err)
 	}
 	return nil
 }

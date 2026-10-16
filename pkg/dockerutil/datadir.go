@@ -33,11 +33,19 @@ func EnsureDatadir(dir string) error {
 
 // RemoveDatadir removes the datadir and sibling image record idempotently.
 // Engine-owned files or a root-owned parent use a root container on Linux.
+// A symlinked datadir or parent is refused.
 func RemoveDatadir(ctx context.Context, dir string) error {
 	if dir == "" {
 		return nil
 	}
 	dir = filepath.Clean(dir)
+	// Path resolution follows a symlinked .local, so another worktree's
+	// datadir would be deleted under this one's name.
+	for _, p := range []string{filepath.Dir(dir), dir} {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; refusing to delete the datadir through it", p)
+		}
+	}
 	err := os.RemoveAll(dir)
 	if err == nil {
 		err = os.Remove(datadirImagePath(dir))

@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,9 +88,12 @@ func buildDockerEnv(initDB string, extras map[string]string) []string {
 		"MYSQL_ALLOW_EMPTY_PASSWORD=yes",
 		"MYSQL_DATABASE=" + initDB,
 	}
-	// Per-engine extras lift verbatim from YAML `engines[].extras` so
-	// projects can pin character_set_server, default_time_zone, etc.
-	// without a plugin change.
+	// Every other `engines[].extras` key becomes MYSQL_<KEY>. The
+	// official image reads only its own documented MYSQL_* variables
+	// (MYSQL_USER, MYSQL_PASSWORD, ...); server settings such as
+	// character_set_server are mysqld flags (--character-set-server=…),
+	// which this backend does not pass, so an extras key naming one
+	// lands in the env and changes nothing.
 	for k, v := range extras {
 		switch {
 		case strings.HasPrefix(k, "docker."),
@@ -102,6 +106,33 @@ func buildDockerEnv(initDB string, extras map[string]string) []string {
 	return env
 }
 
+// readyCheckEnv gives the in-container ready check root's password when
+// the container was started with one (extras root_password); the client
+// reads MYSQL_PWD, which keeps the password off the exec command line.
+func readyCheckEnv(containerEnv []string) []string {
+	for _, kv := range containerEnv {
+		if v, ok := strings.CutPrefix(kv, "MYSQL_ROOT_PASSWORD="); ok && v != "" {
+			return []string{"MYSQL_PWD=" + v}
+		}
+	}
+	return nil
+}
+
+// checkRootLogin refuses the extras that leave root's password unknown to
+// bough: the ready check logs in as root, so with any of them create would
+// wait out the whole ready timeout on a server that is already up. Keys are
+// matched in any case, as buildDockerEnv upper-cases them all.
+func checkRootLogin(extras map[string]string) error {
+	refused := []string{"random_root_password", "onetime_password", "root_password_file"}
+	for key, v := range extras {
+		if v != "" && slices.Contains(refused, strings.ToLower(key)) {
+			return fmt.Errorf("extras %s is not supported: bough's ready check logs in as root, "+
+				"so it needs root's password — set root_password instead", key)
+		}
+	}
+	return nil
+}
+
 // dockerBackend runs mysqld in a container. Stateless: the tunables
 // are the consts above and the image comes from dockerImage.
 type dockerBackend struct{}
@@ -109,8 +140,9 @@ type dockerBackend struct{}
 var _ api.Backend = dockerBackend{}
 
 // Running answers ForPort's disambiguation question. A container named
-// `bough-mysql-<port>` is uniquely owned by this plugin (the bough port
-// allocator guarantees worktree-scoped uniqueness). See
+// `bough-mysql-<port>` belongs to this plugin (the bough port allocator
+// keeps ports unique within one registry; another checkout's container of
+// the same name is refused by UpOrReuse and CheckWorktree). See
 // dockerutil.IsBackendRunning for the stale-container rule all four
 // engine plugins share.
 func (dockerBackend) Running(ctx context.Context, port int) bool {
@@ -141,6 +173,9 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	if err != nil {
 		return fmt.Errorf("mysql docker: %w", err)
 	}
+	if err := checkRootLogin(req.Extras); err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
+	}
 
 	cli, err := dockerutil.NewClient()
 	if err != nil {
@@ -159,7 +194,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	}
 
 	// Repeated WorktreeCreate reuses a matching container and records its image.
-	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef)
+	skip, err := dockerutil.UpOrReuse(ctx, cli, name, imageRef, req.WorktreeRoot)
 	if err != nil {
 		var mismatch *dockerutil.ImageMismatchError
 		if errors.As(err, &mismatch) {
@@ -202,7 +237,7 @@ func (dockerBackend) Up(ctx context.Context, req *api.UpReq) error {
 	cfg := &container.Config{
 		Image:        imageRef,
 		Env:          env,
-		Labels:       dockerutil.Labels(dockerEngine, imageRef, port),
+		Labels:       dockerutil.Labels(dockerEngine, imageRef, port, req.WorktreeRoot),
 		ExposedPorts: exposed,
 	}
 	hostCfg := &container.HostConfig{
@@ -264,7 +299,8 @@ func (dockerBackend) ReadyCheck(ctx context.Context, port, timeoutSec int) (bool
 }
 
 // mysqlTCPReady runs `mysql --protocol=TCP -h127.0.0.1 -uroot -e
-// 'SELECT 1'` inside the container via docker exec. --protocol=TCP
+// 'SELECT 1'` inside the container via docker exec, with root's password
+// from the container's own env when it has one (readyCheckEnv). --protocol=TCP
 // forces the network path (rather than the client's default socket
 // preference), so this fails cleanly during the mysql:8.4 image's
 // first-run "temporary server" phase, which runs mysqld with
@@ -283,8 +319,17 @@ func mysqlTCPReady(ctx context.Context, cli *client.Client, name string) error {
 	if id == "" {
 		return fmt.Errorf("container %s not found", name)
 	}
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	var containerEnv []string
+	if info.Config != nil {
+		containerEnv = info.Config.Env
+	}
 	exec, err := cli.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd:          []string{"mysql", "--protocol=TCP", "-h127.0.0.1", "-uroot", "-e", "SELECT 1"},
+		Env:          readyCheckEnv(containerEnv),
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -323,6 +368,9 @@ func (dockerBackend) Down(ctx context.Context, req *api.DownReq) error {
 	}
 	if id == "" {
 		return nil // already gone — Down is idempotent
+	}
+	if err := dockerutil.CheckWorktree(ctx, cli, id, name, req.WorktreeRoot); err != nil {
+		return fmt.Errorf("mysql docker: %w", err)
 	}
 	timeout := dockerStopTimeoutSec
 	if req.GracefulTimeoutSec > 0 {

@@ -1,5 +1,138 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The unknown-writer remedy no longer offers recording the wanted image first.**
+  Following it on an older image's data (an Elasticsearch 7 datadir under a
+  9.x config) started the new image on that data; starting over now comes
+  first, and recording is offered last, only for data the wanted image wrote.
+
+- **A same-named container binding another datadir no longer bypasses this datadir's image record or records itself as its legacy writer.**
+  Only a writable bind of the datadir from an absolute host path counts;
+  a named or anonymous volume, or a read-only bind, does not.
+
+- **Concurrent `bough create` runs no longer lose each other's port
+  reservations.** Create, remove and backfill each loaded the registry,
+  changed it and saved it with nothing held in between, so the last save
+  won: eight creates started together kept as few as one of their eight
+  entries, and names sharing a hash offset were all handed the same
+  port. Every registry change now runs under an exclusive `flock` on
+  `<registry>.lock` from the load to the save. `bough remove` re-reads
+  the registry after teardown and deletes only its own entry, so a
+  create that ran during a slow teardown keeps its reservation.
+- **A failing `post_create` command skips the rest of that repo's
+  commands.** A failed migration used to be followed by its seed. Other
+  repos still run their commands.
+- **The `WorktreeCreate` hook fails when the environment is incomplete.**
+  It ran create best-effort and exited 0 after a failed sub-repo, template
+  or `post_create` step; it now reports the failure like `bough create
+  --strict`, both through `bough hook handle` and through an older hook
+  that runs `bough create --stdin-json`. The worktree and its ports stay, so the next attempt reuses
+  them. Plain `bough create` stays best-effort.
+- **`bough remove --name ..` no longer deletes the monorepo root.** A name
+  was joined onto the worktrees dir unchecked, so `..` resolved to the
+  root and remove ran `rm -rf` on it; `feat` removed a nested `feat/x`,
+  and `b/` reached `worktrees/b` while skipping `b`'s engines. `create`,
+  `remove` and `verify` now take only a single directory name, and refuse
+  a worktree that is a symlink, that matches an existing one only by
+  letter case (checked again once create or remove holds the worktree
+  lock, which names differing only by case share), or that resolves to
+  the monorepo root or above it through a symlinked worktrees dir. Remove
+  refuses a worktree that holds another registered one; a nested name an
+  older bough created (such as `feat/x`) can still be removed, by name or
+  by the `WorktreeRemove` hook's path, while the registry holds it and no
+  part of it is a symlink. `remove --path` refuses a path outside a
+  `worktrees/` or `.worktrees/` dir, and resolves a relative path against
+  the current directory.
+- **A second clone no longer takes over the first clone's database.**
+  Engine containers are named `bough-<engine>-<port>` (`bough-compose-<port>`
+  for `kind: compose`) and the port is a hash of the worktree name, so two checkouts of one monorepo with a
+  same-named worktree got the same container: create reused the running
+  one (pointing the second worktree at the first one's data) and remove
+  stopped it. Containers now carry a `com.bough.worktree-root` label, and
+  create and remove refuse a container whose label names another existing
+  worktree. The owner is the worktree directory, which also holds the
+  datadir, so deleting only the engine-provider repo does not free the
+  database. If the owner worktree itself is gone, create removes its
+  container after the image check instead of reusing it; compose also
+  avoids inheriting its project and named volumes. Remove may still stop it.
+  A container made before this release has no label; create and
+  remove find its worktree from its `.local/<kind>-data` bind mount (for
+  `kind: compose`, see below).
+- **A `kind: compose` service of another clone is no longer recreated.**
+  The default project name came from the worktree name and the compose
+  file alone, so two clones with a same-named worktree shared a project,
+  and one clone's `compose up` recreated the other's service. The name now
+  ends with a hash of the worktree directory, and create and remove refuse
+  a project holding a container that is not provably this worktree's: its
+  worktree label, or for an older container the compose files docker
+  compose recorded on it, must name this worktree's own override file (a
+  compose file several worktrees share is no proof). Create checks every
+  service, since `compose up` also starts the dependencies; remove checks
+  the one service it stops, and removes the worktree's own container even
+  when an interrupted create never recorded its state. Changing
+  `compose.project` while the worktree's container still exists in the
+  old project is refused too, until `bough remove` clears it. A container
+  made before this release whose override file under `.local/` was
+  deleted can no longer be proven the worktree's own; remove it with
+  `docker rm -f` after checking its labels.
+  A service started earlier keeps its project (from its state file, or
+  from its container when the state file was never written); if that
+  project holds another clone's container, create stops and asks for the
+  worktree to be removed and created again rather than switching projects
+  under a running service.
+- **`kind: compose` publishes its port on 127.0.0.1 only.** The override
+  set no `host_ip`, so Docker published the service on every interface,
+  unlike the other engines. A service already running keeps its old
+  binding until `bough remove` and `bough create` recreate it.
+- **Removing a worktree no longer follows a symlinked `.local`.** The
+  datadir cleanup resolved the path through a `.local` linked to another
+  worktree and deleted that worktree's datadir; it now refuses a symlinked
+  datadir or parent.
+- **Removing a `kind: compose` worktree removes its project network.**
+  Down stops only its service and never runs `compose down`, so each
+  removed worktree left a Docker network behind until Docker reported
+  "all predefined address pools have been fully subnetted". The network
+  now goes once the project holds no container and no other container,
+  stopped ones included, still names it. A network compose created for an
+  Up that failed before any container existed is not found again
+  (`docker network prune` clears it), and a container created on the
+  network between the check and the removal fails to start afterwards.
+- **A container Docker cannot inspect is no longer force-removed.** Up
+  took a failed inspect as "stopped" and removed the container without
+  checking its image; it now reports the error. A `kind: compose` create
+  or remove likewise stops when `docker ps` cannot list the project's
+  containers.
+- **Registry backups written in the same second all survive.** The
+  backup name carried the time to the second, so each save in that second
+  replaced the backup before it, also across monorepos sharing one
+  `backup_dir`. The name is now claimed exclusively, and a taken one gets
+  a numbered suffix.
+- **`bough create`'s `.gitignore` hint names a registry outside
+  `.bough/`.** On the pre-v0.11 layout the registry is `.bough-ports.json`
+  at the root, and it and its new `.lock` were missing from the list.
+- **A mysql engine with `extras: {root_password: …}` becomes ready.** The
+  ready check logged in as root without a password and timed out on a
+  server that was up; it now uses the container's `MYSQL_ROOT_PASSWORD`.
+  `random_root_password`, `onetime_password` and `root_password_file`,
+  which leave root's password unknown to bough, are refused (in any letter
+  case) when the engine starts.
+- **`bough create` and `bough remove` of the same worktree name run one
+  at a time.** The registry lock covered only its own load and save, so a
+  remove could delete the datadir and worktree a concurrent create of the
+  same name was starting an engine on. Each now holds
+  `.bough/locks/<name>.lock` from start to finish; a second one waits.
+- **Kinds with overlapping port ranges no longer share a port.** Every
+  kind started at the same offset for a worktree name and only avoided
+  ports of its own kind, so two engines (or an engine and a `ports:`
+  entry) sharing a range got the same port on every create. Allocation
+  now avoids every port the registry holds, and handles `ports:` kinds in
+  name order so a re-create gets the same ports; existing reservations are
+  kept as they are. A `ports:` entry named like an `engines[].kind`, which
+  shared that engine's registry key, is now a config error.
+
 ## v0.29.5
 
 ### Fixed

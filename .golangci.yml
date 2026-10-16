@@ -3,6 +3,11 @@ version: "2"
 run:
   timeout: 5m
   go: "1.25"
+  # The integration and conformance tests only compile under their tags;
+  # without them those files are never linted.
+  build-tags:
+    - integration
+    - conformance
 
 linters:
   default: none

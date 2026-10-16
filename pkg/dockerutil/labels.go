@@ -12,24 +12,35 @@ const (
 	LabelEngine   = "com.bough.engine"
 	LabelImage    = "com.bough.image"
 	LabelHostPort = "com.bough.host-port"
+	// LabelWorktreeRoot is the engine-provider worktree the container
+	// was created for (UpReq.WorktreeRoot).
+	LabelWorktreeRoot = "com.bough.worktree-root"
 )
 
 // Labels returns the canonical com.bough.* label set used to tag every
 // bough-managed container. The `engine` argument is the plugin-specific
 // identifier (= "mysql" / "postgres" / "redis" / "elasticsearch") and is
 // the only knob the per-plugin caller needs to provide; the rest are
-// derived from the image reference + published host port.
+// derived from the image reference + published host port. worktreeRoot
+// (UpReq.WorktreeRoot) is stamped when set, so UpOrReuse and CheckWorktree
+// can tell this worktree's container from another checkout's.
 //
 // Plugins still discover their container purely by exact name
 // (bough-<engine>-<port> via LookupByName), never by listing on these
 // labels. LabelManaged is read back in one place: removing a container
 // takes its anonymous volumes with it only when the label says bough
-// made it (RemoveOwned, UpOrReuse), so the schema is now load-bearing.
-func Labels(engine, imageRef string, port int) map[string]string {
-	return map[string]string{
+// made it (RemoveOwned, UpOrReuse), and LabelWorktreeRoot decides whether
+// a same-named container is this worktree's (UpOrReuse, CheckWorktree), so
+// the schema is now load-bearing.
+func Labels(engine, imageRef string, port int, worktreeRoot string) map[string]string {
+	labels := map[string]string{
 		LabelManaged:  "true",
 		LabelEngine:   engine,
 		LabelImage:    imageRef,
 		LabelHostPort: fmt.Sprintf("%d", port),
 	}
+	if worktreeRoot != "" {
+		labels[LabelWorktreeRoot] = worktreeRoot
+	}
+	return labels
 }

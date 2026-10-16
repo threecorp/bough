@@ -406,11 +406,13 @@ func TestDockerUp_ImageMismatchRemedy(t *testing.T) {
 		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
 			name := dockerContainerName(42001)
 			datadir := filepath.Join(t.TempDir(), "engine data")
-			dockertest.StartDaemon(t, name, "old:1", running)
+			worktree := filepath.Join(filepath.Dir(datadir), "repo")
+			dockertest.StartDaemon(t, name, "old:1", running, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 			err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
-				Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
-				Datadir: datadir,
-				Extras:  map[string]string{"docker.image": "wanted:2"},
+				Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
+				Datadir:      datadir,
+				WorktreeRoot: worktree,
+				Extras:       map[string]string{"docker.image": "wanted:2"},
 			})
 			if err == nil {
 				t.Fatal("Up returned nil for an image mismatch")
@@ -440,11 +442,13 @@ func TestDockerUp_ReuseRecordsImage(t *testing.T) {
 	if err := os.WriteFile(datadir+".image", []byte("stale:1\nsha256:stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dockertest.StartDaemon(t, name, "old:1", true)
+	worktree := filepath.Join(filepath.Dir(datadir), "repo")
+	dockertest.StartDaemon(t, name, "old:1", true, dockerutil.Labels(dockerEngine, "old:1", 42001, worktree), datadir+":"+dockerDataDir)
 	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
-		Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
-		Datadir: datadir,
-		Extras:  map[string]string{"docker.image": "old:1"},
+		Ports:        []api.PortSpec{{Role: "main", Port: 42001}},
+		Datadir:      datadir,
+		WorktreeRoot: worktree,
+		Extras:       map[string]string{"docker.image": "old:1"},
 	})
 	if err != nil {
 		t.Fatalf("reuse: %v", err)
@@ -466,7 +470,7 @@ func TestDockerUp_DatadirImageMismatchWithoutContainer(t *testing.T) {
 	if err := os.WriteFile(datadir+".image", []byte("old:1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dockertest.StartDaemon(t, "", "", false)
+	dockertest.StartDaemon(t, "", "", false, nil)
 	err := (dockerBackend{}).Up(context.Background(), &api.UpReq{
 		Ports:   []api.PortSpec{{Role: "main", Port: 42001}},
 		Datadir: datadir,

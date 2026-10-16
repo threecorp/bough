@@ -99,6 +99,31 @@ func TestRemoveDatadir_RemovesImageRecord(t *testing.T) {
 	}
 }
 
+// TestRemoveDatadir_RefusesASymlinkedParent: a worktree whose .local links
+// to another worktree's .local made Cleanup follow the link and delete that
+// worktree's datadir while its engine was running.
+func TestRemoveDatadir_RefusesASymlinkedParent(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+	other := filepath.Join(t.TempDir(), ".local")
+	if err := os.MkdirAll(filepath.Join(other, "mysql-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(other, "mysql-data", "keep")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	worktree := t.TempDir()
+	if err := os.Symlink(other, filepath.Join(worktree, ".local")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveDatadir(context.Background(), filepath.Join(worktree, ".local", "mysql-data")); err == nil {
+		t.Error("RemoveDatadir followed a symlinked .local")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the other worktree's datadir was deleted: %v", err)
+	}
+}
+
 // A symlinked datadir in a parent the host cannot write must not reach the
 // root container: the bind mount would follow the link and delete its target.
 func TestRemoveDatadir_RefusesASymlinkedDatadir(t *testing.T) {

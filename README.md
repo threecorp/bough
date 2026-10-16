@@ -190,19 +190,23 @@ an Elasticsearch 7 data directory does not open under 9, and the same
 holds across PostgreSQL majors. Before creating a Docker container,
 the four native plugins record the image ref and immutable image ID in
 `<datadir>.image` beside the data directory, never inside it; reuse
-records the running container's image ID. Existing containers are
-validated by `UpOrReuse`. Only when no container exists is the record
-consulted for old data: different refs are
+records the running container's image ID. Only a named container with a
+writable bind whose absolute source path points to this datadir leaves
+the image check to `UpOrReuse`; otherwise
+the record is consulted for old data: different refs are
 accepted only when the wanted ref resolves to the recorded image ID.
-A worktree from before v0.29.4 has no record: while its container exists,
-the next `Up` records that container's image. With data but neither a
-record nor a container, the writer is unknown and `Up` refuses; the error
-gives the one-line `printf` that records the wanted image if it wrote the
-data, or the steps below to start over.
+A worktree from before v0.29.4 has no record: while its container binds this
+datadir, the next `Up` records that container's image. With data but neither a
+record nor a container binding this datadir, the writer is unknown and `Up`
+refuses; the error gives the steps below to start over first, and last the
+one-line `printf` that keeps the data, for use only when the wanted image is
+known to have written it: recording it over an older image's data starts the
+new image on that data.
 
-To keep the worktree, `docker rm -fv` the container if it still exists,
-then empty the data directory the error names: delete everything inside
-it and keep the directory itself. All data in that directory is lost.
+To keep the worktree, `docker rm -fv` only the container named by the error,
+if any; a record mismatch names no container. Then empty the data directory
+the error names: delete everything inside it and keep the directory itself.
+All data in that directory is lost.
 Then record the wanted image with the `printf` the error prints, since
 bough cannot list an engine-owned `0700` directory to see it is empty.
 On Linux the container's files and a root-owned parent may require root
@@ -211,6 +215,11 @@ for these steps. Resume the same worktree the same way it was created
 `bough remove --name <name>` discards the whole worktree and removes the
 record with the data directory. Compose-managed data is unchanged. A tag
 rebuilt in place keeps its name, so it is not compared.
+
+A container owned by a different live worktree is refused. If that worktree
+directory is gone, `Up` removes the container after the image check and
+recreates it instead of reusing its data. Compose also avoids inheriting
+that container's project and named volumes; `Down` may still stop it.
 
 ### Wire it into `claude --worktree`
 
@@ -244,8 +253,11 @@ background session):
 5. Runs any per-repo `post_create` commands
 
 A failed sub-repo, template or `post_create` step is printed as a
-warning and create still exits 0 once the worktree exists, because
-Claude Code needs its path. Pass `--strict` to make those failures fatal.
+warning. The WorktreeCreate hook exits nonzero for an incomplete
+environment; ordinary `bough create` remains best-effort unless passed
+`--strict`. A failing `post_create` command skips later commands of that
+repository, while independent repositories continue. Worktrees and port
+reservations remain available for a retry.
 
 `bough remove` (or the WorktreeRemove hook) reverses it: plugin Down →
 `pre_remove` commands → a check that no engine port still answers → datadir
@@ -264,7 +276,8 @@ With the default layout, bough's checkouts, registry and worktrees live in two d
 ```
 <monorepo-root>/
   .bough/repos/<name>     # source checkouts (bough clones `source:` here)
-  .bough/ports.json       # port registry
+  .bough/ports.json       # port registry (+ ports.json.lock)
+  .bough/locks/<name>.lock  # held while create or remove runs for <name>
   worktrees/<name>/       # per-feature worktrees
 ```
 
@@ -297,7 +310,9 @@ git -C worktrees/<name> rev-parse --show-toplevel   # must print the container's
 
 A monorepo still on the pre-v0.11 layout (checkouts at `<root>/<name>`,
 worktrees under `.worktrees/`, registry at `.bough-ports.json`) keeps
-working; bough reuses the existing locations.
+working; bough reuses the existing locations. Its `.gitignore` also needs
+the registry and the `.bough-ports.json.lock` beside it, which
+`bough create` lists in its warning.
 
 ## Compose-wrapped services
 
@@ -324,10 +339,11 @@ override (fixed host port + a `bough-compose-<port>` container name) and
 runs `docker compose -f demo-api/compose.yml -f <override> -p
 <worktree-scoped-project> up -d redis`. Each worktree gets its own project
 name, container name and host port for that service, so two worktrees
-using the same file do not collide on them. Two caveats: the project name
-lowercases the worktree name and folds other characters to `-`
-(`F_Foo` and `F-Foo` map to the same project), and a `compose.project` you
-set is used as is.
+using the same file do not collide on them. The project name is the
+worktree name, lowercased with other characters folded to `-`, then the
+compose file path and a hash of the worktree directory, so a second clone
+of the monorepo gets its own project. A `compose.project` you set is used
+as is.
 
 Trade-offs versus the four native plugins:
 

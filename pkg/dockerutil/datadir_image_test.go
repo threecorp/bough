@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/docker/docker/client"
@@ -85,7 +87,7 @@ func TestCheckDatadirImage(t *testing.T) {
 				}
 			}
 			name := "bough-redis-42001"
-			cli := datadirImageTestClient(t, name, tc.container)
+			cli := datadirImageTestClient(t, name, tc.container, &datadirImageTestContainer{binds: []string{dir + ":/data"}})
 			err := CheckDatadirImage(context.Background(), cli, name, dir, tc.want)
 			var mismatch *ImageMismatchError
 			if tc.mismatch {
@@ -180,8 +182,20 @@ func TestCheckDatadirImage_UnreadableDatadirPassesWithWantedRecord(t *testing.T)
 	}
 }
 
-func datadirImageTestClient(t *testing.T, name string, exists bool) *client.Client {
+type datadirImageTestContainer struct {
+	binds          []string
+	inspectStatus  int
+	inspectCalls   atomic.Int32
+	omitHostConfig bool
+	missingImageID bool
+}
+
+func datadirImageTestClient(t *testing.T, name string, exists bool, containers ...*datadirImageTestContainer) *client.Client {
 	t.Helper()
+	info := &datadirImageTestContainer{}
+	if len(containers) != 0 {
+		info = containers[0]
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json"):
@@ -191,7 +205,23 @@ func datadirImageTestClient(t *testing.T, name string, exists bool) *client.Clie
 			}
 			_ = json.NewEncoder(w).Encode(list)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/old/json"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"Image": "sha256:running", "Config": map[string]any{"Image": "redis:7-alpine"}})
+			info.inspectCalls.Add(1)
+			if info.inspectStatus != 0 {
+				http.Error(w, "inspect failed", info.inspectStatus)
+				return
+			}
+			imageID := "sha256:running"
+			if info.missingImageID {
+				imageID = ""
+			}
+			var hostConfig any = map[string]any{"Binds": info.binds}
+			if info.omitHostConfig {
+				hostConfig = nil
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Image": imageID, "Config": map[string]any{"Image": "redis:7-alpine"},
+				"HostConfig": hostConfig,
+			})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/"):
 			ref := strings.TrimSuffix(strings.SplitN(r.URL.Path, "/images/", 2)[1], "/json")
 			ids := map[string]string{
@@ -313,5 +343,161 @@ func TestRecordDatadirImage_InspectFailurePreservesRecord(t *testing.T) {
 	data, err := os.ReadFile(dir + ".image")
 	if err != nil || string(data) != oldRecord {
 		t.Fatalf("failed inspect changed record: %q, %v", data, err)
+	}
+}
+
+func TestCheckDatadirImage_ContainerBinds(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		stamp          string
+		bind           string
+		inspectStatus  int
+		wantHave       string
+		mismatch       bool
+		inspectError   bool
+		recorded       string
+		missingImageID bool
+	}{
+		{name: "other datadir checks the record", stamp: "redis:8-alpine\nsha256:new\n", bind: "other", mismatch: true, wantHave: "redis:8-alpine"},
+		{name: "other datadir cannot record a legacy writer", bind: "other", mismatch: true},
+		{name: "same datadir leaves the image check to UpOrReuse", stamp: "redis:8-alpine\nsha256:new\n", bind: "same"},
+		{name: "same datadir records its legacy writer", bind: "same", recorded: "redis:7-alpine\nsha256:running\n"},
+		{name: "a matching bind after another bind records its writer", bind: "multiple", recorded: "redis:7-alpine\nsha256:running\n"},
+		{name: "a symlink to the same datadir records its writer", bind: "symlink", recorded: "redis:7-alpine\nsha256:running\n"},
+		{name: "same datadir resolves a missing container image ID", bind: "same", missingImageID: true, recorded: "redis:7-alpine\nsha256:retagged\n"},
+		{name: "no host config checks the record", stamp: "redis:8-alpine\nsha256:new\n", bind: "nil", mismatch: true, wantHave: "redis:8-alpine"},
+		{name: "no host config cannot record a legacy writer", bind: "nil", mismatch: true},
+		{name: "no binds checks the record", stamp: "redis:8-alpine\nsha256:new\n", mismatch: true, wantHave: "redis:8-alpine"},
+		{name: "no binds cannot record a legacy writer", mismatch: true},
+		{name: "gone container checks the record", stamp: "redis:8-alpine\nsha256:new\n", inspectStatus: http.StatusNotFound, mismatch: true, wantHave: "redis:8-alpine"},
+		{name: "gone container leaves an unknown writer", inspectStatus: http.StatusNotFound, mismatch: true},
+		{name: "inspect failure preserves the record", stamp: "redis:8-alpine\nsha256:new\n", inspectStatus: http.StatusInternalServerError, inspectError: true},
+		{name: "inspect failure cannot record a legacy writer", inspectStatus: http.StatusInternalServerError, inspectError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "redis-data")
+			if err := EnsureDatadir(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "data"), []byte("old data"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stamp != "" {
+				if err := os.WriteFile(dir+".image", []byte(tc.stamp), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			info := &datadirImageTestContainer{inspectStatus: tc.inspectStatus, missingImageID: tc.missingImageID}
+			switch tc.bind {
+			case "nil":
+				info.omitHostConfig = true
+			case "same":
+				info.binds = []string{dir + ":/data:rw"}
+			case "other":
+				info.binds = []string{filepath.Join(t.TempDir(), "other-data") + ":/data"}
+			case "multiple":
+				info.binds = []string{t.TempDir() + ":/config:ro", dir + "/:/data:rw"}
+			case "symlink":
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(dir, alias); err != nil {
+					t.Fatal(err)
+				}
+				info.binds = []string{alias + ":/data"}
+			}
+			cli := datadirImageTestClient(t, "bough-redis-42001", true, info)
+			err := CheckDatadirImage(context.Background(), cli, "bough-redis-42001", dir, "redis:7-alpine")
+			var mismatch *ImageMismatchError
+			switch {
+			case tc.mismatch:
+				if !errors.As(err, &mismatch) || mismatch.HaveImage != tc.wantHave || mismatch.WantImage != "redis:7-alpine" || mismatch.ContainerName != "" {
+					t.Errorf("CheckDatadirImage = %v, want mismatch with HaveImage %q", err, tc.wantHave)
+				}
+			case tc.inspectError:
+				if err == nil || !strings.Contains(err.Error(), "inspect") || errors.As(err, &mismatch) {
+					t.Errorf("CheckDatadirImage = %v, want inspect error", err)
+				}
+			case err != nil:
+				t.Errorf("CheckDatadirImage = %v, want nil", err)
+			}
+			data, readErr := os.ReadFile(dir + ".image")
+			wantRecord := tc.stamp + tc.recorded
+			if wantRecord == "" {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Errorf("check wrote a record: %q, %v", data, readErr)
+				}
+			} else if readErr != nil || string(data) != wantRecord {
+				t.Errorf("record = %q, %v, want %q", data, readErr, wantRecord)
+			}
+			if calls := info.inspectCalls.Load(); calls != 1 {
+				t.Errorf("container inspect calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+// TestCheckDatadirImage_AnonymousVolumeIsNotWriter: a bind entry with one
+// path and no ":" is an anonymous volume at that container path, so it
+// writes no host dir even when the path spells this datadir.
+func TestCheckDatadirImage_AnonymousVolumeIsNotWriter(t *testing.T) {
+	for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+		t.Run(fmt.Sprintf("record=%v", stamp != ""), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "redis-data")
+			checkNonWriterBind(t, dir, dir, stamp)
+		})
+	}
+}
+
+func TestCheckDatadirImage_NamedVolumeIsNotWriter(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir, err := filepath.Abs("redis-data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+		t.Run(fmt.Sprintf("record=%v", stamp != ""), func(t *testing.T) {
+			checkNonWriterBind(t, dir, "redis-data:/data", stamp)
+		})
+	}
+}
+
+func TestCheckDatadirImage_ReadOnlyBindIsNotWriter(t *testing.T) {
+	for _, mode := range []string{"ro", "ro,z", "z,ro", "rprivate,ro"} {
+		for _, stamp := range []string{"", "redis:8-alpine\nsha256:new\n"} {
+			t.Run(fmt.Sprintf("mode=%s/record=%v", mode, stamp != ""), func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "redis-data")
+				checkNonWriterBind(t, dir, dir+":/data:"+mode, stamp)
+			})
+		}
+	}
+}
+
+func checkNonWriterBind(t *testing.T, dir, bind, stamp string) {
+	t.Helper()
+	if err := EnsureDatadir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data"), []byte("old data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if stamp != "" {
+		if err := os.WriteFile(dir+".image", []byte(stamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info := &datadirImageTestContainer{binds: []string{bind}}
+	cli := datadirImageTestClient(t, "bough-redis-42001", true, info)
+	err := CheckDatadirImage(context.Background(), cli, "bough-redis-42001", dir, "redis:7-alpine")
+	var mismatch *ImageMismatchError
+	wantHave := strings.Split(stamp, "\n")[0]
+	if !errors.As(err, &mismatch) || mismatch.ContainerName != "" || mismatch.HaveImage != wantHave || mismatch.WantImage != "redis:7-alpine" {
+		t.Errorf("CheckDatadirImage = %v, want record mismatch with HaveImage %q", err, wantHave)
+	}
+	data, readErr := os.ReadFile(dir + ".image")
+	if stamp == "" {
+		if !errors.Is(readErr, os.ErrNotExist) {
+			t.Errorf("non-writer recorded as legacy writer: %q, %v", data, readErr)
+		}
+	} else if readErr != nil || string(data) != stamp {
+		t.Errorf("record = %q, %v, want unchanged %q", data, readErr, stamp)
 	}
 }

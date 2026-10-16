@@ -12,8 +12,10 @@
 //
 // All writes go through atomicWriteJSON (tempfile + os.Rename) so a
 // concurrent `bough create` and `bough remove` can never observe a
-// partial JSON document. Every write is preceded by a copy of the
-// previous file to ${backupDir}/<basename>-pre-<action>-<ts>.json so
+// partial JSON document, and the CLI mutates through Store.Update so two
+// processes cannot both read the same snapshot and drop each other's
+// reservation on save. Every write is preceded by a copy of the
+// previous file to ${backupDir}/<basename>-pre-<action>-<ts>[-<n>].json so
 // human mistakes (an accidental port collision the schema doesn't
 // catch, a corrupted file from a SIGKILL'd hook) can be recovered
 // without reconstructing port history by hand.
@@ -23,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -121,7 +124,7 @@ const LegacyPath = ".worktree-ports.json"
 const CanonicalPath = ".bough-ports.json"
 
 // Save writes the registry back to disk after copying the previous file
-// to ${BackupDir}/<basename>.pre-<action>-<ts>.json. The action label
+// to ${BackupDir}/<basename>-pre-<action>-<ts>[-<n>].json. The action label
 // (e.g. "allocate" / "cleanup") shows up in the backup filename so
 // reviewers can tell what mutation produced each backup.
 //
@@ -140,6 +143,28 @@ func (s *Store) Save(reg Registry, action string) error {
 	return nil
 }
 
+// Update serializes read-modify-write across processes. The sibling lock
+// file stays in place because Save replaces the registry inode atomically.
+func (s *Store) Update(action string, mutate func(Registry) (bool, error)) error {
+	release, err := fsutil.Lock(s.Path + ".lock")
+	if err != nil {
+		return fmt.Errorf("registry: lock: %w", err)
+	}
+	defer release() // also on errors below
+	reg, err := s.Load()
+	if err != nil {
+		return err
+	}
+	changed, err := mutate(reg)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return s.Save(reg, action)
+}
+
 func (s *Store) backup(action string) error {
 	if s.BackupDir == "" {
 		return nil
@@ -154,8 +179,45 @@ func (s *Store) backup(action string) error {
 	base = strings.TrimPrefix(base, ".")
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
 	ts := s.Now().UTC().Format("20060102-150405")
-	dst := filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s.json", stem, action, ts))
-	return fsutil.CopyFile(s.Path, dst)
+	// Serialized creates save several times a second, and monorepos may
+	// share one backup dir, so the name is claimed with O_EXCL and a taken
+	// one moves to the next numbered suffix instead of being replaced.
+	for n := 1; ; n++ {
+		dst := filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s.json", stem, action, ts))
+		if n > 1 {
+			dst = filepath.Join(dir, fmt.Sprintf("%s-pre-%s-%s-%d.json", stem, action, ts, n))
+		}
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return s.copyInto(out, dst)
+	}
+}
+
+// copyInto writes the current registry into out, a backup file backup
+// just created, and removes it again on failure.
+func (s *Store) copyInto(out *os.File, dst string) error {
+	in, err := os.Open(s.Path)
+	if err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) atomicWriteJSON(reg Registry) error {
@@ -215,10 +277,9 @@ func Get(reg Registry, name, kind string) (int, bool) {
 	return 0, false
 }
 
-// Set inserts or updates the (name, kind) → port mapping in place. The
-// caller passes the result of Load and is expected to invoke Save when
-// the desired mutations are done — bough never tries to keep an open
-// file handle on the registry to avoid cross-process locking.
+// Set inserts or updates the (name, kind) → port mapping in place.
+// Callers mutate the snapshot supplied by Store.Update so allocation
+// and persistence share the same cross-process lock.
 func Set(reg Registry, name, kind string, port int) {
 	if _, ok := reg[name]; !ok {
 		reg[name] = map[string]int{}
@@ -238,14 +299,15 @@ func Delete(reg Registry, name string) (map[string]int, bool) {
 	return entry, ok
 }
 
-// TakenByKind returns the set of ports currently held under `kind`
-// across every entry. This is the input the allocator expects in its
-// `taken` parameter — the registry knows the answer because it already
-// owns the whole table.
-func TakenByKind(reg Registry, kind string) map[int]bool {
+// Taken returns every port any entry holds, whatever its kind. This is
+// the input the allocator expects in its `taken` parameter: kinds may
+// declare overlapping ranges, and the allocator starts each kind at the
+// same hash offset of the worktree name, so a per-kind set handed two
+// kinds sharing a range the same port.
+func Taken(reg Registry) map[int]bool {
 	out := map[int]bool{}
 	for _, entry := range reg {
-		if p, ok := entry[kind]; ok {
+		for _, p := range entry {
 			out[p] = true
 		}
 	}

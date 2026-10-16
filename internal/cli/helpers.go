@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ikeikeikeike/bough/internal/config"
 
@@ -78,15 +79,17 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, false)
+	// An incomplete environment must surface as a failed WorktreeCreate.
+	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, true)
 }
 
 // resolveRemoveTarget maps a (worktreePath OR name) removal request to
 // the (monorepoRoot, worktreeName, worktreePath) triple runRemove needs.
 // Shared by the `bough remove` CLI and the WorktreeRemove hook dispatch
 // so the two paths cannot diverge. worktreePath wins when present (and is
-// Cleaned so a trailing slash does not shift Dir(Dir(...)) a level too
-// shallow); otherwise the worktree is <cwd>/<worktrees-dir>/<name>. cwd is
+// made absolute and Cleaned, and must sit in a worktrees dir: directly, or
+// nested for a name an older bough created); otherwise the
+// worktree is <cwd>/<worktrees-dir>/<name>. cwd is
 // os.Getwd() — the hook payload's own `cwd` is deliberately NOT trusted:
 // a WorktreeRemove hook can fire from inside the worktree being torn
 // down, and doubling that into the path would miss the real worktree and
@@ -94,13 +97,40 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 func resolveRemoveTarget(name, worktreePath string) (monorepoRoot, wtName, path string, err error) {
 	switch {
 	case worktreePath != "":
-		path = filepath.Clean(worktreePath)
-		wtName = filepath.Base(path)
-		monorepoRoot = filepath.Dir(filepath.Dir(path))
+		// Abs, not only Clean: a relative --path reached Down as a relative
+		// WorktreeRoot, which never matches the container's owner label.
+		if path, err = filepath.Abs(worktreePath); err != nil {
+			return "", "", "", err
+		}
+		dir, rel, ok := splitWorktreePath(path)
+		if !ok {
+			return "", "", "", fmt.Errorf("worktree path %s is not inside a %s/ or %s/ dir", path, worktreesName, legacyWtName)
+		}
+		// A nested rel is a name an older bough created; runRemove accepts
+		// it only when the registry holds it.
+		if strings.Contains(rel, "/") && !legacyNestedName(rel) {
+			return "", "", "", fmt.Errorf("worktree path %s does not name a worktree", path)
+		}
+		wtName = rel
+		monorepoRoot = filepath.Dir(dir)
+		if err := checkWorktreeEntry(dir, wtName); err != nil {
+			return "", "", "", err
+		}
+		if err := checkNotAboveRoot(monorepoRoot, path); err != nil {
+			return "", "", "", err
+		}
 	case name != "":
 		monorepoRoot, _ = os.Getwd()
 		wtName = name
-		path = filepath.Join(worktreesDir(monorepoRoot), name)
+		path, err = worktreePathFor(monorepoRoot, name)
+		if err != nil && legacyNestedName(name) {
+			// runRemove accepts it only when the registry holds this name.
+			dir := worktreesDir(monorepoRoot)
+			path = filepath.Join(dir, name)
+			if err = checkWorktreeEntry(dir, name); err == nil {
+				err = checkNotAboveRoot(monorepoRoot, path)
+			}
+		}
 	default:
 		err = errors.New("removal needs a worktree path or name (--path/--name, or hook worktree_path/name)")
 	}
@@ -202,4 +232,30 @@ func engineProviderRepo(cfg *config.Config) *config.Repository {
 		}
 	}
 	return nil
+}
+
+// splitWorktreePath finds the worktrees dir (worktrees/ or .worktrees/)
+// above path and returns it with path relative to it: the parent for a
+// plain worktree, an ancestor for a nested one an older bough made. A
+// nested name may itself hold a "worktrees" component, so the dir whose
+// parent holds .bough.yaml (hasMonorepoMarker) wins; without one, the
+// nearest.
+func splitWorktreePath(path string) (dir, rel string, ok bool) {
+	for p := filepath.Dir(path); p != filepath.Dir(p); p = filepath.Dir(p) {
+		if base := filepath.Base(p); base != worktreesName && base != legacyWtName {
+			continue
+		}
+		if !ok {
+			dir, ok = p, true
+		}
+		if hasMonorepoMarker(filepath.Dir(p)) {
+			dir = p
+			break
+		}
+	}
+	if !ok {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(dir, path)
+	return dir, rel, err == nil
 }
