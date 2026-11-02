@@ -103,9 +103,14 @@ and the suite will treat the clause as not-applicable rather than failed.
 
 ## EnvVars
 
+The host calls `EnvVars` without `Up` for an engine with `autostart: false`.
+A plugin whose `EnvVars` needs `Up` to have run must return an error there, so
+create stops instead of rendering wrong values. The host rejects the option for
+the bundled `compose` plugin for the same reason.
+
 8. **Every value `EnvVars` returns is non-empty.**
 9. **Every host:port pair `EnvVars` advertises is reachable from the
-   host.** A value like
+   host once `Up` and `ReadyCheck` have succeeded.** A value like
    `BOUGH_<ENGINE>_HOST=172.17.0.4` (a container bridge IP) passes plain
    unit tests but crashes sniffing clients at boot.
 

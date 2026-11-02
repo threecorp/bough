@@ -29,11 +29,12 @@ import (
 
 func newCreateCmd() *cobra.Command {
 	var (
-		name      string
-		cwd       string
-		stdinJSON bool
-		noFetch   bool
-		strict    bool
+		name         string
+		cwd          string
+		stdinJSON    bool
+		noFetch      bool
+		strict       bool
+		startEngines bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -58,7 +59,9 @@ func newCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, noFetch, strict)
+			return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, name, createOptions{
+				noFetch: noFetch, strict: strict, startEngines: startEngines, discover: pluginhost.Discover,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "worktree name (the name in a --stdin-json payload overrides it)")
@@ -66,7 +69,18 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&stdinJSON, "stdin-json", false, "read {name, cwd} from stdin in Claude Code WorktreeCreate hook format")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "skip `git fetch origin <base>` before worktree add (= use local refs as-is; useful offline)")
 	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero if any repo worktree-add or post_create hook fails (default: best-effort — the worktree path is still emitted and exit stays 0 once the worktree exists; always on with --stdin-json, the hook payload path)")
+	cmd.Flags().BoolVar(&startEngines, "start-engines", false, "start every engine, including those with autostart: false in .bough.yaml")
 	return cmd
+}
+
+// createOptions carries the per-run switches of runCreate. discover is the
+// plugin lookup (production: pluginhost.Discover), injected so tests can
+// substitute a fake EngineProvider without spawning subprocesses.
+type createOptions struct {
+	noFetch      bool
+	strict       bool
+	startEngines bool
+	discover     func(kind string) (engineapi.EngineProvider, func(), error)
 }
 
 // engineInstance holds the per-engine side-effects we need to
@@ -83,6 +97,8 @@ type engineInstance struct {
 	port    int
 	envVars map[string]string
 	kill    func()
+	// notStarted is true when autostart: false kept this engine from Up.
+	notStarted bool
 }
 
 // runCreate is the ordered choreography of allocator → registry →
@@ -95,7 +111,7 @@ type engineInstance struct {
 // Each numbered phase below is a self-contained helper so this body
 // reads as the contract: load → allocate → materialise repos → start
 // engines → render env → run hooks → emit the worktree path.
-func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, noFetch, strict bool) error {
+func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config, monorepoRoot, name string, opts createOptions) error {
 	// One mutex per fd: route every create-path stderr write (logf, the
 	// spinner) through the shared termio wrapper so pluginhost's hclog
 	// lines — which target termio.Stderr from their own goroutines —
@@ -138,14 +154,14 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// BEFORE starting engines: an engine's Up may write under the
 	// engine-provider repo's worktree path, and `git worktree add`
 	// fails outright against a non-empty destination.
-	failedRepos := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, noFetch)
+	failedRepos := materializeRepositories(ctx, stderr, cfg, monorepoRoot, worktreeRoot, name, opts.noFetch)
 
 	// 3. Engine plugins: discover binaries, Up + ReadyCheck each, and
 	// capture their EnvVars for the env-render pass. The defer kills
 	// every started subprocess on the way out — even partial-start
 	// engines from a mid-loop error are caught because startEngines
 	// returns whatever it managed to bring up.
-	engines, err := startEngines(ctx, stderr, cfg, worktreeRoot, enginePorts, pluginhost.Discover)
+	engines, err := startEngines(ctx, stderr, cfg, worktreeRoot, enginePorts, opts.startEngines, opts.discover)
 	defer func() {
 		for _, e := range engines {
 			e.kill()
@@ -171,6 +187,18 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		skipRepo[r] = true
 	}
 
+	stoppedEngines := notStartedEngines(engines)
+	noEngineStarted := len(stoppedEngines) > 0 && len(stoppedEngines) == len(engines)
+	// post_create may have appended to .env.local and will not run again here,
+	// so a resume must not rewrite the file. Ports do not change between runs.
+	if noEngineStarted {
+		for _, repo := range cfg.Repositories {
+			if _, err := os.Stat(filepath.Join(worktreeRoot, repo.Name, ".env.local")); err == nil {
+				skipRepo[repo.Name] = true
+			}
+		}
+	}
+
 	// 4. Render + write .env.local per repository. Best-effort like
 	// post_create: a bad template / unwritable repo must not abort before the
 	// worktree-path stdout emit + failure summary below.
@@ -189,7 +217,16 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// stderr and skips that repo's later commands (its seed), but does
 	// not unwind the entire create — the operator usually wants the
 	// worktree materialised even when seed data is missing.
-	failedHooks := runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
+	//
+	// With no engine running a migration can only fail, so none run. With some
+	// running they do run, and a failure counts like any other: bough cannot
+	// tell a command that needs a stopped engine from a real failure.
+	var failedHooks []string
+	if noEngineStarted {
+		logf(stderr, "[bough] post_create skipped: no engine was started")
+	} else {
+		failedHooks = runPostCreateHooks(ctx, stderr, cfg, worktreeRoot, skipRepo)
+	}
 
 	// 5b. Expose the monorepo's root CLAUDE.md and CLAUDE.local.md to the
 	// worktree session.
@@ -209,6 +246,11 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 	// retain the path for manual inspection and retry even if strict fails.
 	fmt.Fprintln(stdout, worktreeRoot)
 
+	if len(stoppedEngines) > 0 {
+		logf(stderr, "[bough] not started (autostart: false): %s. To start them and run post_create: bough create --name %s --start-engines",
+			strings.Join(stoppedEngines, ", "), name)
+	}
+
 	// 7. Surface partial failures loudly. Ordinary create remains
 	// best-effort; --strict and the WorktreeCreate dispatcher return
 	// nonzero when the materialised environment is incomplete.
@@ -223,12 +265,23 @@ func runCreate(ctx context.Context, stderr, stdout io.Writer, cfg *config.Config
 		for _, h := range failedHooks {
 			logf(stderr, "[bough]   - post_create failed: %s", h)
 		}
-		if strict {
+		if opts.strict {
 			return fmt.Errorf("create %s: %d post-setup problem(s) (worktree add: %d, env_local: %d, post_create: %d); strict setup failed",
 				name, n, len(failedRepos), len(failedEnv), len(failedHooks))
 		}
 	}
 	return nil
+}
+
+// notStartedEngines lists the kinds autostart: false kept from starting.
+func notStartedEngines(engines []engineInstance) []string {
+	var kinds []string
+	for _, e := range engines {
+		if e.notStarted {
+			kinds = append(kinds, e.cfg.Kind)
+		}
+	}
+	return kinds
 }
 
 // allocateAllPorts loads the registry, allocates one port per engine
@@ -262,7 +315,8 @@ func allocateAllPorts(cfg *config.Config, monorepoRoot, name string) (map[string
 // startEngines walks every engine declared in cfg, discovers the
 // matching `bough-plugin-<kind>` binary on PATH, calls Up +
 // ReadyCheck against the allocated port, and stashes the returned
-// EnvVars for the env-render pass.
+// EnvVars for the env-render pass. An engine with autostart: false skips
+// Up + ReadyCheck unless startAll is set; its EnvVars are still collected.
 //
 // Returns whatever engines it managed to bring up — even on error —
 // so the caller's defer can kill every started subprocess without
@@ -280,6 +334,7 @@ func startEngines(
 	cfg *config.Config,
 	worktreeRoot string,
 	enginePorts map[string]int,
+	startAll bool,
 	discover func(kind string) (engineapi.EngineProvider, func(), error),
 ) ([]engineInstance, error) {
 	engineProviderWorktree := worktreeRoot
@@ -308,58 +363,64 @@ func startEngines(
 			return engines, fmt.Errorf("discover %s plugin: %w", eng.Kind, err)
 		}
 		engines = append(engines, engineInstance{cfg: eng, port: port, kill: kill})
-		logf(stderr, "[bough] %s: plugin discovered, starting on port %d", eng.Kind, port)
-
-		extras := buildEngineExtras(eng)
 		ports := []engineapi.PortSpec{{Role: "main", Port: port}}
 		resources := toResourceSpecs(eng.InitialResources)
-		dataDir := filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind))
 
-		// Up + ReadyCheck can block for seconds (image pull, the mysql
-		// temp→final mysqld restart, ES bootstrap). Animate a spinner for
-		// the whole wait so an interactive operator sees liveness instead
-		// of a frozen prompt; the closure lets one deferred Stop() cover
-		// every exit path. On the hook (non-TTY) the spinner is inert.
-		sp := startSpinner(stderr, fmt.Sprintf("%s: starting on port %d", eng.Kind, port))
-		vars, err := func() (map[string]string, error) {
-			defer sp.Stop()
-			if err := prov.Up(ctx, &engineapi.UpReq{
+		shouldStart := startAll || eng.AutostartEnabled()
+		if shouldStart {
+			logf(stderr, "[bough] %s: plugin discovered, starting on port %d", eng.Kind, port)
+			err = upAndWait(ctx, stderr, prov, eng, port, &engineapi.UpReq{
 				Ports:            ports,
-				Datadir:          dataDir,
+				Datadir:          filepath.Join(worktreeRoot, fmt.Sprintf(".local/%s-data", eng.Kind)),
 				WorktreeRoot:     engineProviderWorktree,
 				SocketDir:        eng.SocketDir,
 				InitialResources: resources,
-				Extras:           extras,
+				Extras:           buildEngineExtras(eng),
 				Plugins:          enginePlugins[i],
-			}); err != nil {
-				return nil, fmt.Errorf("%s Up: %w", eng.Kind, err)
-			}
-			ready, err := prov.ReadyCheck(ctx, []int{port}, eng.ReadyTimeoutSec)
-			if err != nil {
-				return nil, fmt.Errorf("%s ReadyCheck: %w", eng.Kind, err)
-			}
-			if !ready {
-				// (ready=false, err=nil) is a timeout; format a real message
-				// rather than `%w`-ing the nil error into `%!w(<nil>)`.
-				return nil, fmt.Errorf("%s ReadyCheck: not ready within %ds", eng.Kind, eng.ReadyTimeoutSec)
-			}
-			vars, err := prov.EnvVars(ctx, &engineapi.EnvVarsReq{
-				Ports:            ports,
-				InitialResources: resources,
-				SocketDir:        eng.SocketDir,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("%s EnvVars: %w", eng.Kind, err)
+				return engines, err
 			}
-			return vars, nil
-		}()
+		} else {
+			logf(stderr, "[bough] %s: autostart is off; port %d reserved, not started", eng.Kind, port)
+		}
+		vars, err := prov.EnvVars(ctx, &engineapi.EnvVarsReq{
+			Ports:            ports,
+			InitialResources: resources,
+			SocketDir:        eng.SocketDir,
+		})
 		if err != nil {
-			return engines, err
+			return engines, fmt.Errorf("%s EnvVars: %w", eng.Kind, err)
 		}
 		engines[len(engines)-1].envVars = vars
-		logf(stderr, "[bough] %s: ready on port %d", eng.Kind, port)
+		engines[len(engines)-1].notStarted = !shouldStart
+		if shouldStart {
+			logf(stderr, "[bough] %s: ready on port %d", eng.Kind, port)
+		}
 	}
 	return engines, nil
+}
+
+// upAndWait runs Up and ReadyCheck for one engine. Both can block for
+// seconds (image pull, the mysql temp→final mysqld restart, ES bootstrap),
+// so a spinner shows liveness for the whole wait. On the hook (non-TTY) the
+// spinner is inert.
+func upAndWait(ctx context.Context, stderr io.Writer, prov engineapi.EngineProvider, eng config.Engine, port int, req *engineapi.UpReq) error {
+	sp := startSpinner(stderr, fmt.Sprintf("%s: starting on port %d", eng.Kind, port))
+	defer sp.Stop()
+	if err := prov.Up(ctx, req); err != nil {
+		return fmt.Errorf("%s Up: %w", eng.Kind, err)
+	}
+	ready, err := prov.ReadyCheck(ctx, []int{port}, eng.ReadyTimeoutSec)
+	if err != nil {
+		return fmt.Errorf("%s ReadyCheck: %w", eng.Kind, err)
+	}
+	if !ready {
+		// (ready=false, err=nil) is a timeout; format a real message
+		// rather than `%w`-ing the nil error into `%!w(<nil>)`.
+		return fmt.Errorf("%s ReadyCheck: not ready within %ds", eng.Kind, eng.ReadyTimeoutSec)
+	}
+	return nil
 }
 
 // buildEngineExtras assembles the extras map the plugin Up call sees:

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ikeikeikeike/bough/internal/config"
+	"github.com/ikeikeikeike/bough/internal/pluginhost"
 
 	"github.com/spf13/cobra"
 )
@@ -80,7 +81,7 @@ func dispatchWorktreeCreate(cmd *cobra.Command, payload []byte) error {
 		return err
 	}
 	// An incomplete environment must surface as a failed WorktreeCreate.
-	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, false, true)
+	return runCreate(cmd.Context(), cmd.ErrOrStderr(), cmd.OutOrStdout(), cfg, monorepoRoot, in.Name, createOptions{strict: true, discover: pluginhost.Discover})
 }
 
 // resolveRemoveTarget maps a (worktreePath OR name) removal request to
