@@ -285,7 +285,7 @@ func TestStartEngines_WrapsPhaseErrors(t *testing.T) {
 			var buf bytes.Buffer
 			engines, err := startEngines(
 				context.Background(), &buf, engineTestConfig(),
-				t.TempDir(), map[string]int{"mysql": 42001}, discover,
+				t.TempDir(), map[string]int{"mysql": 42001}, false, discover,
 			)
 			if err == nil {
 				t.Fatal("startEngines returned nil error")
@@ -326,7 +326,7 @@ func TestStartEngines_HappyPathCollectsEnvVars(t *testing.T) {
 	var buf bytes.Buffer
 	engines, err := startEngines(
 		context.Background(), &buf, engineTestConfig(),
-		t.TempDir(), map[string]int{"mysql": 42001}, discover,
+		t.TempDir(), map[string]int{"mysql": 42001}, false, discover,
 	)
 	if err != nil {
 		t.Fatalf("startEngines: %v", err)

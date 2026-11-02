@@ -134,6 +134,7 @@ engines:
     initial_resources:
       - { type: database, name: demo }
     # ready_timeout_sec: 600  # readiness wait after the container starts (plugin default 600)
+    # autostart: false        # do not start on create or the hook (default true); start with --start-engines
 
   # Elasticsearch with engine-managed plugins. bough generates the
   # official elasticsearch-plugins.yml and lets ES install them on boot.
@@ -248,9 +249,19 @@ background session):
 
 1. Allocates one port per engine plus one per `ports:` entry
 2. Materialises every declared sub-repo via `git worktree add`
-3. Starts each engine via the matching `bough-plugin-<kind>` plugin
+3. Starts each engine via the matching `bough-plugin-<kind>` plugin,
+   except an engine with `autostart: false`
 4. Waits for readiness and renders each `.env.local`
 5. Runs any per-repo `post_create` commands
+
+An engine with `autostart: false` keeps its port and its `.env.local`
+values but is not started. When no engine was started, `post_create` is
+skipped and an existing `.env.local` is left as it is, so lines a previous
+`post_create` appended survive a resume, while `env_local` changes wait
+for the next start. When only some engines are off, `post_create` runs and
+a command that needs a stopped engine fails like any other. `bough create --name NAME
+--start-engines` starts every engine and runs `post_create`. `kind:
+compose` does not support `autostart: false`.
 
 A failed sub-repo, template or `post_create` step is printed as a
 warning. The WorktreeCreate hook exits nonzero for an incomplete
@@ -366,7 +377,7 @@ Trade-offs versus the four native plugins:
 
 ```
 # Worktree isolation
-bough create [--name NAME] [--cwd PATH] [--stdin-json] [--strict] [--no-fetch] [--config PATH]
+bough create [--name NAME] [--cwd PATH] [--stdin-json] [--strict] [--no-fetch] [--start-engines] [--config PATH]
 bough remove [--name NAME | --path PATH] [--stdin-json] [--graceful-timeout SEC] [--config PATH]
 bough verify <worktree-name>            # registry ports vs declared ranges, and .env.local present
 bough status [--json]                   # registered ports + whether each is listening

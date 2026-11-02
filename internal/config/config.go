@@ -125,6 +125,15 @@ type Engine struct {
 	// make available before Up. Ignored by engines that do not
 	// implement plugin management (mysql, redis, postgres, compose).
 	Plugins []EnginePlugin `yaml:"plugins" validate:"dive"`
+	// Autostart decides whether `bough create` and the WorktreeCreate hook
+	// start this engine. Omitted means true. False still reserves the port
+	// and renders .env.local; `bough create --start-engines` starts it.
+	Autostart *bool `yaml:"autostart"`
+}
+
+// AutostartEnabled reports whether create starts this engine by default.
+func (e Engine) AutostartEnabled() bool {
+	return e.Autostart == nil || *e.Autostart
 }
 
 // ComposeSpec identifies the pre-existing docker-compose file/service

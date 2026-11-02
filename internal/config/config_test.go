@@ -217,6 +217,26 @@ registry: {path: .bough-ports.json}
 	}
 }
 
+func TestEngine_AutostartEnabled(t *testing.T) {
+	off, on := false, true
+	tests := []struct {
+		name  string
+		value *bool
+		want  bool
+	}{
+		{"omitted starts", nil, true},
+		{"true starts", &on, true},
+		{"false does not start", &off, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Engine{Autostart: tt.value}).AutostartEnabled(); got != tt.want {
+				t.Errorf("AutostartEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // Each entry exercises one of the validateSemantic / struct-tag
 // failure modes. The test asserts both that Load returns an error and
 // that the error message contains an identifying substring, so a
@@ -352,6 +372,25 @@ engines:
 registry: {path: .bough-ports.json}
 `,
 			wantInErr: "compose",
+		},
+		{
+			// EnvVars of kind: compose take their names from what Up
+			// cached, so a compose engine that never ran would render
+			// the wrong variable names.
+			name: "compose kind with autostart false",
+			yaml: `schema_version: 2
+monorepo_root: "."
+repositories:
+  - {name: a, branch_strategy: develop, role: engine-provider}
+engines:
+  - kind: compose
+    version: "7-alpine"
+    autostart: false
+    port_ranges: {main: [56000, 56999]}
+    compose: {file: a/compose.yml, service: redis, target_port: 6379}
+registry: {path: .bough-ports.json}
+`,
+			wantInErr: "autostart",
 		},
 		{
 			// Compose is non-nil here, so this exercises ComposeSpec's

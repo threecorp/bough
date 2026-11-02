@@ -97,6 +97,11 @@ func (c *Config) validateSemantic() error {
 		if eng.Kind == "compose" && eng.Compose == nil {
 			errs = append(errs, fmt.Errorf("config: engines[%d].kind=compose requires a compose: block (file, service, target_port)", i))
 		}
+		// The compose plugin learns its env var names from Up, so one that
+		// never ran would render the wrong names into .env.local.
+		if eng.Kind == "compose" && !eng.AutostartEnabled() {
+			errs = append(errs, fmt.Errorf("config: engines[%d].kind=compose does not support autostart: false", i))
+		}
 		// `backend:` and extras.backend are the same token on two
 		// channels — buildEngineExtras copies whichever is set into
 		// extras["backend"], the field winning — so both are checked the
