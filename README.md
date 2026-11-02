@@ -255,7 +255,7 @@ background session):
 5. Runs any per-repo `post_create` commands
 
 An engine with `autostart: false` keeps its port and its `.env.local`
-values but is not started. When no engine was started, `post_create` is
+values but is not started. When every declared engine is off, `post_create` is
 skipped and an existing `.env.local` is left as it is, so lines a previous
 `post_create` appended survive a resume, while `env_local` changes wait
 for the next start. When only some engines are off, `post_create` runs and

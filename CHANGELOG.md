@@ -6,7 +6,7 @@
 
 - **`autostart: false` on an engine keeps `bough create` and the
   `WorktreeCreate` hook from starting it.** The default stays true. The port
-  and `.env.local` values are still written. When no engine was started,
+  and `.env.local` values are still written. When every declared engine is off,
   `post_create` is skipped and an existing `.env.local` is kept. `bough create --name NAME --start-engines` starts every engine and
   runs `post_create`. `kind: compose` rejects the option because its variable
   names come from `Up`.
